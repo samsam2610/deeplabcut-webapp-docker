@@ -1,0 +1,392 @@
+/* ─────────────────────────────────────────────────────────────
+   Anipose Pipeline — Dark Industrial UI
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  --bg:         #0c0d10;
+  --surface:    #15161c;
+  --surface-2:  #1c1d25;
+  --border:     #2a2b36;
+  --border-lit: #3d3e4e;
+  --text:       #e0e1ec;
+  --text-dim:   #7c7d92;
+  --accent:     #6ee7b7;
+  --accent-dim: #2c6e54;
+  --danger:     #f87171;
+  --radius:     10px;
+  --font:       'DM Sans', system-ui, sans-serif;
+  --mono:       'JetBrains Mono', monospace;
+}
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html {
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* ── Film grain overlay ──────────────────────────────────────── */
+.grain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: .035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px;
+}
+
+/* ── Header ──────────────────────────────────────────────────── */
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.2rem 2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -.02em;
+  color: var(--accent);
+}
+
+.badge {
+  font-family: var(--mono);
+  font-size: .7rem;
+  padding: .25rem .55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+}
+
+/* ── Layout ──────────────────────────────────────────────────── */
+main {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 3rem 1.5rem 4rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2.2rem 2.4rem 2.6rem;
+  width: 100%;
+  max-width: 560px;
+  animation: cardIn .45s ease-out both;
+}
+
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.card h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -.03em;
+  margin-bottom: .35rem;
+}
+
+.card h2 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+.subtitle {
+  color: var(--text-dim);
+  font-size: .92rem;
+  line-height: 1.55;
+  margin-bottom: 1.8rem;
+}
+
+/* ── Form fields ─────────────────────────────────────────────── */
+.field {
+  margin-bottom: 1.4rem;
+}
+
+.field label {
+  display: block;
+  font-size: .78rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+  margin-bottom: .5rem;
+}
+
+/* Select */
+.select-wrap {
+  position: relative;
+}
+
+.select-wrap select {
+  appearance: none;
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: .92rem;
+  padding: .7rem 2.4rem .7rem 1rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color .2s;
+}
+
+.select-wrap select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.select-wrap .chevron {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+/* File drop zones */
+.file-drop {
+  position: relative;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem 1rem;
+  text-align: center;
+  transition: border-color .2s, background .2s;
+  cursor: pointer;
+}
+
+.file-drop:hover,
+.file-drop.dragover {
+  border-color: var(--accent);
+  background: rgba(110, 231, 183, .04);
+}
+
+.file-drop input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.file-drop-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .5rem;
+  pointer-events: none;
+  color: var(--text-dim);
+}
+
+.file-drop-inner svg {
+  opacity: .5;
+}
+
+.file-label em {
+  color: var(--accent);
+  font-style: normal;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.file-name {
+  font-family: var(--mono);
+  font-size: .78rem;
+  color: var(--accent);
+  word-break: break-all;
+}
+
+.file-drop.has-file {
+  border-color: var(--accent-dim);
+  background: rgba(110, 231, 183, .03);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────── */
+button[type="submit"],
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .55rem;
+  width: 100%;
+  font-family: var(--font);
+  font-weight: 600;
+  font-size: .95rem;
+  border: none;
+  border-radius: var(--radius);
+  padding: .85rem 1.2rem;
+  cursor: pointer;
+  transition: background .2s, transform .1s;
+}
+
+button[type="submit"] {
+  margin-top: .6rem;
+  background: var(--accent);
+  color: #0c0d10;
+}
+
+button[type="submit"]:hover {
+  background: #8df0cc;
+}
+
+button[type="submit"]:active {
+  transform: scale(.985);
+}
+
+button[type="submit"]:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  margin-top: 1.2rem;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+  border-color: var(--border-lit);
+  background: var(--border);
+}
+
+.btn-arrow {
+  transition: transform .2s;
+}
+
+button[type="submit"]:hover .btn-arrow {
+  transform: translateX(3px);
+}
+
+/* ── Progress ────────────────────────────────────────────────── */
+.progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.4rem;
+}
+
+.task-id-badge {
+  font-family: var(--mono);
+  font-size: .72rem;
+  padding: .2rem .6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+}
+
+.progress-track {
+  width: 100%;
+  height: 8px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+  border-radius: 999px;
+  transition: width .6s cubic-bezier(.4,0,.2,1);
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: .6rem;
+  font-size: .82rem;
+}
+
+#progress-pct {
+  font-family: var(--mono);
+  font-weight: 500;
+  color: var(--accent);
+}
+
+#progress-stage {
+  color: var(--text-dim);
+}
+
+/* ── Log panel ───────────────────────────────────────────────── */
+.log-panel {
+  margin-top: 1.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.log-title {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  padding: .6rem 1rem;
+  background: var(--surface-2);
+  font-size: .78rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+#log-output {
+  font-family: var(--mono);
+  font-size: .76rem;
+  line-height: 1.65;
+  color: var(--text-dim);
+  padding: 1rem;
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* scrollbar */
+#log-output::-webkit-scrollbar { width: 5px; }
+#log-output::-webkit-scrollbar-track { background: var(--surface); }
+#log-output::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+
+/* ── State helpers ───────────────────────────────────────────── */
+.hidden { display: none !important; }
+
+.state-success #progress-stage { color: var(--accent); }
+.state-fail    #progress-stage { color: var(--danger); }
+.state-fail    .progress-fill  { background: var(--danger); }
+
+/* ── Footer ──────────────────────────────────────────────────── */
+footer {
+  text-align: center;
+  padding: 1.2rem;
+  font-size: .75rem;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .card { padding: 1.5rem 1.2rem 1.8rem; }
+  main  { padding: 1.5rem 1rem 2rem; }
+  .site-header { padding: 1rem 1.2rem; }
+}

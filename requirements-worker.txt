@@ -1,0 +1,10 @@
+celery[redis]==5.3.*
+redis==5.*
+anipose
+deeplabcut
+tensorflow
+numpy
+opencv-python-headless
+pandas
+scipy
+toml

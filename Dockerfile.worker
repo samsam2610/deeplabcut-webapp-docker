@@ -1,0 +1,94 @@
+# ─────────────────────────────────────────────────────────────────
+#  Worker Container — Adapted from existing DLC/Anipose Dockerfile
+#  Base: PyTorch 2.9.1 + CUDA 13.0 + cuDNN 9
+# ─────────────────────────────────────────────────────────────────
+FROM pytorch/pytorch:2.9.1-cuda13.0-cudnn9-runtime
+
+# ---------- Build Args ----------
+ARG UID=1000
+ARG GID=1000
+ARG UNAME=dlcuser
+ARG GNAME=dlcuser
+
+# ---------- System Deps (Run as ROOT) ----------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    ffmpeg \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgtk2.0-0 \
+    libgl1-mesa-glx \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---------- Create User (Run as ROOT) ----------
+RUN set -eux; \
+    if ! getent group "${GNAME}" >/dev/null 2>&1; then \
+        groupadd -g "${GID}" "${GNAME}"; \
+    fi; \
+    if ! id -u "${UNAME}" >/dev/null 2>&1; then \
+        useradd -m -d "/home/${UNAME}" -s /bin/bash -u "${UID}" -g "${GID}" "${UNAME}"; \
+    fi; \
+    mkdir -p /app/data && chown -R "${UNAME}:${GNAME}" /app
+
+# ---------- Switch to User ----------
+USER ${UNAME}
+WORKDIR /app
+
+# ---------- Environment Setup ----------
+ENV PATH="/home/${UNAME}/.local/bin:${PATH}"
+ENV PYTHONPATH="/home/${UNAME}/.local/lib/python3.10/site-packages:${PYTHONPATH:-}"
+ENV PYTHONUNBUFFERED=1
+
+# ---------- Python Setup (Run as USER) ----------
+RUN python -m pip install --upgrade pip wheel setuptools
+
+# ==========================================
+# 1. Install DeepLabCut (Source)
+# ==========================================
+WORKDIR /home/${UNAME}
+RUN git clone https://github.com/DeepLabCut/DeepLabCut.git
+
+WORKDIR /home/${UNAME}/DeepLabCut
+RUN python -m pip install -e .
+
+# ==========================================
+# 2. Install Anipose (Source)
+# ==========================================
+WORKDIR /home/${UNAME}
+RUN git clone https://github.com/lambdaloop/anipose.git
+
+WORKDIR /home/${UNAME}/anipose
+RUN python -m pip install -e .
+
+# ==========================================
+# 3. OpenCV Headless + NumPy Pin
+# ==========================================
+RUN python -m pip uninstall -y opencv-python \
+    && python -m pip install --no-cache-dir opencv-contrib-python-headless==4.7.0.68 \
+    && python -m pip install numpy==1.26.4
+
+# ==========================================
+# 4. Celery + Redis (worker deps)
+# ==========================================
+RUN python -m pip install --no-cache-dir \
+    "celery[redis]==5.3.*" \
+    "redis>=5.0,<6.0"
+
+# ---------- Verification ----------
+RUN python -c "import deeplabcut; print('DLC Version:', deeplabcut.__version__)"
+RUN python -c "import anipose; print('Anipose installed successfully')"
+RUN python -c "import celery; print('Celery Version:', celery.__version__)"
+
+# ---------- Application Code ----------
+WORKDIR /app
+COPY --chown=${UNAME}:${GNAME} tasks.py /app/tasks.py
+
+# ---------- Run Celery Worker ----------
+CMD ["celery", "-A", "tasks", "worker", \
+     "--loglevel=info", \
+     "--concurrency=1", \
+     "--pool=solo", \
+     "-Q", "default"]
