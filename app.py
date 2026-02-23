@@ -161,11 +161,11 @@ def status(task_id: str):
 
 
 @app.route("/session", methods=["POST"])
-def create_session():
+def create_anipose_session():
     """
-    Upload a config.toml to start a persistent DLC session.
+    Upload a config.toml to start a persistent anipose session.
     Saves the config to the shared volume and dispatches an init task
-    on the worker that imports DeepLabCut and verifies the file is readable.
+    on the worker that imports Anipose and verifies the file is readable.
     """
     config_file = request.files.get("config")
     if not config_file or not config_file.filename:
@@ -185,7 +185,7 @@ def create_session():
 
     # Dispatch init task to the GPU worker
     task = celery.send_task(
-        "tasks.init_session",
+        "tasks.init_anipose_session",
         kwargs={"config_path": str(config_path)},
     )
 
@@ -215,7 +215,7 @@ def get_session():
     result = AsyncResult(session_data["task_id"], app=celery)
     if result.state == "SUCCESS":
         session_data["status"] = "ready"
-        session_data["dlc_version"] = (result.result or {}).get("dlc_version", "")
+        session_data["anipose_version"] = (result.result or {}).get("anipose_version", "")
     elif result.state == "FAILURE":
         session_data["status"] = "error"
         session_data["error"] = str(result.info)
@@ -245,6 +245,55 @@ def _clear_session_data():
     if config_path.parent.exists() and config_path.parent.name.startswith("session_"):
         shutil.rmtree(str(config_path.parent), ignore_errors=True)
     _redis_client.delete(_SESSION_KEY)
+
+
+# ── Session pipeline operations ───────────────────────────────────
+_OPERATION_TASKS = {
+    "calibrate":   "tasks.process_calibrate",
+    "filter_2d":   "tasks.process_filter_2d",
+    "triangulate": "tasks.process_triangulate",
+    "filter_3d":   "tasks.process_filter_3d",
+}
+
+
+@app.route("/run", methods=["POST"])
+def run_operation():
+    """
+    Dispatch one of the four single-step Anipose operations against a project
+    folder, using the config.toml stored in the active session.
+
+    Expects JSON body:
+      { "operation": "calibrate|filter_2d|triangulate|filter_3d",
+        "project_id": "<folder name under DATA_DIR>" }
+    Returns { "task_id", "operation", "project_id" } immediately (202).
+    """
+    body = request.get_json(force=True) or {}
+    operation  = body.get("operation", "").lower()
+    project_id = body.get("project_id", "").strip()
+
+    if operation not in _OPERATION_TASKS:
+        return jsonify({"error": f"Unknown operation '{operation}'."}), 400
+    if not project_id:
+        return jsonify({"error": "project_id is required."}), 400
+
+    project_dir = DATA_DIR / project_id
+    if not project_dir.is_dir():
+        return jsonify({"error": f"Project folder not found: '{project_id}'."}), 400
+
+    raw = _redis_client.get(_SESSION_KEY)
+    if not raw:
+        return jsonify({"error": "No active session. Create a session first."}), 400
+    config_path = json.loads(raw).get("config_path", "")
+
+    task = celery.send_task(
+        _OPERATION_TASKS[operation],
+        kwargs={"session_path": str(project_dir), "config_path": config_path},
+    )
+    return jsonify({
+        "task_id":    task.id,
+        "operation":  operation,
+        "project_id": project_id,
+    }), 202
 
 
 @app.route("/projects")

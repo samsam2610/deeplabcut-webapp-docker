@@ -31,7 +31,7 @@
       btnCreate.classList.add("hidden");
       btnClear.classList.remove("hidden");
     } else if (s === "ready") {
-      const ver = data.dlc_version ? `DLC ${data.dlc_version}` : "DLC ready";
+      const ver = data.anipose_version ? `Anipose ${data.anipose_version}` : "Session ready";
       sessionLabel.textContent = ver;
       sessionMeta.textContent  = data.config_name || "";
       btnCreate.classList.add("hidden");
@@ -41,6 +41,15 @@
       sessionMeta.textContent  = data.error || "";
       btnCreate.classList.remove("hidden");
       btnClear.classList.remove("hidden");
+    }
+
+    // Show the pipeline actions card only when the session is ready.
+    // actionsCard is declared later but is always initialized before
+    // this function is called (all call sites are behind an async await).
+    const card = document.getElementById("actions-card");
+    if (card) {
+      card.classList.toggle("hidden", s !== "ready");
+      if (s === "ready") loadProjects();
     }
   }
 
@@ -120,6 +129,76 @@
       console.error("Session load error:", err);
     }
   })();
+
+  // ── Actions card DOM refs ────────────────────────────────────
+  const folderSelect  = document.getElementById("folder-select");
+  const progressTitle = document.getElementById("progress-title");
+  const actionBtns    = document.querySelectorAll(".btn-action");
+
+  const OPERATION_LABELS = {
+    calibrate:   "Calibrating cameras",
+    filter_2d:   "Filtering 2D predictions",
+    triangulate: "Triangulating 3D poses",
+    filter_3d:   "Filtering 3D trajectories",
+  };
+
+  // ── Populate project folder dropdown ────────────────────────
+  async function loadProjects() {
+    try {
+      const res  = await fetch("/projects");
+      const data = await res.json();
+      // Exclude session_ dirs — they hold config only, not project data
+      const projects = (data.projects || []).filter(p => !p.startsWith("session_"));
+      folderSelect.innerHTML =
+        '<option value="">— select a project folder —</option>' +
+        projects.map(p => `<option value="${p}">${p}</option>`).join("");
+    } catch (err) {
+      console.error("loadProjects error:", err);
+    }
+  }
+
+  // ── Action button clicks ─────────────────────────────────────
+  actionBtns.forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const operation = btn.dataset.op;
+      const projectId = folderSelect.value;
+
+      if (!projectId) {
+        alert("Select a project folder first.");
+        return;
+      }
+
+      // Disable all buttons while the task is running
+      actionBtns.forEach(b => { b.disabled = true; });
+
+      try {
+        const res  = await fetch("/run", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ operation, project_id: projectId }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          alert(data.error || "Failed to start operation.");
+          actionBtns.forEach(b => { b.disabled = false; });
+          return;
+        }
+
+        // Show progress card with operation-specific title
+        progressTitle.textContent = OPERATION_LABELS[operation] || "Processing";
+        showProgress(data.task_id);
+
+      } catch (err) {
+        console.error("run operation error:", err);
+        alert("Network error. Is the server running?");
+        actionBtns.forEach(b => { b.disabled = false; });
+      }
+    });
+  });
+
+  // Re-enable action buttons when "New Job" is clicked
+  // (delegated below after newJobBtn is defined)
 
   // ── DOM refs ────────────────────────────────────────────────
   const form        = document.getElementById("upload-form");
@@ -276,6 +355,7 @@
   // ── New job ─────────────────────────────────────────────────
   newJobBtn.addEventListener("click", () => {
     progressCard.classList.add("hidden");
+    progressTitle.textContent = "Processing";  // reset title for next run
     uploadCard.classList.remove("hidden");
     form.reset();
     configName.textContent = "";
@@ -283,6 +363,8 @@
     configDrop.classList.remove("has-file");
     videoDrop.classList.remove("has-file");
     resetButton();
+    // Re-enable action buttons after returning from progress view
+    actionBtns.forEach(b => { b.disabled = false; });
   });
 
   function resetButton() {

@@ -4,6 +4,7 @@ Runs inside the GPU-enabled worker container.
 """
 
 import os
+import shutil
 import subprocess
 import traceback
 from pathlib import Path
@@ -124,30 +125,99 @@ def _run_deeplabcut(project_dir: str, task: Task):
     return "DeepLabCut processing is not yet implemented."
 
 
+# ── Session Processing Tasks ──────────────────────────────────────
+def _ensure_config(config_path: str, session_path: str) -> None:
+    """Copy session config.toml into session_path if it isn't already there."""
+    dest = os.path.join(session_path, "config.toml")
+    if os.path.abspath(config_path) != os.path.abspath(dest):
+        shutil.copy2(config_path, dest)
+
+
+def _session_task_wrapper(self, session_path: str, config_path: str,
+                           cmd: list[str], stage: str, operation: str) -> dict:
+    """Shared body for all four single-step session tasks."""
+    if not os.path.isdir(session_path):
+        raise FileNotFoundError(f"Session folder not found: {session_path}")
+    _ensure_config(config_path, session_path)
+    try:
+        log = _run_cmd(cmd, cwd=session_path, task=self, stage=stage, progress=20)
+        return {"status": "complete", "operation": operation, "log": log[-3000:]}
+    except Exception as exc:
+        self.update_state(
+            state="FAILURE",
+            meta={"progress": 0, "stage": "Error", "log": traceback.format_exc()[-3000:]},
+        )
+        raise exc
+
+
+@celery.task(bind=True, name="tasks.process_calibrate")
+def process_calibrate(self, session_path: str, config_path: str):
+    """Run `anipose calibrate` — camera calibration from checkerboard videos."""
+    return _session_task_wrapper(
+        self, session_path, config_path,
+        cmd=["anipose", "calibrate"],
+        stage="Calibrating cameras",
+        operation="calibrate",
+    )
+
+
+@celery.task(bind=True, name="tasks.process_filter_2d")
+def process_filter_2d(self, session_path: str, config_path: str):
+    """Run `anipose filter` — temporal filtering of 2-D pose predictions."""
+    return _session_task_wrapper(
+        self, session_path, config_path,
+        cmd=["anipose", "filter"],
+        stage="Filtering 2-D predictions",
+        operation="filter_2d",
+    )
+
+
+@celery.task(bind=True, name="tasks.process_triangulate")
+def process_triangulate(self, session_path: str, config_path: str):
+    """Run `anipose triangulate` — multi-camera 3-D triangulation."""
+    return _session_task_wrapper(
+        self, session_path, config_path,
+        cmd=["anipose", "triangulate"],
+        stage="Triangulating 3-D poses",
+        operation="triangulate",
+    )
+
+
+@celery.task(bind=True, name="tasks.process_filter_3d")
+def process_filter_3d(self, session_path: str, config_path: str):
+    """Run `anipose filter-3d` — smoothing of triangulated 3-D trajectories."""
+    return _session_task_wrapper(
+        self, session_path, config_path,
+        cmd=["anipose", "filter-3d"],
+        stage="Filtering 3-D trajectories",
+        operation="filter_3d",
+    )
+
+
 # ── Session Init Task ─────────────────────────────────────────────
-@celery.task(bind=True, name="tasks.init_session")
-def init_session(self, config_path: str):
+@celery.task(bind=True, name="tasks.init_anipose_session")
+def init_anipose_session(self, config_path: str):
     """
-    Initialize a DLC IPython-like session on the worker:
-      1. Import DeepLabCut (verifies the library loads correctly)
+    Initialize an Anipose IPython-like session on the worker:
+      1. Import Anipose (verifies the library loads correctly)
       2. Confirm the config file is accessible on the shared volume
     Returns version info and config path on success.
     """
     self.update_state(
         state="PROGRESS",
-        meta={"stage": "Loading DeepLabCut…", "log": ""},
+        meta={"stage": "Loading Anipose…", "log": ""},
     )
 
     try:
-        import deeplabcut  # type: ignore[import]  # installed only in worker container
-        version = getattr(deeplabcut, "__version__", "unknown")
+        import anipose  # type: ignore[import]  # installed only in worker container
+        version = getattr(anipose, "__version__", "unknown")
 
         self.update_state(
             state="PROGRESS",
             meta={
-                "stage": f"DeepLabCut {version} imported",
+                "stage": f"Anipose {version} imported",
                 "log": (
-                    f"import deeplabcut  # v{version}\n"
+                    f"import anipose  # v{version}\n"
                     f"config = '{config_path}'\n"
                 ),
             },
@@ -158,7 +228,7 @@ def init_session(self, config_path: str):
 
         return {
             "status": "ready",
-            "dlc_version": version,
+            "anipose_version": version,
             "config_path": config_path,
         }
 

@@ -193,6 +193,14 @@ main {
   padding: 3rem 1.5rem 4rem;
 }
 
+.main-stack {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 560px;
+  gap: 1.5rem;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -477,6 +485,47 @@ button[type="submit"]:hover .btn-arrow {
 #log-output::-webkit-scrollbar { width: 5px; }
 #log-output::-webkit-scrollbar-track { background: var(--surface); }
 #log-output::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
+
+/* ── Action grid (session pipeline buttons) ──────────────────── */
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .75rem;
+  margin-top: 1.2rem;
+}
+
+.btn-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  padding: 1.1rem .5rem .9rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-family: var(--font);
+  font-size: .82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color .2s, background .2s, color .2s;
+}
+
+.btn-action:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+  background: rgba(110, 231, 183, .05);
+  color: var(--accent);
+}
+
+.btn-action:active:not(:disabled) {
+  transform: scale(.97);
+}
+
+.btn-action:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
 
 /* ── State helpers ───────────────────────────────────────────── */
 .hidden { display: none !important; }

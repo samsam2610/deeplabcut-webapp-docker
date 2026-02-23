@@ -58,6 +58,7 @@
 
   <!-- ─── Main card ─────────────────────────────────────────── -->
   <main>
+   <div class="main-stack">
     <section class="card" id="upload-card">
       <h1>New Processing Job</h1>
       <p class="subtitle">Upload your calibration config and camera videos to begin 3-D pose estimation.</p>
@@ -111,7 +112,7 @@
     <!-- ─── Progress panel (hidden until task starts) ──────── -->
     <section class="card hidden" id="progress-card">
       <div class="progress-header">
-        <h2>Processing</h2>
+        <h2 id="progress-title">Processing</h2>
         <span class="task-id-badge" id="task-id-display"></span>
       </div>
 
@@ -136,6 +137,62 @@
         New Job
       </button>
     </section>
+
+    <!-- ─── Session actions (shown when session is ready) ──── -->
+    <section class="card hidden" id="actions-card">
+      <h2>Run Pipeline Step</h2>
+      <p class="subtitle">Select a project folder, then run any Anipose step independently using the active session config.</p>
+
+      <div class="field">
+        <label for="folder-select">Project folder</label>
+        <div class="select-wrap">
+          <select id="folder-select">
+            <option value="">— select a project —</option>
+          </select>
+          <svg class="chevron" width="16" height="16" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+        </div>
+      </div>
+
+      <div class="action-grid">
+        <!-- Calibrate -->
+        <button class="btn-action" data-op="calibrate" title="anipose calibrate">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
+            <line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/>
+            <line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/>
+          </svg>
+          <span>Calibrate</span>
+        </button>
+
+        <!-- Filter 2D -->
+        <button class="btn-action" data-op="filter_2d" title="anipose filter">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+          <span>Filter 2D</span>
+        </button>
+
+        <!-- Triangulate -->
+        <button class="btn-action" data-op="triangulate" title="anipose triangulate">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 22 20 2 20"/>
+            <line x1="12" y1="2" x2="12" y2="20"/>
+            <line x1="7" y1="12" x2="17" y2="12"/>
+          </svg>
+          <span>Triangulate</span>
+        </button>
+
+        <!-- Filter 3D -->
+        <button class="btn-action" data-op="filter_3d" title="anipose filter-3d">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
+          </svg>
+          <span>Filter 3D</span>
+        </button>
+      </div>
+    </section>
+   </div><!-- /.main-stack -->
   </main>
 
   <!-- ─── Footer ────────────────────────────────────────────── -->
