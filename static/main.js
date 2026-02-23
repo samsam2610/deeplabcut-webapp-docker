@@ -87,7 +87,18 @@
 
     try {
       const res  = await fetch("/session", { method: "POST", body: fd });
-      const data = await res.json();
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); }
+      catch {
+        // Server returned non-JSON (HTML traceback, etc.) — show raw snippet
+        console.error("Non-JSON response from /session POST:", text);
+        sessionDot.dataset.state = "error";
+        sessionLabel.textContent = `Server error (HTTP ${res.status})`;
+        sessionMeta.textContent  = text.replace(/<[^>]*>/g, "").trim().slice(0, 120);
+        btnCreate.classList.remove("hidden");
+        return;
+      }
       if (!res.ok) {
         sessionDot.dataset.state = "error";
         sessionLabel.textContent = data.error || "Failed to create session";
@@ -98,10 +109,10 @@
       applySessionState(data);
       startSessionPoll();
     } catch (err) {
-      console.error("Create session error:", err);
+      console.error("Create session fetch error:", err);
       sessionDot.dataset.state = "error";
-      sessionLabel.textContent = "Network error";
-      sessionMeta.textContent  = "";
+      sessionLabel.textContent = "Could not reach server";
+      sessionMeta.textContent  = err.message || "";
       btnCreate.classList.remove("hidden");
     }
   });

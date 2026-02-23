@@ -52,6 +52,15 @@ def _valid_ext(filename: str, allowed: set) -> bool:
     return Path(filename).suffix.lower() in allowed
 
 
+# ── Global error handler — always return JSON, never HTML ─────────
+@app.errorhandler(Exception)
+def handle_exception(exc):
+    """Catch-all so Flask never returns an HTML traceback to the client."""
+    import traceback as _tb
+    app.logger.error("Unhandled exception: %s", _tb.format_exc())
+    return jsonify({"error": str(exc)}), 500
+
+
 # ── Routes ────────────────────────────────────────────────────────
 @app.route("/")
 def index():
@@ -173,33 +182,37 @@ def create_anipose_session():
     if not _valid_ext(config_file.filename, ALLOWED_CONFIG_EXT):
         return jsonify({"error": "Config must be a .toml file."}), 400
 
-    # Tear down any existing session first
-    _clear_session_data()
+    try:
+        # Tear down any existing session first
+        _clear_session_data()
 
-    # Persist config on the shared volume
-    session_id = uuid.uuid4().hex[:12]
-    session_dir = DATA_DIR / f"session_{session_id}"
-    session_dir.mkdir(parents=True, exist_ok=True)
-    config_path = session_dir / "config.toml"
-    config_file.save(str(config_path))
+        # Persist config on the shared volume
+        session_id = uuid.uuid4().hex[:12]
+        session_dir = DATA_DIR / f"session_{session_id}"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        config_path = session_dir / "config.toml"
+        config_file.save(str(config_path))
 
-    # Dispatch init task to the GPU worker
-    task = celery.send_task(
-        "tasks.init_anipose_session",
-        kwargs={"config_path": str(config_path)},
-    )
+        # Dispatch init task to the GPU worker
+        task = celery.send_task(
+            "tasks.init_anipose_session",
+            kwargs={"config_path": str(config_path)},
+        )
 
-    session_data = {
-        "session_id": session_id,
-        "config_path": str(config_path),
-        "config_name": secure_filename(config_file.filename),
-        "task_id": task.id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "status": "initializing",
-    }
-    _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+        session_data = {
+            "session_id": session_id,
+            "config_path": str(config_path),
+            "config_name": secure_filename(config_file.filename),
+            "task_id": task.id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "status": "initializing",
+        }
+        _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+        return jsonify(session_data), 201
 
-    return jsonify(session_data), 201
+    except Exception as exc:
+        app.logger.exception("Session creation failed")
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/session", methods=["GET"])
