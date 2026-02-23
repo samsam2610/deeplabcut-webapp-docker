@@ -27,7 +27,7 @@ services:
       context: .
       dockerfile: Dockerfile.flask
     ports:
-      - "5001:5000"
+      - "5000:5000"
     volumes:
       - ${HOST_DATA_DIR:-./data}:/app/data
       # Live-reload: mount source files so edits take effect without rebuild
