@@ -69,6 +69,7 @@ services:
       - DATA_DIR=/app/data
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    command: celery -A tasks worker --loglevel=info --concurrency=1 --pool=solo
     depends_on:
       redis:
         condition: service_healthy
