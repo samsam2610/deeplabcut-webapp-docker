@@ -24,11 +24,18 @@ services:
       - "5000:5000"
     volumes:
       - ${HOST_DATA_DIR:-./data}:/app/data
+      # Live-reload: mount source files so edits take effect without rebuild
+      - ./app.py:/app/app.py
+      - ./templates:/app/templates
+      - ./static:/app/static
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DATA_DIR=/app/data
-      - FLASK_ENV=production
+      - FLASK_APP=app.py
+      - FLASK_DEBUG=1
+    # Use Flask dev server instead of gunicorn for auto-reload
+    command: flask run --debug --host=0.0.0.0 --port=5000
     depends_on:
       redis:
         condition: service_healthy
