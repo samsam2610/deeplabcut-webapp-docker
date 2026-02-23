@@ -1,4 +1,12 @@
 services:
+  # ── Data-dir init (ensures ./data is writable by non-root users) ─
+  data-init:
+    image: alpine:3
+    volumes:
+      - ${HOST_DATA_DIR:-./data}:/data
+    command: sh -c "mkdir -p /data && chmod 777 /data"
+    restart: "no"
+
   # ── Redis Broker ────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
@@ -37,6 +45,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # ── Celery Worker (GPU-enabled) ─────────────────────────────────
@@ -62,6 +72,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
     deploy:
       resources:
         reservations:
