@@ -74,6 +74,116 @@ body {
   color: var(--text-dim);
 }
 
+/* ── Session bar ─────────────────────────────────────────────── */
+.session-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .55rem 2rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: .82rem;
+  gap: 1rem;
+}
+
+.session-status {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  min-width: 0;
+}
+
+.session-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background .3s;
+}
+
+.session-dot[data-state="none"]         { background: var(--border-lit); }
+.session-dot[data-state="initializing"] { background: #fbbf24; animation: session-pulse 1.2s ease-in-out infinite; }
+.session-dot[data-state="ready"]        { background: var(--accent); }
+.session-dot[data-state="error"]        { background: var(--danger); }
+
+@keyframes session-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: .35; }
+}
+
+.session-text {
+  display: flex;
+  align-items: baseline;
+  gap: .55rem;
+  min-width: 0;
+}
+
+#session-label {
+  color: var(--text-dim);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.session-meta {
+  font-family: var(--mono);
+  font-size: .72rem;
+  color: var(--text-dim);
+  opacity: .6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-btns {
+  display: flex;
+  gap: .45rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.btn-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-family: var(--font);
+  font-size: .78rem;
+  font-weight: 500;
+  padding: .32rem .7rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.btn-sm:hover {
+  border-color: var(--border-lit);
+  background: var(--border);
+}
+
+.btn-sm.btn-create {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.btn-sm.btn-create:hover {
+  background: rgba(110, 231, 183, .08);
+}
+
+.btn-sm.btn-danger {
+  border-color: rgba(248, 113, 113, .3);
+  color: var(--danger);
+}
+
+.btn-sm.btn-danger:hover {
+  background: rgba(248, 113, 113, .08);
+}
+
+#session-config-input { display: none !important; }
+
 /* ── Layout ──────────────────────────────────────────────────── */
 main {
   flex: 1;

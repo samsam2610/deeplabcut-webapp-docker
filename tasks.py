@@ -124,6 +124,52 @@ def _run_deeplabcut(project_dir: str, task: Task):
     return "DeepLabCut processing is not yet implemented."
 
 
+# ── Session Init Task ─────────────────────────────────────────────
+@celery.task(bind=True, name="tasks.init_session")
+def init_session(self, config_path: str):
+    """
+    Initialize a DLC IPython-like session on the worker:
+      1. Import DeepLabCut (verifies the library loads correctly)
+      2. Confirm the config file is accessible on the shared volume
+    Returns version info and config path on success.
+    """
+    self.update_state(
+        state="PROGRESS",
+        meta={"stage": "Loading DeepLabCut…", "log": ""},
+    )
+
+    try:
+        import deeplabcut  # type: ignore[import]  # installed only in worker container
+        version = getattr(deeplabcut, "__version__", "unknown")
+
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "stage": f"DeepLabCut {version} imported",
+                "log": (
+                    f"import deeplabcut  # v{version}\n"
+                    f"config = '{config_path}'\n"
+                ),
+            },
+        )
+
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(f"Config not found on shared volume: {config_path}")
+
+        return {
+            "status": "ready",
+            "dlc_version": version,
+            "config_path": config_path,
+        }
+
+    except Exception as exc:
+        self.update_state(
+            state="FAILURE",
+            meta={"stage": "Session init failed", "log": traceback.format_exc()},
+        )
+        raise exc
+
+
 # ── Main Celery Task ──────────────────────────────────────────────
 @celery.task(bind=True, name="tasks.run_processing")
 def run_processing(self, project_id: str, task_type: str = "anipose"):

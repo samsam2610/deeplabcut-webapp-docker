@@ -5,6 +5,122 @@
 (function () {
   "use strict";
 
+  // ── Session DOM refs ────────────────────────────────────────
+  const sessionDot   = document.getElementById("session-dot");
+  const sessionLabel = document.getElementById("session-label");
+  const sessionMeta  = document.getElementById("session-meta");
+  const btnCreate    = document.getElementById("btn-create-session");
+  const btnClear     = document.getElementById("btn-clear-session");
+  const sessionInput = document.getElementById("session-config-input");
+
+  let sessionPollTimer = null;
+
+  // ── Session state helpers ────────────────────────────────────
+  function applySessionState(data) {
+    const s = data.status || "none";
+    sessionDot.dataset.state = s;
+
+    if (s === "none") {
+      sessionLabel.textContent = "No active session";
+      sessionMeta.textContent  = "";
+      btnCreate.classList.remove("hidden");
+      btnClear.classList.add("hidden");
+    } else if (s === "initializing") {
+      sessionLabel.textContent = "Initializing session…";
+      sessionMeta.textContent  = data.config_name || "";
+      btnCreate.classList.add("hidden");
+      btnClear.classList.remove("hidden");
+    } else if (s === "ready") {
+      const ver = data.dlc_version ? `DLC ${data.dlc_version}` : "DLC ready";
+      sessionLabel.textContent = ver;
+      sessionMeta.textContent  = data.config_name || "";
+      btnCreate.classList.add("hidden");
+      btnClear.classList.remove("hidden");
+    } else if (s === "error") {
+      sessionLabel.textContent = "Session error";
+      sessionMeta.textContent  = data.error || "";
+      btnCreate.classList.remove("hidden");
+      btnClear.classList.remove("hidden");
+    }
+  }
+
+  function startSessionPoll() {
+    if (sessionPollTimer) clearInterval(sessionPollTimer);
+    sessionPollTimer = setInterval(async () => {
+      try {
+        const res  = await fetch("/session");
+        const data = await res.json();
+        applySessionState(data);
+        if (data.status !== "initializing") {
+          clearInterval(sessionPollTimer);
+          sessionPollTimer = null;
+        }
+      } catch (err) {
+        console.error("Session poll error:", err);
+      }
+    }, 2000);
+  }
+
+  // ── Create session (file-input change) ──────────────────────
+  sessionInput.addEventListener("change", async () => {
+    const file = sessionInput.files[0];
+    if (!file) return;
+
+    // Optimistically show loading state
+    sessionDot.dataset.state   = "initializing";
+    sessionLabel.textContent   = "Creating session…";
+    sessionMeta.textContent    = file.name;
+    btnCreate.classList.add("hidden");
+
+    const fd = new FormData();
+    fd.append("config", file);
+    sessionInput.value = "";  // allow re-selection of same file
+
+    try {
+      const res  = await fetch("/session", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        sessionDot.dataset.state = "error";
+        sessionLabel.textContent = data.error || "Failed to create session";
+        sessionMeta.textContent  = "";
+        btnCreate.classList.remove("hidden");
+        return;
+      }
+      applySessionState(data);
+      startSessionPoll();
+    } catch (err) {
+      console.error("Create session error:", err);
+      sessionDot.dataset.state = "error";
+      sessionLabel.textContent = "Network error";
+      sessionMeta.textContent  = "";
+      btnCreate.classList.remove("hidden");
+    }
+  });
+
+  // ── Clear session ────────────────────────────────────────────
+  btnClear.addEventListener("click", async () => {
+    if (!confirm("Clear the active session? The stored config will be removed.")) return;
+    if (sessionPollTimer) { clearInterval(sessionPollTimer); sessionPollTimer = null; }
+    try {
+      await fetch("/session", { method: "DELETE" });
+    } catch (err) {
+      console.error("Clear session error:", err);
+    }
+    applySessionState({ status: "none" });
+  });
+
+  // ── Restore session state on page load ──────────────────────
+  (async () => {
+    try {
+      const res  = await fetch("/session");
+      const data = await res.json();
+      applySessionState(data);
+      if (data.status === "initializing") startSessionPoll();
+    } catch (err) {
+      console.error("Session load error:", err);
+    }
+  })();
+
   // ── DOM refs ────────────────────────────────────────────────
   const form        = document.getElementById("upload-form");
   const submitBtn   = document.getElementById("submit-btn");
