@@ -8,6 +8,13 @@ import shutil
 import subprocess
 import traceback
 from pathlib import Path
+import deeplabcut as dlc
+from filter_2d_funcs import *
+from filter_3d_funcs import *
+from load_config_funcs import *
+from preprocessing_funcs import *
+from triangulate_funcs import *
+from calibration_funcs import *
 
 from celery import Celery, Task
 
@@ -152,13 +159,118 @@ def _session_task_wrapper(self, session_path: str, config_path: str,
 
 @celery.task(bind=True, name="tasks.process_calibrate")
 def process_calibrate(self, session_path: str, config_path: str):
-    """Run `anipose calibrate` — camera calibration from checkerboard videos."""
-    return _session_task_wrapper(
-        self, session_path, config_path,
-        cmd=["anipose", "calibrate"],
-        stage="Calibrating cameras",
-        operation="calibrate",
+    """
+    Camera calibration via process_session_calibrate().
+
+    Pre-flight (one of two must be true):
+      1. The calibration video folder contains videos from ≥2 distinct camera
+         names as identified by [triangulation] cam_regex.
+      2. A detections.pickle already exists in the calibration results folder
+         (allows re-running optimisation without re-detecting board corners).
+
+    Calls calibration_funcs.process_session_calibrate(config, session_path)
+    rather than the anipose CLI so the worker can stream live progress.
+    """
+    import re as _re
+    from glob import glob as _glob
+
+    if not os.path.isdir(session_path):
+        raise FileNotFoundError(f"Session folder not found: {session_path}")
+    _ensure_config(config_path, session_path)
+
+    # ── Load config ──────────────────────────────────────────────
+    config_local = os.path.join(session_path, "config.toml")
+    try:
+        try:
+            import tomllib as _tomllib
+            with open(config_local, "rb") as _f:
+                config = _tomllib.load(_f)
+        except ImportError:
+            import toml as _toml
+            config = _toml.load(config_local)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to parse config.toml: {exc}")
+
+    self.update_state(
+        state="PROGRESS",
+        meta={"progress": 5, "stage": "Checking calibration inputs…", "log": ""},
     )
+
+    # ── Resolve calibration folders ──────────────────────────────
+    pipeline_calib_videos  = config["pipeline"]["calibration_videos"]
+    pipeline_calib_results = config["pipeline"]["calibration_results"]
+    video_ext  = config.get("video_extension", "mkv")
+    cam_regex  = config.get("triangulation", {}).get("cam_regex", "cam([0-9])")
+
+    calib_vid_dir     = os.path.join(session_path, pipeline_calib_videos)
+    calib_res_dir     = os.path.join(session_path, pipeline_calib_results)
+    detections_pickle = os.path.join(calib_res_dir, "detections.pickle")
+
+    # ── Condition 2: detections.pickle already present ───────────
+    has_detections = os.path.isfile(detections_pickle)
+
+    # ── Condition 1: ≥2 distinct camera names in video folder ────
+    videos = sorted(_glob(os.path.join(calib_vid_dir, f"*.{video_ext}")))
+    cam_names: set[str] = set()
+    for vid in videos:
+        m = _re.search(cam_regex, os.path.basename(vid))
+        if m:
+            cam_names.add(m.group(0))
+    has_multi_cam = len(cam_names) >= 2
+
+    if not has_detections and not has_multi_cam:
+        log_msg = (
+            f"Pre-flight check failed.\n"
+            f"Calibration video dir : {calib_vid_dir}\n"
+            f"Videos found (.{video_ext}): {[os.path.basename(v) for v in videos]}\n"
+            f"Camera names via '{cam_regex}': {sorted(cam_names)}\n"
+            f"detections.pickle     : {detections_pickle} — not found\n\n"
+            f"Upload calibration videos from ≥2 cameras, "
+            f"or supply a detections.pickle, then retry."
+        )
+        self.update_state(
+            state="FAILURE",
+            meta={"progress": 0, "stage": "Pre-flight failed", "log": log_msg},
+        )
+        raise RuntimeError(log_msg)
+
+    reason = (
+        "detections.pickle found"
+        if has_detections
+        else f"{len(cam_names)} camera videos ({', '.join(sorted(cam_names))})"
+    )
+    self.update_state(
+        state="PROGRESS",
+        meta={
+            "progress": 10,
+            "stage": f"Calibrating — {reason}",
+            "log": (
+                f"Pre-flight OK: {reason}\n"
+                f"Videos : {[os.path.basename(v) for v in videos]}\n"
+                f"Calling process_session_calibrate(config, '{session_path}')…\n"
+            ),
+        },
+    )
+
+    # ── Run calibration ──────────────────────────────────────────
+    try:
+        from calibration_funcs import process_session_calibrate
+        process_session_calibrate(config, session_path)
+        return {
+            "status": "complete",
+            "operation": "calibrate",
+            "log": f"Calibration complete.\nsession_path: {session_path}",
+        }
+    except Exception as exc:
+        self.update_state(
+            state="FAILURE",
+            meta={
+                "progress": 0,
+                "stage": "Calibration error",
+                "log": traceback.format_exc()[-3000:],
+            },
+        )
+        raise exc
 
 
 @celery.task(bind=True, name="tasks.process_filter_2d")
