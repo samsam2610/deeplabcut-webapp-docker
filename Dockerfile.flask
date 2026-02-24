@@ -27,7 +27,7 @@ RUN pip install --user --upgrade pip && pip install --user -r requirements-flask
 ENV PATH="/home/appuser/.local/bin:${PATH}"
 
 # ---------- Application code ----------
-COPY --chown=appuser:appuser app.py .
+COPY --chown=appuser:appuser src/app.py .
 COPY --chown=appuser:appuser templates/ templates/
 COPY --chown=appuser:appuser static/ static/
 

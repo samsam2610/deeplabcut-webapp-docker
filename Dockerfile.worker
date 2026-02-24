@@ -84,7 +84,7 @@ RUN python -c "import celery; print('Celery Version:', celery.__version__)"
 
 # ---------- Application Code ----------
 WORKDIR /app
-COPY --chown=${UNAME}:${GNAME} tasks.py /app/tasks.py
+COPY --chown=${UNAME}:${GNAME} src/ /app/
 
 # ---------- Run Celery Worker ----------
 CMD ["celery", "-A", "tasks", "worker", \

@@ -31,7 +31,7 @@ services:
     volumes:
       - ${HOST_DATA_DIR:-./data}:/app/data
       # Live-reload: mount source files so edits take effect without rebuild
-      - ./app.py:/app/app.py
+      - ./src/app.py:/app/app.py
       - ./templates:/app/templates
       - ./static:/app/static
     environment:
@@ -63,6 +63,8 @@ services:
         GNAME: dlcuser
     volumes:
       - ${HOST_DATA_DIR:-./data}:/app/data
+      # Mount src/ so all .py edits take effect after worker restart
+      - ./src:/app
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
