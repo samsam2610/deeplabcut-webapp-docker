@@ -210,23 +210,26 @@
     }
   });
 
-  // ── Populate project folder dropdown ────────────────────────
+  // ── Populate project folder dropdowns ───────────────────────
+  const explorerFolderSelect = document.getElementById("explorer-folder-select");
+
   async function loadProjects() {
     try {
       const res  = await fetch("/projects");
       const data = await res.json();
       // Exclude session_ dirs — they hold config only, not project data
       const projects = (data.projects || []).filter(p => !p.startsWith("session_"));
-      folderSelect.innerHTML =
-        '<option value="">— select a project folder —</option>' +
+      const opts = '<option value="">— select a project —</option>' +
         projects.map(p => `<option value="${p}">${p}</option>`).join("");
+      folderSelect.innerHTML         = opts;
+      explorerFolderSelect.innerHTML = opts;
     } catch (err) {
       console.error("loadProjects error:", err);
     }
   }
 
   // ── Project Explorer ─────────────────────────────────────────
-  const explorerFolders     = document.getElementById("explorer-folders");
+  const explorerFolders = document.getElementById("explorer-folders");
   const newProjectNameInput = document.getElementById("new-project-name");
   const createProjectBtn    = document.getElementById("create-project-btn");
   const createProjectStatus = document.getElementById("create-project-status");
@@ -253,10 +256,9 @@
         createProjectStatus.textContent = `✓ ${data.folders_created.length} folders created`;
         createProjectStatus.className   = "create-project-status ok";
         newProjectNameInput.value = "";
-        // Refresh dropdown then select + browse the new project
+        // Refresh dropdowns then select + browse the new project
         await loadProjects();
-        folderSelect.value = data.project_id;
-        browseProject(data.project_id);
+        _onProjectSelected(data.project_id);
         setTimeout(() => {
           createProjectStatus.textContent = "";
           createProjectStatus.className   = "create-project-status";
@@ -273,12 +275,16 @@
   createProjectBtn.addEventListener("click", createProject);
   newProjectNameInput.addEventListener("keydown", e => { if (e.key === "Enter") createProject(); });
 
-  // Show/hide explorer card when session becomes ready; also on folder change
-  folderSelect.addEventListener("change", () => {
-    const pid = folderSelect.value;
+  // Sync helpers — keep both selects identical and trigger browse
+  function _onProjectSelected(pid) {
+    folderSelect.value         = pid;
+    explorerFolderSelect.value = pid;
     if (pid) browseProject(pid);
-    else explorerFolders.innerHTML = '<p class="explorer-empty">Select a project folder above to browse its contents.</p>';
-  });
+    else explorerFolders.innerHTML = '<p class="explorer-empty">Select or create a project to browse its pipeline folders.</p>';
+  }
+
+  explorerFolderSelect.addEventListener("change", () => _onProjectSelected(explorerFolderSelect.value));
+  folderSelect.addEventListener("change",         () => _onProjectSelected(folderSelect.value));
 
   function _fmtSize(bytes) {
     if (bytes == null) return "";

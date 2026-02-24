@@ -74,27 +74,18 @@
         <span id="create-project-status" class="create-project-status"></span>
       </div>
 
+      <div class="field" style="margin-bottom:.9rem">
+        <label for="explorer-folder-select">Project folder</label>
+        <div class="select-wrap">
+          <select id="explorer-folder-select">
+            <option value="">— select a project —</option>
+          </select>
+          <svg class="chevron" width="16" height="16" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+        </div>
+      </div>
+
       <div id="explorer-folders">
-        <p class="explorer-empty">Select a project folder above to browse its contents.</p>
-      </div>
-    </section>
-
-    <!-- ─── Config editor (shown when session is ready) ────── -->
-    <section class="card hidden" id="config-card">
-      <div class="config-header">
-        <h2>Session Config</h2>
-        <span class="config-path" id="config-path-display"></span>
-      </div>
-      <p class="subtitle">Edit config.toml for the active session, then save to apply.</p>
-
-      <textarea id="config-editor" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea>
-
-      <div class="config-footer">
-        <span id="config-save-status" class="config-save-status"></span>
-        <button id="save-config-btn" class="btn-sm btn-create">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-          Save Config
-        </button>
+        <p class="explorer-empty">Select or create a project to browse its pipeline folders.</p>
       </div>
     </section>
 
@@ -149,6 +140,25 @@
             <polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
           </svg>
           <span>Filter 3D</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- ─── Config editor (shown when session is ready) ────── -->
+    <section class="card hidden" id="config-card">
+      <div class="config-header">
+        <h2>Session Config</h2>
+        <span class="config-path" id="config-path-display"></span>
+      </div>
+      <p class="subtitle">Edit config.toml for the active session, then save to apply.</p>
+
+      <textarea id="config-editor" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea>
+
+      <div class="config-footer">
+        <span id="config-save-status" class="config-save-status"></span>
+        <button id="save-config-btn" class="btn-sm btn-create">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save Config
         </button>
       </div>
     </section>
