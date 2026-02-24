@@ -149,12 +149,8 @@ def _session_task_wrapper(self, session_path: str, config_path: str,
     try:
         log = _run_cmd(cmd, cwd=session_path, task=self, stage=stage, progress=20)
         return {"status": "complete", "operation": operation, "log": log[-3000:]}
-    except Exception as exc:
-        self.update_state(
-            state="FAILURE",
-            meta={"progress": 0, "stage": "Error", "log": traceback.format_exc()[-3000:]},
-        )
-        raise exc
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
 
 
 @celery.task(bind=True, name="tasks.process_calibrate")
@@ -228,10 +224,6 @@ def process_calibrate(self, session_path: str, config_path: str):
             f"Upload calibration videos from ≥2 cameras, "
             f"or supply a detections.pickle, then retry."
         )
-        self.update_state(
-            state="FAILURE",
-            meta={"progress": 0, "stage": "Pre-flight failed", "log": log_msg},
-        )
         raise RuntimeError(log_msg)
 
     reason = (
@@ -261,16 +253,8 @@ def process_calibrate(self, session_path: str, config_path: str):
             "operation": "calibrate",
             "log": f"Calibration complete.\nsession_path: {session_path}",
         }
-    except Exception as exc:
-        self.update_state(
-            state="FAILURE",
-            meta={
-                "progress": 0,
-                "stage": "Calibration error",
-                "log": traceback.format_exc()[-3000:],
-            },
-        )
-        raise exc
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
 
 
 @celery.task(bind=True, name="tasks.process_filter_2d")
@@ -363,12 +347,8 @@ def init_anipose_session(self, config_path: str):
             "config_content": config_content,
         }
 
-    except Exception as exc:
-        self.update_state(
-            state="FAILURE",
-            meta={"stage": "Session init failed", "log": traceback.format_exc()},
-        )
-        raise exc
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
 
 
 # ── Main Celery Task ──────────────────────────────────────────────
@@ -406,13 +386,5 @@ def run_processing(self, project_id: str, task_type: str = "anipose"):
             "log": log_output[-3000:],
         }
 
-    except Exception as exc:
-        self.update_state(
-            state="FAILURE",
-            meta={
-                "progress": 0,
-                "stage": "Error",
-                "log": traceback.format_exc()[-3000:],
-            },
-        )
-        raise exc
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
