@@ -535,6 +535,38 @@ button[type="submit"]:hover .btn-arrow {
 .state-fail    .progress-fill  { background: var(--danger); }
 
 /* ── Project Explorer ────────────────────────────────────────── */
+.create-project-row {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  margin-bottom: 1rem;
+}
+
+.create-project-row input[type="text"] {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: .8rem;
+  padding: .32rem .7rem;
+  outline: none;
+  transition: border-color .2s;
+  min-width: 0;
+}
+
+.create-project-row input[type="text"]:focus { border-color: var(--accent); }
+
+.create-project-status {
+  font-family: var(--mono);
+  font-size: .75rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.create-project-status.ok  { color: var(--accent); }
+.create-project-status.err { color: var(--danger); }
+
 .explorer-empty {
   color: var(--text-dim);
   font-size: .85rem;

@@ -448,6 +448,48 @@ def _parse_pipeline_section(config_text: str) -> dict:
     return result
 
 
+@app.route("/projects", methods=["POST"])
+def create_project():
+    """
+    Create a new project directory and auto-create every pipeline subfolder
+    defined in the active session's config.toml.
+    Body: { "name": "<project_name>" }
+    """
+    body = request.get_json(force=True) or {}
+    name = body.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Project name is required."}), 400
+
+    safe_name = re.sub(r"[^\w\-.]", "_", name)
+    if not safe_name:
+        return jsonify({"error": "Invalid project name."}), 400
+
+    project_dir = DATA_DIR / safe_name
+    if project_dir.exists():
+        return jsonify({"error": f"Project '{safe_name}' already exists."}), 409
+
+    # Collect unique pipeline folder names from the active session config
+    raw = _redis_client.get(_SESSION_KEY)
+    pipeline_folders: list[str] = []
+    if raw:
+        config_path = Path(json.loads(raw).get("config_path", ""))
+        if config_path.is_file():
+            seen: set[str] = set()
+            for folder in _parse_pipeline_section(config_path.read_text()).values():
+                if folder not in seen:
+                    seen.add(folder)
+                    pipeline_folders.append(folder)
+
+    project_dir.mkdir(parents=True, exist_ok=True)
+    for folder in pipeline_folders:
+        (project_dir / folder).mkdir(exist_ok=True)
+
+    return jsonify({
+        "project_id":      safe_name,
+        "folders_created": pipeline_folders,
+    }), 201
+
+
 @app.route("/projects")
 def list_projects():
     """List all project ids on the shared volume."""

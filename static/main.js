@@ -226,7 +226,52 @@
   }
 
   // ── Project Explorer ─────────────────────────────────────────
-  const explorerFolders = document.getElementById("explorer-folders");
+  const explorerFolders     = document.getElementById("explorer-folders");
+  const newProjectNameInput = document.getElementById("new-project-name");
+  const createProjectBtn    = document.getElementById("create-project-btn");
+  const createProjectStatus = document.getElementById("create-project-status");
+
+  async function createProject() {
+    const name = newProjectNameInput.value.trim();
+    if (!name) { newProjectNameInput.focus(); return; }
+
+    createProjectBtn.disabled    = true;
+    createProjectStatus.textContent = "Creating…";
+    createProjectStatus.className   = "create-project-status";
+
+    try {
+      const res  = await fetch("/projects", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        createProjectStatus.textContent = data.error || "Failed";
+        createProjectStatus.className   = "create-project-status err";
+      } else {
+        createProjectStatus.textContent = `✓ ${data.folders_created.length} folders created`;
+        createProjectStatus.className   = "create-project-status ok";
+        newProjectNameInput.value = "";
+        // Refresh dropdown then select + browse the new project
+        await loadProjects();
+        folderSelect.value = data.project_id;
+        browseProject(data.project_id);
+        setTimeout(() => {
+          createProjectStatus.textContent = "";
+          createProjectStatus.className   = "create-project-status";
+        }, 3000);
+      }
+    } catch (err) {
+      createProjectStatus.textContent = "Network error";
+      createProjectStatus.className   = "create-project-status err";
+    } finally {
+      createProjectBtn.disabled = false;
+    }
+  }
+
+  createProjectBtn.addEventListener("click", createProject);
+  newProjectNameInput.addEventListener("keydown", e => { if (e.key === "Enter") createProject(); });
 
   // Show/hide explorer card when session becomes ready; also on folder change
   folderSelect.addEventListener("change", () => {

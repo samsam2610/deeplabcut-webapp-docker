@@ -59,6 +59,26 @@
   <!-- ─── Main card ─────────────────────────────────────────── -->
   <main>
    <div class="main-stack">
+    <!-- ─── Project Explorer (shown when session ready) ───── -->
+    <section class="card hidden" id="explorer-card">
+      <h2>Project Explorer</h2>
+      <p class="subtitle">Browse and upload files into each pipeline folder for the selected project.</p>
+
+      <div class="create-project-row">
+        <input type="text" id="new-project-name" placeholder="new-project-name"
+               autocomplete="off" spellcheck="false" />
+        <button id="create-project-btn" class="btn-sm btn-create">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Project
+        </button>
+        <span id="create-project-status" class="create-project-status"></span>
+      </div>
+
+      <div id="explorer-folders">
+        <p class="explorer-empty">Select a project folder above to browse its contents.</p>
+      </div>
+    </section>
+
     <!-- ─── Config editor (shown when session is ready) ────── -->
     <section class="card hidden" id="config-card">
       <div class="config-header">
@@ -130,15 +150,6 @@
           </svg>
           <span>Filter 3D</span>
         </button>
-      </div>
-    </section>
-
-    <!-- ─── Project Explorer (shown when session ready) ───── -->
-    <section class="card hidden" id="explorer-card">
-      <h2>Project Explorer</h2>
-      <p class="subtitle">Browse and upload files into each pipeline folder for the selected project.</p>
-      <div id="explorer-folders">
-        <p class="explorer-empty">Select a project folder above to browse its contents.</p>
       </div>
     </section>
 
