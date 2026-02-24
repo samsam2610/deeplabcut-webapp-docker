@@ -567,6 +567,13 @@ button[type="submit"]:hover .btn-arrow {
 .create-project-status.ok  { color: var(--accent); }
 .create-project-status.err { color: var(--danger); }
 
+.explorer-actions-row {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin-bottom: .75rem;
+}
+
 .explorer-empty {
   color: var(--text-dim);
   font-size: .85rem;
@@ -684,6 +691,27 @@ button[type="submit"]:hover .btn-arrow {
 
 .folder-upload-label input[type="file"] { display: none; }
 
+.folder-download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: .22rem .4rem;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color .2s, color .2s, background .2s;
+  flex-shrink: 0;
+  font-family: inherit;
+}
+
+.folder-download-btn:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: rgba(110, 231, 183, .05);
+}
+
 .folder-upload-status {
   font-size: .7rem;
   font-family: var(--mono);
@@ -713,6 +741,106 @@ button[type="submit"]:hover .btn-arrow {
 }
 
 .file-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.file-delete-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: .85rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color .15s, color .15s, background .15s;
+  font-family: inherit;
+}
+
+.file-item:hover .file-delete-btn { display: inline-flex; }
+
+.file-delete-btn:hover {
+  border-color: rgba(248, 113, 113, .4);
+  color: var(--danger);
+  background: rgba(248, 113, 113, .08);
+}
+
+.file-rename-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: .8rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color .15s, color .15s, background .15s;
+  font-family: inherit;
+}
+
+.file-item:hover .file-rename-btn { display: inline-flex; }
+
+.file-rename-btn:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: rgba(110, 231, 183, .08);
+}
+
+.file-rename-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: .74rem;
+  padding: .1rem .4rem;
+  outline: none;
+}
+
+.file-rename-confirm,
+.file-rename-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: .8rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-family: inherit;
+  transition: border-color .15s, color .15s, background .15s;
+}
+
+.file-rename-confirm {
+  color: var(--accent);
+}
+.file-rename-confirm:hover {
+  border-color: var(--accent-dim);
+  background: rgba(110, 231, 183, .08);
+}
+
+.file-rename-cancel {
+  color: var(--text-dim);
+}
+.file-rename-cancel:hover {
+  border-color: rgba(248, 113, 113, .4);
+  color: var(--danger);
+  background: rgba(248, 113, 113, .08);
+}
 
 .file-size {
   font-size: .68rem;

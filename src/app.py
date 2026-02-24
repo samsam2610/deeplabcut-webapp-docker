@@ -3,16 +3,18 @@ Flask API — Anipose / DLC Processing Gateway
 Handles multi-file uploads and dispatches long-running tasks to Celery.
 """
 
+import io
 import os
 import re
 import uuid
 import json
 import shutil
+import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
 
 import redis as _redis
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask import Flask, request, jsonify, render_template, send_from_directory, send_file
 from celery import Celery
 from celery.result import AsyncResult
 from werkzeug.utils import secure_filename
@@ -488,6 +490,100 @@ def create_project():
         "project_id":      safe_name,
         "folders_created": pipeline_folders,
     }), 201
+
+
+@app.route("/projects/<project_id>/file", methods=["PATCH"])
+def rename_project_file(project_id: str):
+    """
+    Rename a file within a project pipeline folder.
+    Body: { "folder": "<folder_name>", "old_name": "<current_name>", "new_name": "<new_name>" }
+    """
+    project_dir = DATA_DIR / project_id
+    if not project_dir.is_dir():
+        return jsonify({"error": f"Project not found: '{project_id}'"}), 404
+
+    body     = request.get_json(force=True) or {}
+    folder   = body.get("folder",   "").strip()
+    old_name = body.get("old_name", "").strip()
+    new_name = body.get("new_name", "").strip()
+
+    if not folder or not old_name or not new_name:
+        return jsonify({"error": "folder, old_name, and new_name are required."}), 400
+
+    base     = project_dir.resolve()
+    src      = (project_dir / folder / old_name).resolve()
+    dst      = (project_dir / folder / new_name).resolve()
+
+    if not src.is_relative_to(base) or not dst.is_relative_to(base):
+        return jsonify({"error": "Invalid path."}), 400
+    if not src.is_file():
+        return jsonify({"error": "File not found."}), 404
+    if dst.exists():
+        return jsonify({"error": f"'{new_name}' already exists."}), 409
+
+    src.rename(dst)
+    return jsonify({"old_name": old_name, "new_name": new_name, "folder": folder})
+
+
+@app.route("/projects/<project_id>/file", methods=["DELETE"])
+def delete_project_file(project_id: str):
+    """
+    Delete a single file from a project pipeline folder.
+    Body: { "folder": "<folder_name>", "filename": "<file_name>" }
+    """
+    project_dir = DATA_DIR / project_id
+    if not project_dir.is_dir():
+        return jsonify({"error": f"Project not found: '{project_id}'"}), 404
+
+    body = request.get_json(force=True) or {}
+    folder   = body.get("folder", "").strip()
+    filename = body.get("filename", "").strip()
+
+    if not folder or not filename:
+        return jsonify({"error": "folder and filename are required."}), 400
+
+    # Resolve and guard against path traversal
+    target = (project_dir / folder / filename).resolve()
+    if not target.is_relative_to(project_dir.resolve()):
+        return jsonify({"error": "Invalid path."}), 400
+    if not target.is_file():
+        return jsonify({"error": "File not found."}), 404
+
+    target.unlink()
+    return jsonify({"deleted": filename, "folder": folder})
+
+
+@app.route("/projects/<project_id>/download")
+def download_project(project_id: str):
+    """
+    Stream project data as a ZIP archive.
+    Optional query param ?folder=<name> limits the archive to that subfolder.
+    Without it, the entire project directory is zipped.
+    """
+    project_dir = DATA_DIR / project_id
+    if not project_dir.is_dir():
+        return jsonify({"error": f"Project not found: '{project_id}'"}), 404
+
+    folder = request.args.get("folder", "").strip()
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        if folder:
+            target = project_dir / folder
+            if not target.is_dir():
+                return jsonify({"error": f"Folder not found: '{folder}'"}), 404
+            for item in sorted(target.rglob("*")):
+                if item.is_file():
+                    zf.write(item, item.relative_to(project_dir))
+            zip_name = f"{project_id}_{folder}.zip"
+        else:
+            for item in sorted(project_dir.rglob("*")):
+                if item.is_file():
+                    zf.write(item, item.relative_to(project_dir))
+            zip_name = f"{project_id}.zip"
+
+    buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name=zip_name, mimetype="application/zip")
 
 
 @app.route("/projects")

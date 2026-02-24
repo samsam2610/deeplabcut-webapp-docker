@@ -229,8 +229,10 @@
   }
 
   // ── Project Explorer ─────────────────────────────────────────
-  const explorerFolders = document.getElementById("explorer-folders");
-  const newProjectNameInput = document.getElementById("new-project-name");
+  const explorerFolders       = document.getElementById("explorer-folders");
+  const explorerProjectActions= document.getElementById("explorer-project-actions");
+  const downloadProjectBtn    = document.getElementById("download-project-btn");
+  const newProjectNameInput   = document.getElementById("new-project-name");
   const createProjectBtn    = document.getElementById("create-project-btn");
   const createProjectStatus = document.getElementById("create-project-status");
 
@@ -276,12 +278,19 @@
   newProjectNameInput.addEventListener("keydown", e => { if (e.key === "Enter") createProject(); });
 
   // Sync helpers — keep both selects identical and trigger browse
+  let _currentProjectId = "";
   function _onProjectSelected(pid) {
     folderSelect.value         = pid;
     explorerFolderSelect.value = pid;
+    _currentProjectId          = pid;
+    explorerProjectActions.classList.toggle("hidden", !pid);
     if (pid) browseProject(pid);
     else explorerFolders.innerHTML = '<p class="explorer-empty">Select or create a project to browse its pipeline folders.</p>';
   }
+
+  downloadProjectBtn.addEventListener("click", () => {
+    if (_currentProjectId) window.location.href = `/projects/${_currentProjectId}/download`;
+  });
 
   explorerFolderSelect.addEventListener("change", () => _onProjectSelected(explorerFolderSelect.value));
   folderSelect.addEventListener("change",         () => _onProjectSelected(folderSelect.value));
@@ -324,7 +333,10 @@
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
         Upload
         <input type="file" multiple />
-      </label>`;
+      </label>
+      <button class="folder-download-btn" title="Download ${folder}/ as ZIP">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="5 12 12 19 19 12"/></svg>
+      </button>`;
 
     // ── file list ──
     const fileList = document.createElement("div");
@@ -335,7 +347,15 @@
       files.forEach(f => {
         const item = document.createElement("div");
         item.className = "file-item";
-        item.innerHTML = `${_fileSvg()}<span class="file-item-name">${f.name}</span><span class="file-size">${_fmtSize(f.size)}</span>`;
+        item.innerHTML = `${_fileSvg()}<span class="file-item-name">${f.name}</span><span class="file-size">${_fmtSize(f.size)}</span><button class="file-rename-btn" title="Rename ${f.name}">✎</button><button class="file-delete-btn" title="Delete ${f.name}">×</button>`;
+        item.querySelector(".file-rename-btn").addEventListener("click", e => {
+          e.stopPropagation();
+          _activateRename(item, f.name, folder, projectId);
+        });
+        item.querySelector(".file-delete-btn").addEventListener("click", e => {
+          e.stopPropagation();
+          _deleteFile(f.name, folder, projectId);
+        });
         fileList.appendChild(item);
       });
     }
@@ -345,8 +365,15 @@
 
     // Toggle expand
     header.addEventListener("click", e => {
-      if (e.target.closest("label")) return;  // let upload label handle its own click
+      if (e.target.closest("label")) return;              // let upload label handle its own click
+      if (e.target.closest(".folder-download-btn")) return; // handled separately
       row.classList.toggle("open");
+    });
+
+    // Folder download
+    header.querySelector(".folder-download-btn").addEventListener("click", e => {
+      e.stopPropagation();
+      window.location.href = `/projects/${projectId}/download?folder=${encodeURIComponent(folder)}`;
     });
 
     // Drag-drop onto the row
@@ -395,6 +422,86 @@
     } catch (err) {
       statusEl.textContent = "Network error";
       statusEl.className   = "folder-upload-status err";
+    }
+  }
+
+  function _activateRename(item, oldName, folder, projectId) {
+    const nameSpan  = item.querySelector(".file-item-name");
+    const sizeSpan  = item.querySelector(".file-size");
+    const renameBtn = item.querySelector(".file-rename-btn");
+    const deleteBtn = item.querySelector(".file-delete-btn");
+
+    const input = document.createElement("input");
+    input.type      = "text";
+    input.className = "file-rename-input";
+    input.value     = oldName;
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.className = "file-rename-confirm";
+    confirmBtn.title     = "Confirm rename";
+    confirmBtn.textContent = "✓";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className  = "file-rename-cancel";
+    cancelBtn.title      = "Cancel";
+    cancelBtn.textContent = "×";
+
+    nameSpan.replaceWith(input);
+    sizeSpan.style.display  = "none";
+    renameBtn.style.display = "none";
+    deleteBtn.style.display = "none";
+    item.appendChild(confirmBtn);
+    item.appendChild(cancelBtn);
+    input.focus();
+    input.select();
+
+    async function doRename() {
+      const newName = input.value.trim();
+      if (!newName || newName === oldName) { browseProject(projectId); return; }
+      await _renameFile(oldName, newName, folder, projectId);
+    }
+
+    confirmBtn.addEventListener("click", doRename);
+    cancelBtn.addEventListener("click",  () => browseProject(projectId));
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter")  doRename();
+      if (e.key === "Escape") browseProject(projectId);
+    });
+  }
+
+  async function _renameFile(oldName, newName, folder, projectId) {
+    try {
+      const res  = await fetch(`/projects/${projectId}/file`, {
+        method:  "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ folder, old_name: oldName, new_name: newName }),
+      });
+      const data = await res.json();
+      if (!res.ok) alert(data.error || "Rename failed.");
+    } catch (err) {
+      console.error("renameFile error:", err);
+      alert("Network error.");
+    }
+    browseProject(projectId);
+  }
+
+  async function _deleteFile(filename, folder, projectId) {
+    if (!confirm(`Delete "${filename}" from ${folder}/? This cannot be undone.`)) return;
+    try {
+      const res  = await fetch(`/projects/${projectId}/file`, {
+        method:  "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ folder, filename }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Delete failed.");
+      } else {
+        browseProject(projectId);
+      }
+    } catch (err) {
+      console.error("deleteFile error:", err);
+      alert("Network error.");
     }
   }
 
