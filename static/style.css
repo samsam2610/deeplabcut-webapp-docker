@@ -534,6 +534,67 @@ button[type="submit"]:hover .btn-arrow {
 .state-fail    #progress-stage { color: var(--danger); }
 .state-fail    .progress-fill  { background: var(--danger); }
 
+/* ── Config editor ───────────────────────────────────────────── */
+.config-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: .35rem;
+}
+
+.config-path {
+  font-family: var(--mono);
+  font-size: .68rem;
+  color: var(--text-dim);
+  opacity: .6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#config-editor {
+  width: 100%;
+  min-height: 260px;
+  margin-top: 1rem;
+  padding: .9rem 1rem;
+  font-family: var(--mono);
+  font-size: .76rem;
+  line-height: 1.65;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  resize: vertical;
+  outline: none;
+  transition: border-color .2s;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+#config-editor:focus {
+  border-color: var(--accent);
+}
+
+.config-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: .9rem;
+  gap: .75rem;
+}
+
+.config-save-status {
+  font-size: .8rem;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  transition: color .3s;
+}
+
+.config-save-status.ok  { color: var(--accent); }
+.config-save-status.err { color: var(--danger); }
+
 /* ── Footer ──────────────────────────────────────────────────── */
 footer {
   text-align: center;

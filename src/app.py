@@ -247,6 +247,35 @@ def clear_session():
     return jsonify({"status": "cleared"}), 200
 
 
+@app.route("/session/config", methods=["GET"])
+def get_session_config():
+    """Return the raw text of the active session's config.toml."""
+    raw = _redis_client.get(_SESSION_KEY)
+    if not raw:
+        return jsonify({"error": "No active session."}), 400
+    config_path = Path(json.loads(raw).get("config_path", ""))
+    if not config_path.is_file():
+        return jsonify({"error": "Config file not found on disk."}), 404
+    return jsonify({"content": config_path.read_text(), "config_path": str(config_path)})
+
+
+@app.route("/session/config", methods=["POST"])
+def save_session_config():
+    """Overwrite the active session's config.toml with new content."""
+    raw = _redis_client.get(_SESSION_KEY)
+    if not raw:
+        return jsonify({"error": "No active session."}), 400
+    config_path = Path(json.loads(raw).get("config_path", ""))
+    if not config_path.parent.exists():
+        return jsonify({"error": "Session directory no longer exists."}), 400
+    body = request.get_json(force=True) or {}
+    content = body.get("content", "")
+    if not content.strip():
+        return jsonify({"error": "Content cannot be empty."}), 400
+    config_path.write_text(content)
+    return jsonify({"status": "saved", "config_path": str(config_path)})
+
+
 def _clear_session_data():
     """Helper: revoke pending init task, delete config dir, remove Redis key."""
     raw = _redis_client.get(_SESSION_KEY)

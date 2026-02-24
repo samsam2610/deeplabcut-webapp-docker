@@ -226,10 +226,29 @@ def init_anipose_session(self, config_path: str):
         if not os.path.isfile(config_path):
             raise FileNotFoundError(f"Config not found on shared volume: {config_path}")
 
+        with open(config_path) as f:
+            config_content = f.read()
+
+        print(f"\n{'='*60}\nconfig.toml @ {config_path}\n{'='*60}\n{config_content}\n{'='*60}\n")
+
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "stage": f"Anipose {version} — config loaded",
+                "log": (
+                    f"import anipose  # v{version}\n"
+                    f"config = '{config_path}'\n\n"
+                    f"{'─'*40}\n"
+                    f"{config_content}"
+                ),
+            },
+        )
+
         return {
             "status": "ready",
             "anipose_version": version,
             "config_path": config_path,
+            "config_content": config_content,
         }
 
     except Exception as exc:

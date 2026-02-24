@@ -46,10 +46,16 @@
     // Show the pipeline actions card only when the session is ready.
     // actionsCard is declared later but is always initialized before
     // this function is called (all call sites are behind an async await).
-    const card = document.getElementById("actions-card");
-    if (card) {
-      card.classList.toggle("hidden", s !== "ready");
-      if (s === "ready") loadProjects();
+    const actionsCard = document.getElementById("actions-card");
+    if (actionsCard) actionsCard.classList.toggle("hidden", s !== "ready");
+
+    const configCard = document.getElementById("config-card");
+    if (configCard) {
+      configCard.classList.toggle("hidden", s !== "ready");
+      if (s === "ready") {
+        loadProjects();
+        loadConfig();
+      }
     }
   }
 
@@ -152,6 +158,56 @@
     triangulate: "Triangulating 3D poses",
     filter_3d:   "Filtering 3D trajectories",
   };
+
+  // ── Config editor ────────────────────────────────────────────
+  const configEditor      = document.getElementById("config-editor");
+  const configPathDisplay = document.getElementById("config-path-display");
+  const saveConfigBtn     = document.getElementById("save-config-btn");
+  const configSaveStatus  = document.getElementById("config-save-status");
+
+  async function loadConfig() {
+    try {
+      const res  = await fetch("/session/config");
+      const data = await res.json();
+      if (!res.ok) { console.error("loadConfig error:", data.error); return; }
+      configEditor.value       = data.content;
+      configPathDisplay.textContent = data.config_path;
+      configSaveStatus.textContent  = "";
+      configSaveStatus.className    = "config-save-status";
+    } catch (err) {
+      console.error("loadConfig fetch error:", err);
+    }
+  }
+
+  saveConfigBtn.addEventListener("click", async () => {
+    saveConfigBtn.disabled       = true;
+    configSaveStatus.textContent = "Saving…";
+    configSaveStatus.className   = "config-save-status";
+    try {
+      const res  = await fetch("/session/config", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ content: configEditor.value }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        configSaveStatus.textContent = data.error || "Save failed";
+        configSaveStatus.className   = "config-save-status err";
+      } else {
+        configSaveStatus.textContent = "Saved";
+        configSaveStatus.className   = "config-save-status ok";
+        setTimeout(() => {
+          configSaveStatus.textContent = "";
+          configSaveStatus.className   = "config-save-status";
+        }, 3000);
+      }
+    } catch (err) {
+      configSaveStatus.textContent = "Network error";
+      configSaveStatus.className   = "config-save-status err";
+    } finally {
+      saveConfigBtn.disabled = false;
+    }
+  });
 
   // ── Populate project folder dropdown ────────────────────────
   async function loadProjects() {
