@@ -182,6 +182,24 @@ body {
   background: rgba(248, 113, 113, .08);
 }
 
+.btn-sm.btn-flush-cache {
+  border-color: rgba(251, 191, 36, .3);
+  color: #fbbf24;
+}
+
+.btn-sm.btn-flush-cache:hover {
+  background: rgba(251, 191, 36, .08);
+}
+
+.flush-cache-status {
+  font-family: var(--mono);
+  font-size: .72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.flush-cache-status.ok  { color: var(--accent); }
+.flush-cache-status.err { color: var(--danger); }
+
 #session-config-input { display: none !important; }
 
 /* ── Layout ──────────────────────────────────────────────────── */

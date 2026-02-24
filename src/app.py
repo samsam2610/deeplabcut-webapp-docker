@@ -172,6 +172,20 @@ def status(task_id: str):
     return jsonify(response)
 
 
+@app.route("/admin/flush-task-cache", methods=["POST"])
+def flush_task_cache():
+    """
+    Delete all Celery task-result keys from Redis and purge the broker queue.
+    Useful for clearing stale/malformed task results that cause worker crashes.
+    Does NOT affect the active session key.
+    """
+    task_meta_keys = list(_redis_client.scan_iter("celery-task-meta-*"))
+    if task_meta_keys:
+        _redis_client.delete(*task_meta_keys)
+    _redis_client.delete("celery")          # purge the default broker queue
+    return jsonify({"deleted": len(task_meta_keys)})
+
+
 @app.route("/session", methods=["POST"])
 def create_anipose_session():
     """

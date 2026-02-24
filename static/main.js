@@ -136,6 +136,34 @@
     applySessionState({ status: "none" });
   });
 
+  // ── Flush Redis cache ─────────────────────────────────────────
+  const btnFlushCache      = document.getElementById("btn-flush-cache");
+  const flushCacheStatus   = document.getElementById("flush-cache-status");
+
+  btnFlushCache.addEventListener("click", async () => {
+    if (!confirm("Delete all Celery task results from Redis and clear the task queue?\n\nThis will break any in-progress jobs but fixes a crashed/looping worker.")) return;
+    btnFlushCache.disabled = true;
+    try {
+      const res  = await fetch("/admin/flush-task-cache", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        flushCacheStatus.textContent = `Cleared ${data.deleted} task result(s) + queue.`;
+        flushCacheStatus.className   = "flush-cache-status ok";
+      } else {
+        flushCacheStatus.textContent = data.error || "Error";
+        flushCacheStatus.className   = "flush-cache-status err";
+      }
+    } catch {
+      flushCacheStatus.textContent = "Network error";
+      flushCacheStatus.className   = "flush-cache-status err";
+    }
+    btnFlushCache.disabled = false;
+    setTimeout(() => {
+      flushCacheStatus.textContent = "";
+      flushCacheStatus.className   = "flush-cache-status";
+    }, 5000);
+  });
+
   // ── Restore session state on page load ──────────────────────
   (async () => {
     try {
