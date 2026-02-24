@@ -46,16 +46,17 @@
     // Show the pipeline actions card only when the session is ready.
     // actionsCard is declared later but is always initialized before
     // this function is called (all call sites are behind an async await).
-    const actionsCard = document.getElementById("actions-card");
-    if (actionsCard) actionsCard.classList.toggle("hidden", s !== "ready");
+    const actionsCard  = document.getElementById("actions-card");
+    const configCard   = document.getElementById("config-card");
+    const explorerCard = document.getElementById("explorer-card");
 
-    const configCard = document.getElementById("config-card");
-    if (configCard) {
-      configCard.classList.toggle("hidden", s !== "ready");
-      if (s === "ready") {
-        loadProjects();
-        loadConfig();
-      }
+    if (actionsCard)  actionsCard.classList.toggle("hidden",  s !== "ready");
+    if (configCard)   configCard.classList.toggle("hidden",   s !== "ready");
+    if (explorerCard) explorerCard.classList.toggle("hidden", s !== "ready");
+
+    if (s === "ready") {
+      loadProjects();
+      loadConfig();
     }
   }
 
@@ -221,6 +222,148 @@
         projects.map(p => `<option value="${p}">${p}</option>`).join("");
     } catch (err) {
       console.error("loadProjects error:", err);
+    }
+  }
+
+  // ── Project Explorer ─────────────────────────────────────────
+  const explorerFolders = document.getElementById("explorer-folders");
+
+  // Show/hide explorer card when session becomes ready; also on folder change
+  folderSelect.addEventListener("change", () => {
+    const pid = folderSelect.value;
+    if (pid) browseProject(pid);
+    else explorerFolders.innerHTML = '<p class="explorer-empty">Select a project folder above to browse its contents.</p>';
+  });
+
+  function _fmtSize(bytes) {
+    if (bytes == null) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+    return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+  }
+
+  function _folderSvg(color) {
+    return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+  }
+
+  function _fileSvg() {
+    return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>`;
+  }
+
+  function _buildFolderRow(entry, projectId) {
+    const { key, folder, files, exists } = entry;
+    const count = files.length;
+
+    const row = document.createElement("div");
+    row.className = "folder-row";
+    row.dataset.folder = folder;
+
+    // ── header ──
+    const header = document.createElement("div");
+    header.className = "folder-row-header";
+    header.innerHTML = `
+      <span class="folder-chevron">▶</span>
+      <span class="folder-icon">${_folderSvg("currentColor")}</span>
+      <span class="folder-key">${key}</span>
+      <span class="folder-name-chip">${folder}</span>
+      <span class="folder-badge ${count > 0 ? "has-files" : ""}">${count} file${count !== 1 ? "s" : ""}</span>
+      <span class="folder-upload-status"></span>
+      <label class="folder-upload-label" title="Upload files to ${folder}/">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+        Upload
+        <input type="file" multiple />
+      </label>`;
+
+    // ── file list ──
+    const fileList = document.createElement("div");
+    fileList.className = "folder-files";
+    if (files.length === 0) {
+      fileList.innerHTML = `<p class="folder-empty-msg">${exists ? "Empty folder" : "Folder not yet created"}</p>`;
+    } else {
+      files.forEach(f => {
+        const item = document.createElement("div");
+        item.className = "file-item";
+        item.innerHTML = `${_fileSvg()}<span class="file-item-name">${f.name}</span><span class="file-size">${_fmtSize(f.size)}</span>`;
+        fileList.appendChild(item);
+      });
+    }
+
+    row.appendChild(header);
+    row.appendChild(fileList);
+
+    // Toggle expand
+    header.addEventListener("click", e => {
+      if (e.target.closest("label")) return;  // let upload label handle its own click
+      row.classList.toggle("open");
+    });
+
+    // Drag-drop onto the row
+    row.addEventListener("dragover", e => { e.preventDefault(); row.classList.add("dragover"); });
+    row.addEventListener("dragleave", ()  => row.classList.remove("dragover"));
+    row.addEventListener("drop", async e => {
+      e.preventDefault();
+      row.classList.remove("dragover");
+      const droppedFiles = Array.from(e.dataTransfer.files);
+      if (droppedFiles.length) await _uploadFiles(droppedFiles, folder, projectId, row);
+    });
+
+    // File input change → upload
+    const fileInput = header.querySelector("input[type='file']");
+    fileInput.addEventListener("change", async () => {
+      if (!fileInput.files.length) return;
+      await _uploadFiles(Array.from(fileInput.files), folder, projectId, row);
+      fileInput.value = "";
+    });
+
+    return row;
+  }
+
+  async function _uploadFiles(files, folder, projectId, row) {
+    const statusEl = row.querySelector(".folder-upload-status");
+    statusEl.textContent = "Uploading…";
+    statusEl.className   = "folder-upload-status";
+
+    const fd = new FormData();
+    fd.append("folder", folder);
+    files.forEach(f => fd.append("files[]", f));
+
+    try {
+      const res  = await fetch(`/projects/${projectId}/upload`, { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        statusEl.textContent = data.error || "Upload failed";
+        statusEl.className   = "folder-upload-status err";
+      } else {
+        statusEl.textContent = `✓ ${data.saved.length} uploaded`;
+        statusEl.className   = "folder-upload-status ok";
+        setTimeout(() => { statusEl.textContent = ""; statusEl.className = "folder-upload-status"; }, 3000);
+        // Refresh this project's explorer
+        browseProject(projectId);
+      }
+    } catch (err) {
+      statusEl.textContent = "Network error";
+      statusEl.className   = "folder-upload-status err";
+    }
+  }
+
+  async function browseProject(projectId) {
+    explorerFolders.innerHTML = '<p class="explorer-empty" style="opacity:.5">Loading…</p>';
+    try {
+      const res  = await fetch(`/projects/${projectId}/browse`);
+      const data = await res.json();
+      if (!res.ok) {
+        explorerFolders.innerHTML = `<p class="explorer-empty">${data.error || "Error loading project"}</p>`;
+        return;
+      }
+      const list = document.createElement("div");
+      list.className = "folder-list";
+      data.folders.forEach(entry => list.appendChild(_buildFolderRow(entry, projectId)));
+      explorerFolders.innerHTML = "";
+      explorerFolders.appendChild(list);
+    } catch (err) {
+      console.error("browseProject error:", err);
+      explorerFolders.innerHTML = '<p class="explorer-empty">Failed to load project.</p>';
     }
   }
 

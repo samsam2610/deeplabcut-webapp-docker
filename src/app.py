@@ -4,6 +4,7 @@ Handles multi-file uploads and dispatches long-running tasks to Celery.
 """
 
 import os
+import re
 import uuid
 import json
 import shutil
@@ -336,6 +337,115 @@ def run_operation():
         "operation":  operation,
         "project_id": project_id,
     }), 202
+
+
+@app.route("/session/pipeline")
+def get_pipeline_structure():
+    """
+    Parse the [pipeline] section of the active session's config.toml and return
+    a deduplicated, ordered list of {key, folder} objects.
+    """
+    raw = _redis_client.get(_SESSION_KEY)
+    if not raw:
+        return jsonify({"error": "No active session."}), 400
+    config_path = Path(json.loads(raw).get("config_path", ""))
+    if not config_path.is_file():
+        return jsonify({"error": "Config file not found."}), 404
+    pipeline = _parse_pipeline_section(config_path.read_text())
+    # Deduplicate by folder name while preserving order
+    seen: set[str] = set()
+    folders = []
+    for key, folder in pipeline.items():
+        if folder not in seen:
+            seen.add(folder)
+            folders.append({"key": key, "folder": folder})
+    return jsonify({"pipeline": folders})
+
+
+@app.route("/projects/<project_id>/browse")
+def browse_project(project_id: str):
+    """
+    For each pipeline folder in the active session config, list the files that
+    exist under DATA_DIR/<project_id>/<folder>/.
+    """
+    raw = _redis_client.get(_SESSION_KEY)
+    if not raw:
+        return jsonify({"error": "No active session."}), 400
+    config_path = Path(json.loads(raw).get("config_path", ""))
+
+    project_dir = DATA_DIR / project_id
+    if not project_dir.is_dir():
+        return jsonify({"error": f"Project not found: '{project_id}'"}), 404
+
+    pipeline = _parse_pipeline_section(config_path.read_text()) if config_path.is_file() else {}
+    seen: set[str] = set()
+    result = []
+    for key, folder_name in pipeline.items():
+        if folder_name in seen:
+            continue
+        seen.add(folder_name)
+        folder_path = project_dir / folder_name
+        files = []
+        if folder_path.is_dir():
+            for item in sorted(folder_path.iterdir()):
+                files.append({
+                    "name":   item.name,
+                    "is_dir": item.is_dir(),
+                    "size":   item.stat().st_size if item.is_file() else None,
+                })
+        result.append({
+            "key":    key,
+            "folder": folder_name,
+            "exists": folder_path.is_dir(),
+            "files":  files,
+        })
+    return jsonify({"project_id": project_id, "folders": result})
+
+
+@app.route("/projects/<project_id>/upload", methods=["POST"])
+def upload_to_project(project_id: str):
+    """
+    Upload files into DATA_DIR/<project_id>/<folder>/.
+    Form fields: folder (str), files[] (one or more files).
+    """
+    project_dir = DATA_DIR / project_id
+    if not project_dir.is_dir():
+        return jsonify({"error": f"Project not found: '{project_id}'"}), 404
+
+    folder_name = request.form.get("folder", "").strip()
+    if not folder_name:
+        return jsonify({"error": "folder field is required."}), 400
+
+    files = request.files.getlist("files[]")
+    if not files or not files[0].filename:
+        return jsonify({"error": "No files provided."}), 400
+
+    target_dir = project_dir / folder_name
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    saved = []
+    for f in files:
+        safe_name = secure_filename(f.filename)
+        f.save(str(target_dir / safe_name))
+        saved.append(safe_name)
+
+    return jsonify({"saved": saved, "folder": folder_name, "project_id": project_id}), 201
+
+
+def _parse_pipeline_section(config_text: str) -> dict:
+    """Extract [pipeline] key = "value" pairs from raw TOML text."""
+    match = re.search(r'\[pipeline\](.*?)(?=\n\[|\Z)', config_text, re.DOTALL)
+    if not match:
+        return {}
+    result = {}
+    for line in match.group(1).splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        m = re.match(r'^(\w+)\s*=\s*"([^"]*)"', line)
+        if m:
+            result[m.group(1)] = m.group(2)
+    return result
 
 
 @app.route("/projects")

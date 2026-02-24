@@ -1,0 +1,115 @@
+project = "Anipose-Tracking"
+model_folder = "/app/data/Parra-Data/Disk/Motion-Tracking/MediaPipe_Pose-User-2026-01-27"
+nesting = 2
+video_extension = "mkv"
+path = "/app/data/Parra-Data/Disk/Motion-Tracking/sam-mediapipe-tracking/Aimar-12252025-landmarks-smooth/Anipose-Tracking/"
+converted_video_speed = 1
+model_type = "deeplabcut"
+
+[pipeline]
+videos_raw = "videos-raw"
+pose_2d = "pose-2d"
+videos_raw_mp4 = "videos-raw-mp4"
+pose_2d_filter = "pose-2d-filtered"
+pose_2d_projected = "pose-2d-proj"
+pose_3d = "pose-3d"
+pose_3d_filter = "pose-3d-filtered"
+videos_labeled_2d = "videos-labeled"
+videos_labeled_2d_filter = "videos-labeled-filtered"
+calibration_videos = "calibration"
+calibration_results = "calibration"
+videos_labeled_3d = "videos-3d"
+videos_labeled_3d_filter = "videos-3d-filtered"
+angles = "angles"
+summaries = "summaries"
+videos_combined = "videos-combined"
+videos_compare = "videos-compare"
+videos_2d_projected = "videos-2d-proj"
+
+[calibration]
+board_type = "charuco"
+board_size = [ 5, 3]
+board_marker_bits = 4
+board_marker_dict_number = 50
+board_marker_length = 38
+board_square_side_length = 49
+animal_calibration = false
+fisheye = false
+
+[triangulation]
+cam_regex = "cam([0-9])"
+ransac = false
+optim = true
+scale_smooth = 4
+scale_length = 1.5
+scale_length_weak = 0.5
+reproj_error_threshold = 5
+score_threshold = 0.03
+n_deriv_smooth = 2
+
+# constraints = [
+#     ["11","12"], ["11","23"], ["12","24"], # The Torso Box
+    
+# ]
+# # constrains = [ ["11", "12"]]
+# # constraints_weak = []
+
+
+# constraints_weak = [
+#     # Face
+#     ["0","1"],["1","2"],["2","3"],["3","7"],["0","4"],["4","5"],["5","6"],["6","8"],["9","10"],
+#     # Left Hand (Wrist to Pinky, Index, Thumb)
+#     ["15","17"],["15","19"],["15","21"],["17","19"],
+#     # Right Hand (Wrist to Pinky, Index, Thumb)
+#     ["16","18"],["16","20"],["16","22"],["18","20"],
+#     ["11","13"], ["12","14"], # Arms (Shoulder to Wrist)
+#     ["13", "15"], ["14", "16"]
+# ]
+
+# HARD CONSTRAINTS: Skeletal bones (Limb length stability)
+constraints = [
+    ["11","12"], ["11","23"], ["12","24"], ["23","24"], # The Torso Box
+    ["11","13"], ["13","15"], # Left Arm (Shoulder to Elbow, Elbow to Wrist)
+    ["12","14"], ["14","16"]  # Right Arm (Shoulder to Elbow, Elbow to Wrist)
+]
+
+# WEAK CONSTRAINTS: Non-rigid and occluded points
+constraints_weak = [
+    # Face (Midline and Eyes)
+    ["0","1"],["1","2"],["2","3"],["3","7"],["0","4"],["4","5"],["5","6"],["6","8"],["9","10"],
+    # Left Hand
+    ["15","17"],["15","19"],["15","21"],["17","19"],
+    # Right Hand
+    ["16","18"],["16","20"],["16","22"],["18","20"]
+]
+
+optim_chunking = false
+optim_chunking_size = 1000
+
+axes = [
+    ["x", "11", "12"],  # From Left Shoulder to Right Shoulder
+    ["z", "24", "12"]   # From Right Hip to Right Shoulder (Upward)
+]
+
+reference_point = "24"
+
+[labeling]
+scheme = [ [ "R-Wrist", "R-D2Base", "R-D2Mid",], [ "R-Wrist", "R-D3Base", "R-D3Mid",], [ "R-Wrist", "R-D4Base", "R-D4Mid",], [ "L-Wrist", "L-D2Base", "L-D2Mid",], [ "L-Wrist", "L-D3Base", "L-D3Mid",], [ "L-Wrist", "L-D4Base", "L-D4Mid",],]
+
+[manual_verification]
+manually_verify = false
+
+[filter]
+enabled = true
+type = "medfilt"
+medfilt = 13
+offset_threshold = 30
+score_threshold = 0.03
+spline = true
+n_back = 3
+multiprocessing = true
+
+[filter3d]
+enabled = true
+medfilt = 13
+offset_threshold = 30
