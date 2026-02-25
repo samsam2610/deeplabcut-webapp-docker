@@ -194,18 +194,16 @@
   const MEDIAPIPE_OPS = new Set(["organize_for_anipose", "convert_mediapipe_csv_to_h5"]);
 
   // ── Pipeline mode toggle ─────────────────────────────────────
-  const pipelineBtnMediapipe   = document.getElementById("pipeline-btn-mediapipe");
-  const pipelineBtnDeeplabcut  = document.getElementById("pipeline-btn-deeplabcut");
-  const mediapipeGrid          = document.getElementById("mediapipe-grid");
-  const aniposeGrid            = document.getElementById("anipose-grid");
-  const scorerInput            = document.getElementById("scorer-input");
+  const pipelineBtnMediapipe  = document.getElementById("pipeline-btn-mediapipe");
+  const pipelineBtnDeeplabcut = document.getElementById("pipeline-btn-deeplabcut");
+  const mediapipeExtras       = document.getElementById("mediapipe-extras");
+  const scorerInput           = document.getElementById("scorer-input");
 
   function _setPipelineMode(mode) {
     const isMediapipe = (mode === "mediapipe");
     pipelineBtnMediapipe.classList.toggle("active",  isMediapipe);
     pipelineBtnDeeplabcut.classList.toggle("active", !isMediapipe);
-    mediapipeGrid.classList.toggle("hidden",  !isMediapipe);
-    aniposeGrid.classList.toggle("hidden",    isMediapipe);
+    mediapipeExtras.classList.toggle("hidden", !isMediapipe);
   }
 
   pipelineBtnMediapipe.addEventListener("click",  () => _setPipelineMode("mediapipe"));
@@ -317,9 +315,8 @@
   const userDataBreadcrumb   = document.getElementById("userdata-breadcrumb");
   const userDataSubfolders   = document.getElementById("userdata-subfolders");
 
-  let _currentRoot       = "";   // "" = DATA_DIR; non-empty = current browse path
-  let _userDataDir       = null; // base mount path, populated from /config
-  let _userDataBrowsePath = null; // current navigator path within user-data
+  let _currentRoot = "";   // "" = DATA_DIR; non-empty = current browse path
+  let _userDataDir = null; // base mount path, populated from /config
 
   async function loadProjects(root) {
     try {
@@ -344,8 +341,7 @@
 
   // ── User-data folder navigator ────────────────────────────────
   async function _refreshUserDataNav(path) {
-    _userDataBrowsePath = path;
-    _currentRoot        = path;
+    _currentRoot = path;
 
     // Render breadcrumb
     const baseName = _userDataDir.split("/").filter(Boolean).pop() || "user-data";
@@ -426,8 +422,7 @@
     _onProjectSelected("");
     if (root === "") {
       userDataNav.classList.add("hidden");
-      _currentRoot        = "";
-      _userDataBrowsePath = null;
+      _currentRoot = "";
       await loadProjects("");
     } else {
       userDataNav.classList.remove("hidden");

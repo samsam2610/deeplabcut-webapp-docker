@@ -155,13 +155,13 @@
         </div>
       </div>
 
-      <!-- ─── MediaPipe action grid ──────────────────────────── -->
-      <div id="mediapipe-grid">
+      <!-- ─── MediaPipe-only extras (scorer + preprocess buttons) ── -->
+      <div id="mediapipe-extras">
         <div class="scorer-row">
           <label for="scorer-input">Scorer</label>
           <input type="text" id="scorer-input" value="User" placeholder="User" autocomplete="off" spellcheck="false" />
         </div>
-        <div class="action-grid">
+        <div class="action-grid" style="margin-bottom:.75rem">
           <button class="btn-action" data-op="organize_for_anipose" title="Organize cam folders into pose-2d/">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -179,46 +179,44 @@
         </div>
       </div>
 
-      <!-- ─── DeepLabCut / Anipose action grid ──────────────── -->
-      <div id="anipose-grid" class="hidden">
-        <div class="action-grid">
-          <!-- Calibrate -->
-          <button class="btn-action" data-op="calibrate" title="anipose calibrate">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
-              <line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/>
-              <line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/>
-            </svg>
-            <span>Calibrate</span>
-          </button>
+      <!-- ─── Shared pipeline steps (always visible) ──────────── -->
+      <div class="action-grid">
+        <!-- Calibrate -->
+        <button class="btn-action" data-op="calibrate" title="anipose calibrate">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
+            <line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/>
+            <line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/>
+          </svg>
+          <span>Calibrate</span>
+        </button>
 
-          <!-- Filter 2D -->
-          <button class="btn-action" data-op="filter_2d" title="anipose filter">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-            </svg>
-            <span>Filter 2D</span>
-          </button>
+        <!-- Filter 2D -->
+        <button class="btn-action" data-op="filter_2d" title="anipose filter">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+          <span>Filter 2D</span>
+        </button>
 
-          <!-- Triangulate -->
-          <button class="btn-action" data-op="triangulate" title="anipose triangulate">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="12 2 22 20 2 20"/>
-              <line x1="12" y1="2" x2="12" y2="20"/>
-              <line x1="7" y1="12" x2="17" y2="12"/>
-            </svg>
-            <span>Triangulate</span>
-          </button>
+        <!-- Triangulate -->
+        <button class="btn-action" data-op="triangulate" title="anipose triangulate">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 22 20 2 20"/>
+            <line x1="12" y1="2" x2="12" y2="20"/>
+            <line x1="7" y1="12" x2="17" y2="12"/>
+          </svg>
+          <span>Triangulate</span>
+        </button>
 
-          <!-- Filter 3D -->
-          <button class="btn-action" data-op="filter_3d" title="anipose filter-3d">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-              <polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
-            </svg>
-            <span>Filter 3D</span>
-          </button>
-        </div>
+        <!-- Filter 3D -->
+        <button class="btn-action" data-op="filter_3d" title="anipose filter-3d">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
+          </svg>
+          <span>Filter 3D</span>
+        </button>
       </div>
 
       <!-- ─── Operation progress (shown after a step is launched) ── -->
