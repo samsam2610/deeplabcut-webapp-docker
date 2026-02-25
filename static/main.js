@@ -388,6 +388,7 @@
   // ── Project Explorer ─────────────────────────────────────────
   const explorerFolders       = document.getElementById("explorer-folders");
   const explorerProjectActions= document.getElementById("explorer-project-actions");
+  const refreshExplorerBtn    = document.getElementById("refresh-explorer-btn");
   const downloadProjectBtn    = document.getElementById("download-project-btn");
   const newProjectNameInput   = document.getElementById("new-project-name");
   const createProjectBtn    = document.getElementById("create-project-btn");
@@ -446,6 +447,10 @@
     if (pid) browseProject(pid);
     else explorerFolders.innerHTML = '<p class="explorer-empty">Select or create a project to browse its pipeline folders.</p>';
   }
+
+  refreshExplorerBtn.addEventListener("click", () => {
+    if (_currentProjectId) browseProject(_currentProjectId);
+  });
 
   downloadProjectBtn.addEventListener("click", () => {
     if (!_currentProjectId) return;
@@ -793,6 +798,7 @@
           logOutput.textContent = data.result.log;
         }
         newJobBtn.classList.remove("hidden");
+        if (_currentProjectId) browseProject(_currentProjectId);
       }
 
       if (data.state === "FAILURE") {
@@ -801,6 +807,7 @@
         progressStage.textContent = "✗ " + (data.error || "Failed");
         logOutput.textContent = data.error || "An unknown error occurred.";
         newJobBtn.classList.remove("hidden");
+        if (_currentProjectId) browseProject(_currentProjectId);
       }
 
     } catch (err) {
