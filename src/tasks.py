@@ -257,34 +257,95 @@ def process_calibrate(self, session_path: str, config_path: str):
 @celery.task(bind=True, name="tasks.process_filter_2d")
 def process_filter_2d(self, session_path: str, config_path: str):
     """Run `anipose filter` — temporal filtering of 2-D pose predictions."""
-    return _session_task_wrapper(
-        self, session_path, config_path,
-        cmd=["anipose", "filter"],
-        stage="Filtering 2-D predictions",
-        operation="filter_2d",
+    self.update_state(
+        state="PROGRESS",
+        meta={"progress": 10, "stage": "Discovering folders…", "log": ""},
     )
+    # ── Load config ──────────────────────────────────────────────
+    config_local = os.path.join(session_path, "config.toml")
+    try:
+        try:
+            with open(config_local, "rb") as _f:
+                config = load_config(config_local)
+        except ImportError:
+            config = load_config(config_local)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to parse config.toml: {exc}")
+    
+    # ── Filter 2D ──────────────────────────────────────────
+    try:
+        process_session_filter_2d(config, session_path)
+        return {
+            "status": "complete",
+            "operation": "filter_2d",
+            "log": f"2D filtering complete.\nsession_path: {session_path}",
+        }
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:]) 
 
 
 @celery.task(bind=True, name="tasks.process_triangulate")
 def process_triangulate(self, session_path: str, config_path: str):
     """Run `anipose triangulate` — multi-camera 3-D triangulation."""
-    return _session_task_wrapper(
-        self, session_path, config_path,
-        cmd=["anipose", "triangulate"],
-        stage="Triangulating 3-D poses",
-        operation="triangulate",
+    self.update_state(
+        state="PROGRESS",
+        meta={"progress": 10, "stage": "Discovering folders…", "log": ""},
     )
+    # ── Load config ──────────────────────────────────────────────
+    config_local = os.path.join(session_path, "config.toml")
+    try:
+        try:
+            with open(config_local, "rb") as _f:
+                config = load_config(config_local)
+        except ImportError:
+            config = load_config(config_local)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to parse config.toml: {exc}")
+    
+    # ── Triangulate 3D ──────────────────────────────────────────
+    try:
+        process_session_triangulate(config, session_path)
+        return {
+            "status": "complete",
+            "operation": "triangulate",
+            "log": f"3D triangulation complete.\nsession_path: {session_path}",
+        }
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
 
 
 @celery.task(bind=True, name="tasks.process_filter_3d")
 def process_filter_3d(self, session_path: str, config_path: str):
     """Run `anipose filter-3d` — smoothing of triangulated 3-D trajectories."""
-    return _session_task_wrapper(
-        self, session_path, config_path,
-        cmd=["anipose", "filter-3d"],
-        stage="Filtering 3-D trajectories",
-        operation="filter_3d",
+    if not os.path.isdir(session_path):
+        raise FileNotFoundError(f"Session folder not found: {session_path}")
+
+    self.update_state(
+        state="PROGRESS",
+        meta={"progress": 10, "stage": "Discovering folders…", "log": ""},
     )
+    # ── Load config ──────────────────────────────────────────────
+    config_local = os.path.join(session_path, "config.toml")
+    try:
+        try:
+            with open(config_local, "rb") as _f:
+                config = load_config(config_local)
+        except ImportError:
+            config = load_config(config_local)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to parse config.toml: {exc}")
+    
+    # ── Filter 3D ──────────────────────────────────────────
+    try:
+        process_session_filter_3d(config, session_path)
+        return {
+            "status": "complete",
+            "operation": "filter_3d",
+            "log": f"3D filtering complete.\nsession_path: {session_path}",
+        }
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
 
 
 # ── MediaPipe Preprocessing Tasks ────────────────────────────────
