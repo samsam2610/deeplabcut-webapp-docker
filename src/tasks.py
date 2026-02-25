@@ -180,10 +180,10 @@ def process_calibrate(self, session_path: str, config_path: str):
         try:
             import tomllib as _tomllib
             with open(config_local, "rb") as _f:
-                config = _tomllib.load(_f)
+                config = load_config(config_local)
         except ImportError:
             import toml as _toml
-            config = _toml.load(config_local)
+            config = load_config(config_local)
     except Exception as exc:
         raise RuntimeError(f"Failed to parse config.toml: {exc}")
 
