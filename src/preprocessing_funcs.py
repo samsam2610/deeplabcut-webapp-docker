@@ -142,7 +142,8 @@ def convert_mediapipe_to_dlc_csv(config, parent_path, frame_w, frame_h, scorer='
 
     for folder_name in subfolders:
         folder_path = os.path.join(mediapipe_folder_path, folder_name)
-        mat_files   = sorted([f for f in os.listdir(folder_path) if f.endswith('.mat')])
+        # Get only pose_landmarks.mat files
+        mat_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.mat') and 'pose_landmarks' in f])
 
         if not mat_files:
             print(f"  [{folder_name}] No .mat file — skipping.")
