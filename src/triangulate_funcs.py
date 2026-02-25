@@ -338,7 +338,14 @@ def triangulate(config,
     dout.to_csv(output_fname, index=False)
 
 
-def process_session_triangulate(config, session_path, parent_folder_path=None):
+def process_session_triangulate(config, session_path, parent_folder_path=None,
+                                 progress_fn=None):
+    """
+    Triangulate all trials found under pose-2d/.
+
+    progress_fn(stage: str, pct: int) is called at the start and end of each
+    trial so the caller (e.g. a Celery task) can push live state updates.
+    """
     pipeline_videos_raw = config['pipeline']['videos_raw']
     pipeline_calibration_results = config['pipeline']['calibration_results']
     pipeline_pose = config['pipeline']['pose_2d']
@@ -346,8 +353,9 @@ def process_session_triangulate(config, session_path, parent_folder_path=None):
     pipeline_3d = config['pipeline']['pose_3d']
 
     calibration_path = find_calibration_folder(config, session_path)
-    print(f"calibration path {calibration_path}")
+    print(f"Calibration folder: {calibration_path}")
     if calibration_path is None:
+        print("ERROR: could not find calibration folder — aborting.")
         return
 
     if config['filter']['enabled']:
@@ -358,58 +366,71 @@ def process_session_triangulate(config, session_path, parent_folder_path=None):
     if parent_folder_path is None:
         parent_folder_path = session_path
 
-    print(pose_folder)
-    calib_folder = os.path.join(calibration_path, pipeline_calibration_results)
-    video_folder = os.path.join(session_path, pipeline_videos_raw)
-    output_folder = os.path.join(session_path, pipeline_3d)
-
-    if config['model_type'] == 'deeplabcut':
-        pose_files = glob(os.path.join(pose_folder, '*.h5'))
-    elif config['model_type'] == 'sleap':
-        pose_files = glob(os.path.join(pose_folder, '*.predictions.slp'))
-
-    base_2d_path = os.path.join(parent_folder_path, 'pose-2d')
+    print(f"Pose folder : {pose_folder}")
+    calib_folder  = os.path.join(calibration_path, pipeline_calibration_results)
+    video_folder  = os.path.join(session_path, pipeline_videos_raw)
+    base_2d_path  = os.path.join(parent_folder_path, 'pose-2d')
     output_folder = os.path.join(parent_folder_path, 'pose-3d')
-    
-    # 1. Find all .h5 files recursively in the 2d-data folder
+
+    print(f"Calib folder: {calib_folder}")
+    print(f"Output dir  : {output_folder}")
+
+    # 1. Find all .h5 files recursively in the pose-2d folder
     pose_files = glob(os.path.join(base_2d_path, "**", "*.h5"), recursive=True)
-    
+
     cam_videos = defaultdict(list)
-    
-    # 2. Group files by their parent folder (Trial Name)
+
+    # 2. Group files by their parent folder (trial name)
     for pf in pose_files:
-        # The 'name' is the folder the file sits in (e.g., 'sam_backpack_20251225...')
         trial_name = os.path.basename(os.path.dirname(pf))
         cam_videos[trial_name].append(pf)
-    
+
     # 3. Sort trial names naturally
     vid_names = sorted(cam_videos.keys())
-    print(f"Found trials: {vid_names}")
+    n_trials = len(vid_names)
+    print(f"\nFound {n_trials} trial(s): {vid_names}\n")
 
-    if len(vid_names) > 0:
+    if n_trials > 0:
         os.makedirs(output_folder, exist_ok=True)
 
-    for name in vid_names:
-        print(f"Processing {name}" )
-        fnames = cam_videos[name]
-        cam_names = [get_cam_name(config, f) for f in fnames]
+    for ix, name in enumerate(vid_names):
+        # Progress: 20 % base + up to 75 % distributed across trials
+        pct_start = 20 + int(75 * ix / max(n_trials, 1))
+        pct_end   = 20 + int(75 * (ix + 1) / max(n_trials, 1))
+
+        print(f"\n{'='*55}")
+        print(f"Trial {ix+1}/{n_trials}: {name}")
+        print(f"{'='*55}")
+
+        if progress_fn:
+            progress_fn(f"Trial {ix+1}/{n_trials}: {name}", pct_start)
+
+        fnames     = cam_videos[name]
+        cam_names  = [get_cam_name(config, f) for f in fnames]
         fname_dict = dict(zip(cam_names, fnames))
 
         output_fname = os.path.join(output_folder, name + '.csv')
+        print(f"Cameras     : {cam_names}")
+        print(f"Output file : {output_fname}")
 
-        print(f"output name check {output_fname}")
-        
         if os.path.exists(output_fname):
+            print(f"Output already exists — skipping.")
+            if progress_fn:
+                progress_fn(f"Skipped {ix+1}/{n_trials}: {name} (exists)", pct_end)
             continue
-
 
         try:
             triangulate(config,
                         calib_folder, video_folder, pose_folder,
                         fname_dict, output_fname)
+            print(f"Done: {name}")
+            if progress_fn:
+                progress_fn(f"Done {ix+1}/{n_trials}: {name}", pct_end)
         except ValueError:
-            import traceback, sys
-            traceback.print_exc(file=sys.stdout)
+            import traceback as _tb, sys as _sys
+            _tb.print_exc(file=_sys.stdout)
+            if progress_fn:
+                progress_fn(f"Error in {ix+1}/{n_trials}: {name}", pct_end)
 
 
 

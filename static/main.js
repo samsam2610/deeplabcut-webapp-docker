@@ -997,7 +997,7 @@
     logOutput.textContent = "Waiting for output…";
     newJobBtn.classList.add("hidden");
 
-    pollTimer = setInterval(() => pollStatus(taskId), 5000);
+    pollTimer = setInterval(() => pollStatus(taskId), 2000);
     pollStatus(taskId);
   }
 

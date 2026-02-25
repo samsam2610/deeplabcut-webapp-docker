@@ -286,32 +286,65 @@ def process_filter_2d(self, session_path: str, config_path: str):
 
 @celery.task(bind=True, name="tasks.process_triangulate")
 def process_triangulate(self, session_path: str, config_path: str):
-    """Run `anipose triangulate` — multi-camera 3-D triangulation."""
-    self.update_state(
-        state="PROGRESS",
-        meta={"progress": 10, "stage": "Discovering folders…", "log": ""},
-    )
-    # ── Load config ──────────────────────────────────────────────
-    config_local = os.path.join(session_path, "config.toml")
+    """
+    Run multi-camera 3-D triangulation with live log streaming.
+
+    All stdout/stderr (including tqdm bars and print() calls from
+    triangulate_funcs) are captured into a rolling buffer.  A progress
+    callback is passed into process_session_triangulate so that Celery
+    state is updated once per trial, surfacing the accumulated log to
+    the frontend poll at /status/<task_id>.
+    """
+    import io as _io
+    import sys as _sys
+
+    # ── Capture all print / tqdm output ──────────────────────────
+    _log_buf  = _io.StringIO()
+    _real_out = _sys.stdout
+    _real_err = _sys.stderr
+    _sys.stdout = _log_buf
+    _sys.stderr = _log_buf
+
+    def _push(stage: str, pct: int) -> None:
+        """Push current log buffer + progress to Celery backend."""
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "progress": min(pct, 95),
+                "stage":    stage,
+                "log":      _log_buf.getvalue()[-5000:],
+            },
+        )
+
     try:
+        _push("Loading config…", 5)
+
+        # ── Load config ──────────────────────────────────────────
+        config_local = os.path.join(session_path, "config.toml")
         try:
-            with open(config_local, "rb") as _f:
-                config = load_config(config_local)
-        except ImportError:
             config = load_config(config_local)
-    except Exception as exc:
-        raise RuntimeError(f"Failed to parse config.toml: {exc}")
-    
-    # ── Triangulate 3D ──────────────────────────────────────────
-    try:
-        process_session_triangulate(config, session_path)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to parse config.toml: {exc}")
+
+        _push("Discovering trials…", 10)
+
+        # ── Triangulate 3D (with per-trial progress callbacks) ───
+        process_session_triangulate(config, session_path, progress_fn=_push)
+
+        final_log = _log_buf.getvalue()[-5000:]
         return {
-            "status": "complete",
+            "status":    "complete",
             "operation": "triangulate",
-            "log": f"3D triangulation complete.\nsession_path: {session_path}",
+            "log":       final_log,
         }
+
     except Exception:
         raise RuntimeError(traceback.format_exc()[-3000:])
+
+    finally:
+        # Always restore real stdout/stderr
+        _sys.stdout = _real_out
+        _sys.stderr = _real_err
 
 
 @celery.task(bind=True, name="tasks.process_filter_3d")
