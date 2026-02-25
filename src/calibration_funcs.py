@@ -154,15 +154,6 @@ def process_session_calibrate(config, session_path):
 
     cam_names = sorted(cam_names)
 
-    # If no camera videos found, infer camera count from detections.pickle
-    if not cam_names:
-        _rows_fname = os.path.join(calibration_path, pipeline_calibration_results, 'detections.pickle')
-        if os.path.exists(_rows_fname):
-            with open(_rows_fname, 'rb') as _f:
-                n_cams = len(pickle.load(_f))
-            cam_names = [f'cam{i}' for i in range(n_cams)]
-            print(f'No videos found; inferred {n_cams} camera(s) from detections.pickle → {cam_names}')
-
     video_list = [sorted(cam_videos[cname]) for cname in cam_names]
 
     outname_base = 'calibration.toml'

@@ -553,6 +553,43 @@ button[type="submit"]:hover .btn-arrow {
 .state-fail    .progress-fill  { background: var(--danger); }
 
 /* ── Project Explorer ────────────────────────────────────────── */
+.source-btn-row {
+  display: flex;
+  gap: .4rem;
+  margin-top: .35rem;
+}
+
+.btn-source {
+  display: inline-flex;
+  align-items: center;
+  gap: .38rem;
+  padding: .3rem .75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: .8rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+
+.btn-source:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+  color: var(--text);
+}
+
+.btn-source.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(110, 231, 183, .07);
+}
+
+.btn-source:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+}
+
 .create-project-row {
   display: flex;
   align-items: center;

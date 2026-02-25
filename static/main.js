@@ -55,7 +55,7 @@
     if (explorerCard) explorerCard.classList.toggle("hidden", s !== "ready");
 
     if (s === "ready") {
-      loadProjects();
+      _initConfig().then(() => loadProjects(_currentRoot));
       loadConfig();
     }
   }
@@ -240,19 +240,59 @@
 
   // ── Populate project folder dropdowns ───────────────────────
   const explorerFolderSelect = document.getElementById("explorer-folder-select");
+  const sourceBtnLocal       = document.getElementById("source-btn-local");
+  const sourceBtnUserData    = document.getElementById("source-btn-userdata");
 
-  async function loadProjects() {
+  let _currentRoot  = "";   // "" = DATA_DIR; non-empty = USER_DATA_DIR path
+  let _userDataDir  = null; // populated from /config when session becomes ready
+
+  async function loadProjects(root) {
     try {
-      const res  = await fetch("/projects");
+      const url = root
+        ? `/fs/list?path=${encodeURIComponent(root)}`
+        : "/projects";
+      const res  = await fetch(url);
       const data = await res.json();
+      if (!res.ok) return false;
       // Exclude session_ dirs — they hold config only, not project data
       const projects = (data.projects || []).filter(p => !p.startsWith("session_"));
       const opts = '<option value="">— select a project —</option>' +
         projects.map(p => `<option value="${p}">${p}</option>`).join("");
       folderSelect.innerHTML         = opts;
       explorerFolderSelect.innerHTML = opts;
+      return true;
     } catch (err) {
       console.error("loadProjects error:", err);
+      return false;
+    }
+  }
+
+  // ── Source selector buttons ───────────────────────────────────
+  async function _selectSource(root) {
+    _currentRoot = root;
+    sourceBtnLocal.classList.toggle("active",    root === "");
+    sourceBtnUserData.classList.toggle("active", root !== "");
+    _onProjectSelected("");   // clear selection while reloading
+    await loadProjects(root);
+  }
+
+  sourceBtnLocal.addEventListener("click", () => _selectSource(""));
+  sourceBtnUserData.addEventListener("click", () => {
+    if (_userDataDir) _selectSource(_userDataDir);
+  });
+
+  // Fetch /config to learn the user-data path and enable the button
+  async function _initConfig() {
+    try {
+      const res  = await fetch("/config");
+      const data = await res.json();
+      if (data.user_data_dir) {
+        _userDataDir = data.user_data_dir;
+        sourceBtnUserData.disabled = false;
+        sourceBtnUserData.title    = `User data volume: ${data.user_data_dir}`;
+      }
+    } catch (err) {
+      console.error("Config fetch error:", err);
     }
   }
 
@@ -273,10 +313,12 @@
     createProjectStatus.className   = "create-project-status";
 
     try {
+      const body = { name };
+      if (_currentRoot) body.root = _currentRoot;
       const res  = await fetch("/projects", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ name }),
+        body:    JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -287,7 +329,7 @@
         createProjectStatus.className   = "create-project-status ok";
         newProjectNameInput.value = "";
         // Refresh dropdowns then select + browse the new project
-        await loadProjects();
+        await loadProjects(_currentRoot);
         _onProjectSelected(data.project_id);
         setTimeout(() => {
           createProjectStatus.textContent = "";
@@ -317,7 +359,9 @@
   }
 
   downloadProjectBtn.addEventListener("click", () => {
-    if (_currentProjectId) window.location.href = `/projects/${_currentProjectId}/download`;
+    if (!_currentProjectId) return;
+    const rootParam = _currentRoot ? `?root=${encodeURIComponent(_currentRoot)}` : "";
+    window.location.href = `/projects/${_currentProjectId}/download${rootParam}`;
   });
 
   explorerFolderSelect.addEventListener("change", () => _onProjectSelected(explorerFolderSelect.value));
@@ -401,7 +445,8 @@
     // Folder download
     header.querySelector(".folder-download-btn").addEventListener("click", e => {
       e.stopPropagation();
-      window.location.href = `/projects/${projectId}/download?folder=${encodeURIComponent(folder)}`;
+      const rootParam = _currentRoot ? `&root=${encodeURIComponent(_currentRoot)}` : "";
+      window.location.href = `/projects/${projectId}/download?folder=${encodeURIComponent(folder)}${rootParam}`;
     });
 
     // Drag-drop onto the row
@@ -432,6 +477,7 @@
 
     const fd = new FormData();
     fd.append("folder", folder);
+    if (_currentRoot) fd.append("root", _currentRoot);
     files.forEach(f => fd.append("files[]", f));
 
     try {
@@ -499,10 +545,12 @@
 
   async function _renameFile(oldName, newName, folder, projectId) {
     try {
+      const body = { folder, old_name: oldName, new_name: newName };
+      if (_currentRoot) body.root = _currentRoot;
       const res  = await fetch(`/projects/${projectId}/file`, {
         method:  "PATCH",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ folder, old_name: oldName, new_name: newName }),
+        body:    JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) alert(data.error || "Rename failed.");
@@ -516,10 +564,12 @@
   async function _deleteFile(filename, folder, projectId) {
     if (!confirm(`Delete "${filename}" from ${folder}/? This cannot be undone.`)) return;
     try {
+      const body = { folder, filename };
+      if (_currentRoot) body.root = _currentRoot;
       const res  = await fetch(`/projects/${projectId}/file`, {
         method:  "DELETE",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ folder, filename }),
+        body:    JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -536,7 +586,8 @@
   async function browseProject(projectId) {
     explorerFolders.innerHTML = '<p class="explorer-empty" style="opacity:.5">Loading…</p>';
     try {
-      const res  = await fetch(`/projects/${projectId}/browse`);
+      const rootParam = _currentRoot ? `?root=${encodeURIComponent(_currentRoot)}` : "";
+      const res  = await fetch(`/projects/${projectId}/browse${rootParam}`);
       const data = await res.json();
       if (!res.ok) {
         explorerFolders.innerHTML = `<p class="explorer-empty">${data.error || "Error loading project"}</p>`;
@@ -568,10 +619,12 @@
       actionBtns.forEach(b => { b.disabled = true; });
 
       try {
+        const runBody = { operation, project_id: projectId };
+        if (_currentRoot) runBody.root = _currentRoot;
         const res  = await fetch("/run", {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ operation, project_id: projectId }),
+          body:    JSON.stringify(runBody),
         });
         const data = await res.json();
 

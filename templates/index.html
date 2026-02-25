@@ -79,6 +79,20 @@
         <span id="create-project-status" class="create-project-status"></span>
       </div>
 
+      <div style="margin-bottom:.9rem">
+        <label>Project source</label>
+        <div class="source-btn-row">
+          <button class="btn-source active" id="source-btn-local" title="Projects uploaded from your computer (app data directory)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            Client uploads
+          </button>
+          <button class="btn-source" id="source-btn-userdata" title="User data volume (not mounted)" disabled>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            User data
+          </button>
+        </div>
+      </div>
+
       <div class="field" style="margin-bottom:.9rem">
         <label for="explorer-folder-select">Project folder</label>
         <div class="select-wrap">

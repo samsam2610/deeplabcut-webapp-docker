@@ -23,6 +23,8 @@ from werkzeug.utils import secure_filename
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+USER_DATA_DIR = Path(os.environ.get("USER_DATA_DIR", "/user-data"))
+
 ALLOWED_VIDEO_EXT = {".mp4", ".avi", ".mov", ".mkv", ".mpg", ".mpeg"}
 ALLOWED_CONFIG_EXT = {".toml"}
 
@@ -53,6 +55,20 @@ celery.conf.update(
 # ── Helpers ───────────────────────────────────────────────────────
 def _valid_ext(filename: str, allowed: set) -> bool:
     return Path(filename).suffix.lower() in allowed
+
+
+def _resolve_project_dir(project_id: str, root: str = "") -> Path:
+    """
+    Return the resolved project directory.
+    If root is given, resolves to Path(root)/project_id.
+    Otherwise defaults to DATA_DIR/project_id.
+    Raises ValueError on path-traversal attempts.
+    """
+    base = Path(root) if root else DATA_DIR
+    project_dir = (base / project_id).resolve()
+    if not project_dir.is_relative_to(base.resolve()):
+        raise ValueError("Invalid project path.")
+    return project_dir
 
 
 # ── Global error handler — always return JSON, never HTML ─────────
@@ -184,6 +200,36 @@ def flush_task_cache():
         _redis_client.delete(*task_meta_keys)
     _redis_client.delete("celery")          # purge the default broker queue
     return jsonify({"deleted": len(task_meta_keys)})
+
+
+@app.route("/config")
+def get_config():
+    """
+    Return client-facing configuration values.
+    user_data_dir is null when the volume is not mounted / not a directory.
+    """
+    return jsonify({
+        "data_dir":      str(DATA_DIR),
+        "user_data_dir": str(USER_DATA_DIR) if USER_DATA_DIR.is_dir() else None,
+    })
+
+
+@app.route("/fs/list")
+def fs_list():
+    """
+    List immediate subdirectories of a server-side path as candidate project folders.
+    Query param: path=<absolute_path>
+    """
+    path_str = request.args.get("path", "").strip()
+    if not path_str:
+        return jsonify({"error": "path parameter is required."}), 400
+    p = Path(path_str)
+    if not p.is_absolute():
+        return jsonify({"error": "path must be absolute."}), 400
+    if not p.is_dir():
+        return jsonify({"error": f"Directory not found: {path_str}"}), 404
+    projects = sorted([d.name for d in p.iterdir() if d.is_dir()], reverse=True)
+    return jsonify({"projects": projects, "path": path_str})
 
 
 @app.route("/session", methods=["POST"])
@@ -329,13 +375,17 @@ def run_operation():
     body = request.get_json(force=True) or {}
     operation  = body.get("operation", "").lower()
     project_id = body.get("project_id", "").strip()
+    root       = body.get("root", "").strip()
 
     if operation not in _OPERATION_TASKS:
         return jsonify({"error": f"Unknown operation '{operation}'."}), 400
     if not project_id:
         return jsonify({"error": "project_id is required."}), 400
 
-    project_dir = DATA_DIR / project_id
+    try:
+        project_dir = _resolve_project_dir(project_id, root)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not project_dir.is_dir():
         return jsonify({"error": f"Project folder not found: '{project_id}'."}), 400
 
@@ -382,14 +432,19 @@ def get_pipeline_structure():
 def browse_project(project_id: str):
     """
     For each pipeline folder in the active session config, list the files that
-    exist under DATA_DIR/<project_id>/<folder>/.
+    exist under <root>/<project_id>/<folder>/ (root defaults to DATA_DIR).
+    Query param: root=<absolute_path>  (optional)
     """
     raw = _redis_client.get(_SESSION_KEY)
     if not raw:
         return jsonify({"error": "No active session."}), 400
     config_path = Path(json.loads(raw).get("config_path", ""))
 
-    project_dir = DATA_DIR / project_id
+    root = request.args.get("root", "").strip()
+    try:
+        project_dir = _resolve_project_dir(project_id, root)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not project_dir.is_dir():
         return jsonify({"error": f"Project not found: '{project_id}'"}), 404
 
@@ -421,10 +476,14 @@ def browse_project(project_id: str):
 @app.route("/projects/<project_id>/upload", methods=["POST"])
 def upload_to_project(project_id: str):
     """
-    Upload files into DATA_DIR/<project_id>/<folder>/.
-    Form fields: folder (str), files[] (one or more files).
+    Upload files into <root>/<project_id>/<folder>/.
+    Form fields: folder (str), files[] (one or more files), root (optional absolute path).
     """
-    project_dir = DATA_DIR / project_id
+    root = request.form.get("root", "").strip()
+    try:
+        project_dir = _resolve_project_dir(project_id, root)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not project_dir.is_dir():
         return jsonify({"error": f"Project not found: '{project_id}'"}), 404
 
@@ -469,10 +528,11 @@ def create_project():
     """
     Create a new project directory and auto-create every pipeline subfolder
     defined in the active session's config.toml.
-    Body: { "name": "<project_name>" }
+    Body: { "name": "<project_name>", "root": "<optional_absolute_path>" }
     """
     body = request.get_json(force=True) or {}
     name = body.get("name", "").strip()
+    root = body.get("root", "").strip()
     if not name:
         return jsonify({"error": "Project name is required."}), 400
 
@@ -480,7 +540,8 @@ def create_project():
     if not safe_name:
         return jsonify({"error": "Invalid project name."}), 400
 
-    project_dir = DATA_DIR / safe_name
+    base = Path(root) if root else DATA_DIR
+    project_dir = base / safe_name
     if project_dir.exists():
         return jsonify({"error": f"Project '{safe_name}' already exists."}), 409
 
@@ -510,16 +571,20 @@ def create_project():
 def rename_project_file(project_id: str):
     """
     Rename a file within a project pipeline folder.
-    Body: { "folder": "<folder_name>", "old_name": "<current_name>", "new_name": "<new_name>" }
+    Body: { "folder": "<folder_name>", "old_name": "<current_name>", "new_name": "<new_name>", "root": "<optional_path>" }
     """
-    project_dir = DATA_DIR / project_id
-    if not project_dir.is_dir():
-        return jsonify({"error": f"Project not found: '{project_id}'"}), 404
-
     body     = request.get_json(force=True) or {}
+    root     = body.get("root",     "").strip()
     folder   = body.get("folder",   "").strip()
     old_name = body.get("old_name", "").strip()
     new_name = body.get("new_name", "").strip()
+
+    try:
+        project_dir = _resolve_project_dir(project_id, root)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not project_dir.is_dir():
+        return jsonify({"error": f"Project not found: '{project_id}'"}), 404
 
     if not folder or not old_name or not new_name:
         return jsonify({"error": "folder, old_name, and new_name are required."}), 400
@@ -543,15 +608,19 @@ def rename_project_file(project_id: str):
 def delete_project_file(project_id: str):
     """
     Delete a single file from a project pipeline folder.
-    Body: { "folder": "<folder_name>", "filename": "<file_name>" }
+    Body: { "folder": "<folder_name>", "filename": "<file_name>", "root": "<optional_path>" }
     """
-    project_dir = DATA_DIR / project_id
+    body = request.get_json(force=True) or {}
+    root     = body.get("root",     "").strip()
+    folder   = body.get("folder",   "").strip()
+    filename = body.get("filename", "").strip()
+
+    try:
+        project_dir = _resolve_project_dir(project_id, root)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not project_dir.is_dir():
         return jsonify({"error": f"Project not found: '{project_id}'"}), 404
-
-    body = request.get_json(force=True) or {}
-    folder   = body.get("folder", "").strip()
-    filename = body.get("filename", "").strip()
 
     if not folder or not filename:
         return jsonify({"error": "folder and filename are required."}), 400
@@ -571,10 +640,15 @@ def delete_project_file(project_id: str):
 def download_project(project_id: str):
     """
     Stream project data as a ZIP archive.
-    Optional query param ?folder=<name> limits the archive to that subfolder.
-    Without it, the entire project directory is zipped.
+    Optional query params:
+      ?folder=<name>  limits the archive to that subfolder
+      ?root=<path>    use a custom project root instead of DATA_DIR
     """
-    project_dir = DATA_DIR / project_id
+    root = request.args.get("root", "").strip()
+    try:
+        project_dir = _resolve_project_dir(project_id, root)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     if not project_dir.is_dir():
         return jsonify({"error": f"Project not found: '{project_id}'"}), 404
 
