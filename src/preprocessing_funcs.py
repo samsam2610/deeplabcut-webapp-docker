@@ -1,6 +1,7 @@
 import os
 import shutil
 import re
+import numpy as np
 import pandas as pd
 from pathlib import Path
 from deeplabcut.utils import auxiliaryfunctions
@@ -107,3 +108,88 @@ def convert_mediapipe_csv_to_h5(config, parent_path, folder_list, scorer='User')
 
         except Exception as e:
             print(f"Error processing {folder_name}: {e}")
+
+
+def convert_mediapipe_to_dlc_csv(config, parent_path, frame_w, frame_h, scorer='User'):
+    """
+    Convert raw MediaPipe .mat arrays to DLC-format labeled-data CSVs.
+
+    Scans each subfolder of pipeline['mediapipe_processed'] for a .mat file
+    containing a 3-D array of shape (numFrames, numLandmarks, >=4) where
+    axis-2 channels are [x_norm, y_norm, z_norm, visibility].
+    MediaPipe coordinates are normalized (0–1); they are scaled to pixels
+    using frame_w and frame_h.
+
+    Writes  CollectedData_{scorer}.csv  into each subfolder, matching the
+    multi-index header format expected by DeepLabCut / Anipose.
+    """
+    import scipy.io
+
+    pipeline_mediapipe_2d = config["pipeline"]["mediapipe_processed"]
+    mediapipe_folder_path = os.path.join(parent_path, pipeline_mediapipe_2d)
+
+    if not os.path.isdir(mediapipe_folder_path):
+        print(f"Warning: mediapipe folder not found: {mediapipe_folder_path}")
+        return
+
+    subfolders = sorted([
+        f for f in os.listdir(mediapipe_folder_path)
+        if os.path.isdir(os.path.join(mediapipe_folder_path, f))
+    ])
+
+    print(f"Found {len(subfolders)} subfolder(s): {subfolders}")
+    print(f"Frame size : {frame_w} x {frame_h}  |  Scorer: {scorer}")
+
+    for folder_name in subfolders:
+        folder_path = os.path.join(mediapipe_folder_path, folder_name)
+        mat_files   = sorted([f for f in os.listdir(folder_path) if f.endswith('.mat')])
+
+        if not mat_files:
+            print(f"  [{folder_name}] No .mat file — skipping.")
+            continue
+
+        mat_path = os.path.join(folder_path, mat_files[0])
+        print(f"  [{folder_name}] Loading {mat_files[0]} …")
+
+        try:
+            mat_data  = scipy.io.loadmat(mat_path)
+            data_keys = [k for k in mat_data if not k.startswith('_')]
+            if not data_keys:
+                print(f"  [{folder_name}] No data variables in .mat — skipping.")
+                continue
+
+            mp_array = mat_data[data_keys[0]]
+
+            # Expected shape: (numFrames, numLandmarks, >=4)
+            # axis-2: [x_norm, y_norm, z_norm, visibility]
+            if mp_array.ndim != 3 or mp_array.shape[2] < 4:
+                print(f"  [{folder_name}] Unexpected shape {mp_array.shape} "
+                      f"(need (frames, landmarks, >=4)) — skipping.")
+                continue
+
+            num_frames, num_landmarks, _ = mp_array.shape
+            print(f"  [{folder_name}] {num_frames} frames, {num_landmarks} landmarks")
+
+            # Build DLC data matrix: [lm0_x, lm0_y, lm0_like, lm1_x, ...]
+            dlc_data = np.zeros((num_frames, num_landmarks * 3))
+            for i in range(num_landmarks):
+                dlc_data[:, i*3 + 0] = mp_array[:, i, 0] * frame_w  # x → pixels
+                dlc_data[:, i*3 + 1] = mp_array[:, i, 1] * frame_h  # y → pixels
+                dlc_data[:, i*3 + 2] = mp_array[:, i, 3]            # visibility
+
+            bodyparts = [str(i) for i in range(num_landmarks)]
+
+            # Three-row multi-index header
+            h1 = ['scorer']    + [scorer] * (num_landmarks * 3)
+            h2 = ['bodyparts'] + [bp for bp in bodyparts for _ in range(3)]
+            h3 = ['coords']    + ['x', 'y', 'likelihood'] * num_landmarks
+
+            image_names = [str(i) for i in range(num_frames)]
+            data_rows   = [[image_names[i]] + list(dlc_data[i]) for i in range(num_frames)]
+
+            output_csv = os.path.join(folder_path, f"CollectedData_{scorer}.csv")
+            pd.DataFrame([h1, h2, h3] + data_rows).to_csv(output_csv, index=False, header=False)
+            print(f"  [{folder_name}] Saved {num_frames} frames → {output_csv}")
+
+        except Exception as e:
+            print(f"  [{folder_name}] Error: {e}")

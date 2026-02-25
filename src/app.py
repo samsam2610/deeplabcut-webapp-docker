@@ -481,6 +481,49 @@ def create_session_from_server_path():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/projects/<project_id>/detect-frame-dims", methods=["POST"])
+def detect_frame_dims(project_id: str):
+    """
+    Read the frame dimensions of a video file inside the project using OpenCV.
+    Body: { "folder": "<folder_name>", "filename": "<video.ext>", "root": "<optional>" }
+    Returns { "width": <int>, "height": <int> }.
+    """
+    import cv2
+
+    body     = request.get_json(force=True) or {}
+    root     = body.get("root",     "").strip()
+    folder   = body.get("folder",   "").strip()
+    filename = body.get("filename", "").strip()
+
+    try:
+        project_dir = _resolve_project_dir(project_id, root)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not project_dir.is_dir():
+        return jsonify({"error": f"Project not found: '{project_id}'"}), 404
+    if not folder or not filename:
+        return jsonify({"error": "folder and filename are required."}), 400
+
+    target = (project_dir / folder / filename).resolve()
+    if not target.is_relative_to(project_dir.resolve()):
+        return jsonify({"error": "Invalid path."}), 400
+    if not target.is_file():
+        return jsonify({"error": "File not found."}), 404
+
+    cap = cv2.VideoCapture(str(target))
+    if not cap.isOpened():
+        return jsonify({"error": "Could not open video file."}), 400
+
+    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+
+    if width == 0 or height == 0:
+        return jsonify({"error": "Could not read frame dimensions from video."}), 400
+
+    return jsonify({"width": width, "height": height})
+
+
 def _clear_session_data():
     """Helper: revoke pending init task, delete config dir, remove Redis key."""
     raw = _redis_client.get(_SESSION_KEY)
@@ -497,17 +540,22 @@ def _clear_session_data():
 # ── Session pipeline operations ───────────────────────────────────
 _OPERATION_TASKS = {
     # Anipose pipeline
-    "calibrate":                   "tasks.process_calibrate",
-    "filter_2d":                   "tasks.process_filter_2d",
-    "triangulate":                 "tasks.process_triangulate",
-    "filter_3d":                   "tasks.process_filter_3d",
+    "calibrate":                      "tasks.process_calibrate",
+    "filter_2d":                      "tasks.process_filter_2d",
+    "triangulate":                    "tasks.process_triangulate",
+    "filter_3d":                      "tasks.process_filter_3d",
     # MediaPipe preprocessing
-    "organize_for_anipose":        "tasks.process_organize_for_anipose",
-    "convert_mediapipe_csv_to_h5": "tasks.process_convert_mediapipe_csv_to_h5",
+    "organize_for_anipose":           "tasks.process_organize_for_anipose",
+    "convert_mediapipe_csv_to_h5":    "tasks.process_convert_mediapipe_csv_to_h5",
+    "convert_mediapipe_to_dlc_csv":   "tasks.process_convert_mediapipe_to_dlc_csv",
 }
 
 # Operations that do NOT need a config.toml — only session_path + scorer
-_MEDIAPIPE_OPS = {"organize_for_anipose", "convert_mediapipe_csv_to_h5"}
+_MEDIAPIPE_OPS = {
+    "organize_for_anipose",
+    "convert_mediapipe_csv_to_h5",
+    "convert_mediapipe_to_dlc_csv",
+}
 
 
 @app.route("/run", methods=["POST"])
@@ -546,6 +594,16 @@ def run_operation():
     if operation in _MEDIAPIPE_OPS:
         scorer = (body.get("scorer", "") or "User").strip() or "User"
         task_kwargs = {"session_path": str(project_dir), "scorer": scorer}
+        if operation == "convert_mediapipe_to_dlc_csv":
+            try:
+                frame_w = int(body.get("frame_w", 0))
+                frame_h = int(body.get("frame_h", 0))
+            except (TypeError, ValueError):
+                frame_w = frame_h = 0
+            if frame_w <= 0 or frame_h <= 0:
+                return jsonify({"error": "frame_w and frame_h (positive integers) are required."}), 400
+            task_kwargs["frame_w"] = frame_w
+            task_kwargs["frame_h"] = frame_h
     else:
         config_path = json.loads(raw).get("config_path", "")
         task_kwargs = {"session_path": str(project_dir), "config_path": config_path}

@@ -346,21 +346,30 @@
   const actionBtns    = document.querySelectorAll(".btn-action");
 
   const OPERATION_LABELS = {
-    calibrate:                   "Calibrating cameras",
-    filter_2d:                   "Filtering 2D predictions",
-    triangulate:                 "Triangulating 3D poses",
-    filter_3d:                   "Filtering 3D trajectories",
-    organize_for_anipose:        "Organizing folders for Anipose",
-    convert_mediapipe_csv_to_h5: "Converting CSV → H5",
+    calibrate:                      "Calibrating cameras",
+    filter_2d:                      "Filtering 2D predictions",
+    triangulate:                    "Triangulating 3D poses",
+    filter_3d:                      "Filtering 3D trajectories",
+    organize_for_anipose:           "Organizing folders for Anipose",
+    convert_mediapipe_to_dlc_csv:   "Converting MediaPipe → DLC CSV",
+    convert_mediapipe_csv_to_h5:    "Converting CSV → H5",
   };
 
-  const MEDIAPIPE_OPS = new Set(["organize_for_anipose", "convert_mediapipe_csv_to_h5"]);
+  const MEDIAPIPE_OPS = new Set([
+    "organize_for_anipose",
+    "convert_mediapipe_csv_to_h5",
+    "convert_mediapipe_to_dlc_csv",
+  ]);
 
   // ── Pipeline mode toggle ─────────────────────────────────────
   const pipelineBtnMediapipe  = document.getElementById("pipeline-btn-mediapipe");
   const pipelineBtnDeeplabcut = document.getElementById("pipeline-btn-deeplabcut");
   const mediapipeExtras       = document.getElementById("mediapipe-extras");
   const scorerInput           = document.getElementById("scorer-input");
+  const frameWInput           = document.getElementById("frame-w-input");
+  const frameHInput           = document.getElementById("frame-h-input");
+  const detectDimsBtn         = document.getElementById("detect-dims-btn");
+  const detectDimsStatus      = document.getElementById("detect-dims-status");
 
   function _setPipelineMode(mode) {
     const isMediapipe = (mode === "mediapipe");
@@ -371,6 +380,70 @@
 
   pipelineBtnMediapipe.addEventListener("click",  () => _setPipelineMode("mediapipe"));
   pipelineBtnDeeplabcut.addEventListener("click", () => _setPipelineMode("deeplabcut"));
+
+  // ── Detect frame dimensions ──────────────────────────────────
+  detectDimsBtn.addEventListener("click", async () => {
+    if (!_currentProjectId) {
+      alert("Select a project folder first.");
+      return;
+    }
+
+    detectDimsBtn.disabled       = true;
+    detectDimsStatus.textContent = "Detecting…";
+    detectDimsStatus.className   = "detect-dims-status";
+
+    try {
+      // Browse the project to find the first video file in any folder
+      const rootParam = _currentRoot ? `?root=${encodeURIComponent(_currentRoot)}` : "";
+      const browseRes  = await fetch(`/projects/${_currentProjectId}/browse${rootParam}`);
+      const browseData = await browseRes.json();
+
+      let videoFile   = null;
+      let videoFolder = null;
+      if (browseData.folders) {
+        for (const f of browseData.folders) {
+          const vf = f.files.find(file => /\.(mp4|avi|mov|mkv|mpg|mpeg)$/i.test(file.name));
+          if (vf) { videoFile = vf.name; videoFolder = f.folder; break; }
+        }
+      }
+
+      if (!videoFile) {
+        detectDimsStatus.textContent = "No video found in project";
+        detectDimsStatus.className   = "detect-dims-status err";
+        return;
+      }
+
+      const body = { folder: videoFolder, filename: videoFile };
+      if (_currentRoot) body.root = _currentRoot;
+
+      const dimRes  = await fetch(`/projects/${_currentProjectId}/detect-frame-dims`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(body),
+      });
+      const dimData = await dimRes.json();
+
+      if (!dimRes.ok) {
+        detectDimsStatus.textContent = dimData.error || "Error";
+        detectDimsStatus.className   = "detect-dims-status err";
+      } else {
+        frameWInput.value            = dimData.width;
+        frameHInput.value            = dimData.height;
+        detectDimsStatus.textContent = `✓ ${videoFile}`;
+        detectDimsStatus.className   = "detect-dims-status ok";
+        setTimeout(() => {
+          detectDimsStatus.textContent = "";
+          detectDimsStatus.className   = "detect-dims-status";
+        }, 4000);
+      }
+    } catch (err) {
+      console.error("detect-frame-dims error:", err);
+      detectDimsStatus.textContent = "Network error";
+      detectDimsStatus.className   = "detect-dims-status err";
+    } finally {
+      detectDimsBtn.disabled = false;
+    }
+  });
 
   // ── Config editor ────────────────────────────────────────────
   const configEditor      = document.getElementById("config-editor");
@@ -946,6 +1019,17 @@
         if (_currentRoot) runBody.root = _currentRoot;
         if (MEDIAPIPE_OPS.has(operation)) {
           runBody.scorer = scorerInput.value.trim() || "User";
+        }
+        if (operation === "convert_mediapipe_to_dlc_csv") {
+          const fw = parseInt(frameWInput.value, 10);
+          const fh = parseInt(frameHInput.value, 10);
+          if (!fw || !fh || fw <= 0 || fh <= 0) {
+            alert("Enter valid frame width and height before converting.");
+            actionBtns.forEach(b => { b.disabled = false; });
+            return;
+          }
+          runBody.frame_w = fw;
+          runBody.frame_h = fh;
         }
         const res  = await fetch("/run", {
           method:  "POST",

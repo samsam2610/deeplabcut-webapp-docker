@@ -491,6 +491,47 @@ def process_convert_mediapipe_csv_to_h5(self, session_path: str, scorer: str = "
         raise RuntimeError(traceback.format_exc()[-3000:])
 
 
+@celery.task(bind=True, name="tasks.process_convert_mediapipe_to_dlc_csv")
+def process_convert_mediapipe_to_dlc_csv(self, session_path: str, scorer: str = "User",
+                                          frame_w: int = 1920, frame_h: int = 1080):
+    """
+    Convert raw MediaPipe .mat arrays to DLC-format labeled-data CSVs.
+    Requires frame_w and frame_h to de-normalize MediaPipe coordinates (0–1) → pixels.
+    """
+    if not os.path.isdir(session_path):
+        raise FileNotFoundError(f"Session folder not found: {session_path}")
+
+    config_local = os.path.join(session_path, "config.toml")
+    try:
+        config = load_config(config_local)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to parse config.toml: {exc}")
+
+    self.update_state(
+        state="PROGRESS",
+        meta={
+            "progress": 10,
+            "stage": f"Converting .mat files ({frame_w}×{frame_h})…",
+            "log": f"frame_w={frame_w}  frame_h={frame_h}  scorer={scorer}\n",
+        },
+    )
+
+    try:
+        convert_mediapipe_to_dlc_csv(
+            config, session_path, frame_w=frame_w, frame_h=frame_h, scorer=scorer
+        )
+        return {
+            "status":    "complete",
+            "operation": "convert_mediapipe_to_dlc_csv",
+            "log": (
+                f"Converted .mat → DLC CSV\n"
+                f"Frame size : {frame_w}×{frame_h}  |  Scorer: {scorer}"
+            ),
+        }
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+
 # ── Session Init Task ─────────────────────────────────────────────
 @celery.task(bind=True, name="tasks.init_anipose_session")
 def init_anipose_session(self, config_path: str):

@@ -182,6 +182,22 @@
           <label for="scorer-input">Scorer</label>
           <input type="text" id="scorer-input" value="User" placeholder="User" autocomplete="off" spellcheck="false" />
         </div>
+
+        <!-- ─── Frame dimensions ────────────────────────────────── -->
+        <div class="frame-dims-row">
+          <label>Frame size</label>
+          <div class="frame-dims-inputs">
+            <input type="number" id="frame-w-input" placeholder="Width"  min="1" value="1920" />
+            <span class="frame-dims-sep">×</span>
+            <input type="number" id="frame-h-input" placeholder="Height" min="1" value="1080" />
+            <button id="detect-dims-btn" class="btn-sm" title="Auto-detect from the first video found in the selected project">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              Detect
+            </button>
+            <span id="detect-dims-status" class="detect-dims-status"></span>
+          </div>
+        </div>
+
         <div class="action-grid" style="margin-bottom:.75rem">
           <button class="btn-action" data-op="organize_for_anipose" title="Organize cam folders into pose-2d/">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -189,6 +205,14 @@
               <line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/>
             </svg>
             <span>Organize for Anipose</span>
+          </button>
+          <button class="btn-action" data-op="convert_mediapipe_to_dlc_csv" title="Convert .mat MediaPipe arrays to DLC-format CSV (uses frame size above)">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M8 12a4 4 0 0 1 8 0"/><line x1="12" y1="8" x2="12" y2="12"/>
+              <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/>
+            </svg>
+            <span>MP → DLC CSV</span>
           </button>
           <button class="btn-action" data-op="convert_mediapipe_csv_to_h5" title="Convert CSV labeled data to DLC H5 format">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">

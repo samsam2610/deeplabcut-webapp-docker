@@ -1089,6 +1089,65 @@ button[type="submit"]:hover .btn-arrow {
   border-color: var(--accent);
 }
 
+/* ── Frame dimensions row (MediaPipe pipeline) ───────────────── */
+.frame-dims-row {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin-bottom: .75rem;
+}
+
+.frame-dims-row label {
+  font-size: .78rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.frame-dims-inputs {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  flex-wrap: wrap;
+}
+
+.frame-dims-inputs input[type="number"] {
+  width: 76px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: .82rem;
+  padding: .32rem .55rem;
+  outline: none;
+  transition: border-color .2s;
+  /* Hide browser spin arrows */
+  -moz-appearance: textfield;
+}
+.frame-dims-inputs input[type="number"]::-webkit-outer-spin-button,
+.frame-dims-inputs input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+.frame-dims-inputs input[type="number"]:focus { border-color: var(--accent); }
+
+.frame-dims-sep {
+  font-size: .8rem;
+  color: var(--text-dim);
+  opacity: .6;
+  user-select: none;
+}
+
+.detect-dims-status {
+  font-family: var(--mono);
+  font-size: .75rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.detect-dims-status.ok  { color: var(--accent); }
+.detect-dims-status.err { color: var(--danger); }
+
 /* ── DLC config section (inside config card) ─────────────────── */
 .dlc-config-section {
   margin-top: 1.6rem;
