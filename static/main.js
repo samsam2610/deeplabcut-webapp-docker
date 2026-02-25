@@ -9,9 +9,10 @@
   const sessionDot   = document.getElementById("session-dot");
   const sessionLabel = document.getElementById("session-label");
   const sessionMeta  = document.getElementById("session-meta");
-  const btnCreate    = document.getElementById("btn-create-session");
-  const btnClear     = document.getElementById("btn-clear-session");
-  const sessionInput = document.getElementById("session-config-input");
+  const btnCreate             = document.getElementById("btn-create-session");
+  const btnClear              = document.getElementById("btn-clear-session");
+  const btnSessionFromServer  = document.getElementById("btn-session-from-server");
+  const sessionInput          = document.getElementById("session-config-input");
 
   let sessionPollTimer = null;
 
@@ -19,6 +20,8 @@
   function applySessionState(data) {
     const s = data.status || "none";
     sessionDot.dataset.state = s;
+
+    const isIdle = (s === "none" || s === "error");
 
     if (s === "none") {
       sessionLabel.textContent = "No active session";
@@ -42,6 +45,12 @@
       btnCreate.classList.remove("hidden");
       btnClear.classList.remove("hidden");
     }
+
+    // "From server" button: only when idle AND user-data volume is mounted
+    btnSessionFromServer.classList.toggle("hidden", !(isIdle && _userDataDir !== null));
+
+    // Close picker if session becomes active
+    if (!isIdle) _closeServerPicker();
 
     // Show the pipeline actions card only when the session is ready.
     // actionsCard is declared later but is always initialized before
@@ -167,6 +176,20 @@
 
   // ── Restore session state on page load ──────────────────────
   (async () => {
+    // Pre-fetch /config so _userDataDir is set before applySessionState runs.
+    // This ensures the "From server" button is shown even with no active session.
+    try {
+      const cfgRes  = await fetch("/config");
+      const cfgData = await cfgRes.json();
+      if (cfgData.user_data_dir) {
+        _userDataDir = cfgData.user_data_dir;
+        sourceBtnUserData.disabled = false;
+        sourceBtnUserData.title    = `User data volume: ${cfgData.user_data_dir}`;
+      }
+    } catch (err) {
+      console.error("Config pre-fetch error:", err);
+    }
+
     try {
       const res  = await fetch("/session");
       const data = await res.json();
@@ -176,6 +199,146 @@
       console.error("Session load error:", err);
     }
   })();
+
+  // ── Server-side config picker ─────────────────────────────────
+  const sessionServerPicker = document.getElementById("session-server-picker");
+  const pickerBreadcrumb    = document.getElementById("picker-breadcrumb");
+  const pickerSubdirs       = document.getElementById("picker-subdirs");
+  const pickerConfigs       = document.getElementById("picker-configs");
+  const pickerCloseBtn      = document.getElementById("picker-close-btn");
+
+  function _closeServerPicker() {
+    sessionServerPicker.classList.add("hidden");
+  }
+
+  function _openServerPicker() {
+    sessionServerPicker.classList.remove("hidden");
+    _refreshPickerNav(_userDataDir);
+  }
+
+  async function _refreshPickerNav(path) {
+
+    // Breadcrumb
+    const baseName = _userDataDir.split("/").filter(Boolean).pop() || "user-data";
+    const rel = path.substring(_userDataDir.length).split("/").filter(Boolean);
+    let crumbHTML = `<button class="picker-bc-seg" data-path="${_userDataDir}">${baseName}</button>`;
+    let cumPath = _userDataDir;
+    rel.forEach((part, i) => {
+      cumPath += "/" + part;
+      const isLast = (i === rel.length - 1);
+      crumbHTML += `<span class="picker-bc-sep">›</span>`;
+      crumbHTML += `<button class="picker-bc-seg${isLast ? " active" : ""}" data-path="${cumPath}">${part}</button>`;
+    });
+    pickerBreadcrumb.innerHTML = crumbHTML;
+    pickerBreadcrumb.querySelectorAll(".picker-bc-seg").forEach(seg => {
+      seg.addEventListener("click", () => _refreshPickerNav(seg.dataset.path));
+    });
+
+    pickerSubdirs.innerHTML = '<span class="picker-loading">Loading…</span>';
+    pickerConfigs.innerHTML = "";
+
+    try {
+      const res  = await fetch(`/fs/list-configs?path=${encodeURIComponent(path)}`);
+      const data = await res.json();
+
+      // Subdirs
+      pickerSubdirs.innerHTML = "";
+      if (path !== _userDataDir) {
+        const upBtn = document.createElement("button");
+        upBtn.className   = "picker-subfolder-chip up";
+        upBtn.textContent = "..";
+        upBtn.title       = "Go up one level";
+        const parent = path.split("/").slice(0, -1).join("/") || "/";
+        upBtn.addEventListener("click", () => _refreshPickerNav(parent));
+        pickerSubdirs.appendChild(upBtn);
+      }
+
+      const subs = res.ok ? (data.subdirs || []) : [];
+      if (subs.length === 0 && pickerSubdirs.children.length === 0) {
+        const msg = document.createElement("span");
+        msg.className   = "picker-no-items";
+        msg.textContent = "No subfolders";
+        pickerSubdirs.appendChild(msg);
+      } else {
+        subs.forEach(name => {
+          const chip = document.createElement("button");
+          chip.className   = "picker-subfolder-chip";
+          chip.textContent = name;
+          chip.title       = `Navigate into ${name}/`;
+          chip.addEventListener("click", () => _refreshPickerNav(path + "/" + name));
+          pickerSubdirs.appendChild(chip);
+        });
+      }
+
+      // .toml files
+      pickerConfigs.innerHTML = "";
+      const configs = res.ok ? (data.configs || []) : [];
+      if (configs.length === 0) {
+        const msg = document.createElement("span");
+        msg.className   = "picker-no-items";
+        msg.textContent = "No .toml files here";
+        pickerConfigs.appendChild(msg);
+      } else {
+        configs.forEach(name => {
+          const chip = document.createElement("button");
+          chip.className   = "picker-config-chip";
+          chip.textContent = name;
+          chip.title       = `Load ${name} as session config`;
+          chip.addEventListener("click", () => _createSessionFromPath(path + "/" + name));
+          pickerConfigs.appendChild(chip);
+        });
+      }
+    } catch (err) {
+      console.error("Picker nav error:", err);
+      pickerSubdirs.innerHTML = '<span class="picker-no-items">Failed to load</span>';
+    }
+  }
+
+  async function _createSessionFromPath(configPath) {
+    _closeServerPicker();
+
+    sessionDot.dataset.state  = "initializing";
+    sessionLabel.textContent  = "Creating session…";
+    sessionMeta.textContent   = configPath.split("/").pop();
+    btnCreate.classList.add("hidden");
+    btnSessionFromServer.classList.add("hidden");
+
+    try {
+      const res  = await fetch("/session/from-path", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ config_path: configPath }),
+      });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); }
+      catch {
+        sessionDot.dataset.state = "error";
+        sessionLabel.textContent = `Server error (HTTP ${res.status})`;
+        sessionMeta.textContent  = text.replace(/<[^>]*>/g, "").trim().slice(0, 120);
+        btnCreate.classList.remove("hidden");
+        return;
+      }
+      if (!res.ok) {
+        sessionDot.dataset.state = "error";
+        sessionLabel.textContent = data.error || "Failed to create session";
+        sessionMeta.textContent  = "";
+        btnCreate.classList.remove("hidden");
+        return;
+      }
+      applySessionState(data);
+      startSessionPoll();
+    } catch (err) {
+      console.error("Create session from path error:", err);
+      sessionDot.dataset.state = "error";
+      sessionLabel.textContent = "Could not reach server";
+      sessionMeta.textContent  = err.message || "";
+      btnCreate.classList.remove("hidden");
+    }
+  }
+
+  btnSessionFromServer.addEventListener("click", _openServerPicker);
+  pickerCloseBtn.addEventListener("click", _closeServerPicker);
 
   // ── Actions card DOM refs ────────────────────────────────────
   const folderSelect  = document.getElementById("folder-select");

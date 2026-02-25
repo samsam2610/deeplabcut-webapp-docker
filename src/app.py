@@ -397,6 +397,90 @@ def get_dlc_config():
     })
 
 
+@app.route("/fs/list-configs")
+def fs_list_configs():
+    """
+    List .toml files and immediate subdirectories at a server-side path.
+    Only accepts paths within USER_DATA_DIR or DATA_DIR.
+    Query param: path=<absolute_path>
+    """
+    path_str = request.args.get("path", "").strip()
+    if not path_str:
+        return jsonify({"error": "path parameter is required."}), 400
+    p = Path(path_str).resolve()
+    # Security: only allow paths within known roots
+    allowed_roots = [DATA_DIR.resolve(), USER_DATA_DIR.resolve()]
+    if not any(p == r or str(p).startswith(str(r) + "/") for r in allowed_roots):
+        return jsonify({"error": "Access denied: path is outside allowed directories."}), 403
+    if not p.is_dir():
+        return jsonify({"error": f"Directory not found: {path_str}"}), 404
+    configs = sorted([
+        f.name for f in p.iterdir()
+        if f.is_file() and f.suffix.lower() == ".toml"
+    ])
+    subdirs = sorted([
+        d.name for d in p.iterdir()
+        if d.is_dir() and not d.name.startswith(".")
+    ])
+    return jsonify({"configs": configs, "subdirs": subdirs, "path": str(p)})
+
+
+@app.route("/session/from-path", methods=["POST"])
+def create_session_from_server_path():
+    """
+    Create a new session from a server-side config.toml.
+    The file is copied into a fresh session directory under DATA_DIR.
+    Body: { "config_path": "<absolute_server_path_to_config.toml>" }
+    """
+    body = request.get_json(force=True) or {}
+    config_path_str = body.get("config_path", "").strip()
+    if not config_path_str:
+        return jsonify({"error": "config_path is required."}), 400
+
+    config_path = Path(config_path_str).resolve()
+
+    if config_path.suffix.lower() != ".toml":
+        return jsonify({"error": "config_path must point to a .toml file."}), 400
+    if not config_path.is_file():
+        return jsonify({"error": f"File not found: {config_path_str}"}), 404
+
+    # Security: only allow files within known roots
+    allowed_roots = [DATA_DIR.resolve(), USER_DATA_DIR.resolve()]
+    if not any(str(config_path).startswith(str(r) + "/") or config_path == r
+               for r in allowed_roots):
+        return jsonify({"error": "Access denied: path is outside allowed directories."}), 403
+
+    try:
+        _clear_session_data()
+
+        session_id  = uuid.uuid4().hex[:12]
+        session_dir = DATA_DIR / f"session_{session_id}"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        dest_config = session_dir / "config.toml"
+        shutil.copy2(str(config_path), str(dest_config))
+
+        task = celery.send_task(
+            "tasks.init_anipose_session",
+            kwargs={"config_path": str(dest_config)},
+        )
+
+        session_data = {
+            "session_id":  session_id,
+            "config_path": str(dest_config),
+            "config_name": config_path.name,
+            "task_id":     task.id,
+            "created_at":  datetime.now(timezone.utc).isoformat(),
+            "status":      "initializing",
+            "source_path": str(config_path),
+        }
+        _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+        return jsonify(session_data), 201
+
+    except Exception as exc:
+        app.logger.exception("Session from-path creation failed")
+        return jsonify({"error": str(exc)}), 500
+
+
 def _clear_session_data():
     """Helper: revoke pending init task, delete config dir, remove Redis key."""
     raw = _redis_client.get(_SESSION_KEY)

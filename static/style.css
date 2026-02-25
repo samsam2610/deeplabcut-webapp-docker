@@ -1159,6 +1159,174 @@ button[type="submit"]:hover .btn-arrow {
 .dlc-config-status.ok  { color: var(--accent); }
 .dlc-config-status.err { color: var(--danger); }
 
+/* ── "From server" session button ────────────────────────────── */
+.btn-server-pick {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.btn-server-pick:hover {
+  background: rgba(110, 231, 183, .08);
+}
+
+/* ── Server-side config picker panel ─────────────────────────── */
+.session-server-picker {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: .7rem 2rem;
+}
+
+.picker-inner {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: .55rem;
+}
+
+.picker-title {
+  font-size: .78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+}
+
+.picker-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+  font-family: inherit;
+}
+
+.picker-close-btn:hover {
+  border-color: rgba(248, 113, 113, .4);
+  color: var(--danger);
+  background: rgba(248, 113, 113, .08);
+}
+
+.picker-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .1rem;
+  margin-bottom: .45rem;
+  font-family: var(--mono);
+  font-size: .72rem;
+}
+
+.picker-bc-seg {
+  background: none;
+  border: none;
+  padding: .1rem .28rem;
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  transition: color .13s, background .13s;
+}
+
+.picker-bc-seg:hover { color: var(--text); background: var(--surface-2); }
+.picker-bc-seg.active { color: var(--accent); cursor: default; }
+
+.picker-bc-sep {
+  color: var(--text-dim);
+  opacity: .45;
+  font-size: .68rem;
+  user-select: none;
+}
+
+.picker-items {
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+}
+
+.picker-subdirs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .3rem;
+  min-height: 1.5rem;
+}
+
+.picker-configs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .3rem;
+  min-height: 1.5rem;
+}
+
+.picker-subfolder-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: .18rem .55rem;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: .74rem;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: border-color .13s, color .13s, background .13s;
+}
+
+.picker-subfolder-chip:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: rgba(110, 231, 183, .06);
+}
+
+.picker-subfolder-chip.up { opacity: .65; }
+.picker-subfolder-chip.up:hover {
+  border-color: var(--border);
+  color: var(--text);
+  background: var(--surface-2);
+  opacity: 1;
+}
+
+.picker-config-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  padding: .2rem .6rem;
+  border-radius: 5px;
+  border: 1px solid var(--accent-dim);
+  background: rgba(110, 231, 183, .04);
+  color: var(--accent);
+  font-size: .74rem;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: border-color .13s, background .13s;
+}
+
+.picker-config-chip:hover {
+  border-color: var(--accent);
+  background: rgba(110, 231, 183, .12);
+}
+
+.picker-no-items,
+.picker-loading {
+  font-size: .72rem;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  opacity: .55;
+}
+
 /* ── Footer ──────────────────────────────────────────────────── */
 footer {
   text-align: center;
