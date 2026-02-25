@@ -246,7 +246,6 @@ def process_calibrate(self, session_path: str, config_path: str):
 
     # ── Run calibration ──────────────────────────────────────────
     try:
-        from calibration_funcs import process_session_calibrate
         process_session_calibrate(config, session_path)
         return {
             "status": "complete",
