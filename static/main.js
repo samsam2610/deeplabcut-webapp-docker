@@ -242,9 +242,13 @@
   const explorerFolderSelect = document.getElementById("explorer-folder-select");
   const sourceBtnLocal       = document.getElementById("source-btn-local");
   const sourceBtnUserData    = document.getElementById("source-btn-userdata");
+  const userDataNav          = document.getElementById("userdata-nav");
+  const userDataBreadcrumb   = document.getElementById("userdata-breadcrumb");
+  const userDataSubfolders   = document.getElementById("userdata-subfolders");
 
-  let _currentRoot  = "";   // "" = DATA_DIR; non-empty = USER_DATA_DIR path
-  let _userDataDir  = null; // populated from /config when session becomes ready
+  let _currentRoot       = "";   // "" = DATA_DIR; non-empty = current browse path
+  let _userDataDir       = null; // base mount path, populated from /config
+  let _userDataBrowsePath = null; // current navigator path within user-data
 
   async function loadProjects(root) {
     try {
@@ -267,13 +271,98 @@
     }
   }
 
+  // ── User-data folder navigator ────────────────────────────────
+  async function _refreshUserDataNav(path) {
+    _userDataBrowsePath = path;
+    _currentRoot        = path;
+
+    // Render breadcrumb
+    const baseName = _userDataDir.split("/").filter(Boolean).pop() || "user-data";
+    const rel = path.substring(_userDataDir.length).split("/").filter(Boolean);
+    let crumbHTML = `<button class="userdata-bc-seg" data-path="${_userDataDir}">${baseName}</button>`;
+    let cumPath = _userDataDir;
+    rel.forEach((part, i) => {
+      cumPath += "/" + part;
+      const isLast = (i === rel.length - 1);
+      crumbHTML += `<span class="userdata-bc-sep">›</span>`;
+      crumbHTML += `<button class="userdata-bc-seg${isLast ? " active" : ""}" data-path="${cumPath}">${part}</button>`;
+    });
+    userDataBreadcrumb.innerHTML = crumbHTML;
+    userDataBreadcrumb.querySelectorAll(".userdata-bc-seg").forEach(seg => {
+      seg.addEventListener("click", async () => {
+        if (seg.dataset.path === _currentRoot) return;
+        _onProjectSelected("");
+        await _refreshUserDataNav(seg.dataset.path);
+        await loadProjects(_currentRoot);
+      });
+    });
+
+    // Render subfolder chips
+    userDataSubfolders.innerHTML = "";
+
+    // ".." chip when not at the volume root
+    if (path !== _userDataDir) {
+      const upBtn = document.createElement("button");
+      upBtn.className   = "userdata-subfolder-chip up";
+      upBtn.textContent = "..";
+      upBtn.title       = "Go up one level";
+      const parent = path.split("/").slice(0, -1).join("/") || "/";
+      upBtn.addEventListener("click", async () => {
+        _onProjectSelected("");
+        await _refreshUserDataNav(parent);
+        await loadProjects(_currentRoot);
+      });
+      userDataSubfolders.appendChild(upBtn);
+    }
+
+    try {
+      const res  = await fetch(`/fs/list?path=${encodeURIComponent(path)}`);
+      const data = await res.json();
+      const subs = res.ok ? (data.projects || []) : [];
+      if (subs.length === 0) {
+        const msg = document.createElement("span");
+        msg.className   = "userdata-no-folders";
+        msg.textContent = "No subfolders";
+        userDataSubfolders.appendChild(msg);
+      } else {
+        subs.forEach(name => {
+          const chip = document.createElement("button");
+          chip.className   = "userdata-subfolder-chip";
+          chip.textContent = name;
+          chip.title       = `Navigate into ${name}/`;
+          const newPath    = path + "/" + name;
+          chip.addEventListener("click", async () => {
+            _onProjectSelected("");
+            await _refreshUserDataNav(newPath);
+            await loadProjects(_currentRoot);
+          });
+          userDataSubfolders.appendChild(chip);
+        });
+      }
+    } catch (err) {
+      console.error("userdata nav error:", err);
+      const msg = document.createElement("span");
+      msg.className   = "userdata-no-folders";
+      msg.textContent = "Failed to load";
+      userDataSubfolders.appendChild(msg);
+    }
+  }
+
   // ── Source selector buttons ───────────────────────────────────
   async function _selectSource(root) {
-    _currentRoot = root;
     sourceBtnLocal.classList.toggle("active",    root === "");
     sourceBtnUserData.classList.toggle("active", root !== "");
-    _onProjectSelected("");   // clear selection while reloading
-    await loadProjects(root);
+    _onProjectSelected("");
+    if (root === "") {
+      userDataNav.classList.add("hidden");
+      _currentRoot        = "";
+      _userDataBrowsePath = null;
+      await loadProjects("");
+    } else {
+      userDataNav.classList.remove("hidden");
+      await _refreshUserDataNav(root);
+      await loadProjects(_currentRoot);
+    }
   }
 
   sourceBtnLocal.addEventListener("click", () => _selectSource(""));

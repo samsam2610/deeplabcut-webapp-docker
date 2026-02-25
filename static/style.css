@@ -590,6 +590,87 @@ button[type="submit"]:hover .btn-arrow {
   cursor: not-allowed;
 }
 
+/* ── User-data folder navigator ──────────────────────────────── */
+.userdata-nav {
+  margin: .5rem 0 .7rem;
+  padding: .5rem .7rem .55rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.userdata-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .1rem;
+  margin-bottom: .45rem;
+  font-family: var(--mono);
+  font-size: .72rem;
+}
+
+.userdata-bc-seg {
+  background: none;
+  border: none;
+  padding: .1rem .28rem;
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  transition: color .13s, background .13s;
+}
+.userdata-bc-seg:hover { color: var(--text); background: var(--surface); }
+.userdata-bc-seg.active { color: var(--accent); cursor: default; }
+
+.userdata-bc-sep {
+  color: var(--text-dim);
+  opacity: .45;
+  font-size: .68rem;
+  user-select: none;
+}
+
+.userdata-subfolders {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .3rem;
+  min-height: 1.5rem;
+}
+
+.userdata-subfolder-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: .18rem .55rem;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: .74rem;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: border-color .13s, color .13s, background .13s;
+}
+.userdata-subfolder-chip:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: rgba(110, 231, 183, .06);
+}
+.userdata-subfolder-chip.up { opacity: .65; }
+.userdata-subfolder-chip.up:hover {
+  border-color: var(--border);
+  color: var(--text);
+  background: var(--surface-2);
+  opacity: 1;
+}
+
+.userdata-no-folders {
+  font-size: .72rem;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  opacity: .55;
+}
+
 .create-project-row {
   display: flex;
   align-items: center;
