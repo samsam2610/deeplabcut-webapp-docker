@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
         'optim_chunking_size': 1000
     },
     'pipeline': {
+        'mediapipe_processed': 'mediapipe-processed',
         'videos_raw': 'videos-raw',
         'videos_raw_mp4': 'videos-raw-mp4',
         'pose_2d': 'pose-2d',
