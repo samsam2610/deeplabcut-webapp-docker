@@ -143,8 +143,7 @@ def convert_mediapipe_to_dlc_csv(config, parent_path, frame_w, frame_h, scorer='
     for folder_name in subfolders:
         folder_path = os.path.join(mediapipe_folder_path, folder_name)
         # Get only pose_landmarks.mat files
-        mat_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.mat') and 'pose_landmarks' in f])
-
+        mat_files   = sorted([f for f in os.listdir(folder_path) if f.endswith('.mat') and 'pose_landmarks' in f])
         if not mat_files:
             print(f"  [{folder_name}] No .mat file — skipping.")
             continue
@@ -158,8 +157,10 @@ def convert_mediapipe_to_dlc_csv(config, parent_path, frame_w, frame_h, scorer='
             if not data_keys:
                 print(f"  [{folder_name}] No data variables in .mat — skipping.")
                 continue
-
-            mp_array = mat_data[data_keys[0]]
+            if 'landmarks' not in mat_data:
+                print(f"  [{folder_name}] 'landmarks' variable not found — skipping.")
+                continue
+            mp_array = mat_data['landmarks']
 
             # Expected shape: (numFrames, numLandmarks, >=4)
             # axis-2: [x_norm, y_norm, z_norm, visibility]
