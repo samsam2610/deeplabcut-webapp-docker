@@ -289,6 +289,94 @@ def process_filter_3d(self, session_path: str, config_path: str):
     )
 
 
+# ── MediaPipe Preprocessing Tasks ────────────────────────────────
+@celery.task(bind=True, name="tasks.process_organize_for_anipose")
+def process_organize_for_anipose(self, session_path: str, scorer: str = "User"):
+    """
+    Organize DLC labeled-data folders (cam0_*, cam1_*, etc.) into
+    the pose-2d/ structure expected by Anipose.
+    Auto-discovers all immediate subdirectories of session_path as folder_list.
+    """
+    if not os.path.isdir(session_path):
+        raise FileNotFoundError(f"Session folder not found: {session_path}")
+
+    self.update_state(
+        state="PROGRESS",
+        meta={"progress": 10, "stage": "Discovering folders…", "log": ""},
+    )
+
+    try:
+        folder_list = sorted([
+            d.name for d in Path(session_path).iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        ])
+
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "progress": 20,
+                "stage": f"Organizing {len(folder_list)} folder(s)…",
+                "log": f"Folders: {folder_list}\nScorer: {scorer}\n",
+            },
+        )
+
+        organize_for_anipose(session_path, folder_list, scorer=scorer)
+
+        return {
+            "status":    "complete",
+            "operation": "organize_for_anipose",
+            "log":       (
+                f"Organized {len(folder_list)} folder(s) into pose-2d/\n"
+                f"Scorer: {scorer}\nFolders: {folder_list}"
+            ),
+        }
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+
+@celery.task(bind=True, name="tasks.process_convert_mediapipe_csv_to_h5")
+def process_convert_mediapipe_csv_to_h5(self, session_path: str, scorer: str = "User"):
+    """
+    Convert MediaPipe-exported CSV labeled data to DeepLabCut HDF5 format.
+    Auto-discovers all immediate subdirectories of session_path as folder_list.
+    """
+    if not os.path.isdir(session_path):
+        raise FileNotFoundError(f"Session folder not found: {session_path}")
+
+    self.update_state(
+        state="PROGRESS",
+        meta={"progress": 10, "stage": "Discovering folders…", "log": ""},
+    )
+
+    try:
+        folder_list = sorted([
+            d.name for d in Path(session_path).iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        ])
+
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "progress": 20,
+                "stage": f"Converting {len(folder_list)} folder(s)…",
+                "log": f"Folders: {folder_list}\nScorer: {scorer}\n",
+            },
+        )
+
+        convert_mediapipe_csv_to_h5(session_path, folder_list, scorer=scorer)
+
+        return {
+            "status":    "complete",
+            "operation": "convert_mediapipe_csv_to_h5",
+            "log":       (
+                f"Converted CSV→H5 for {len(folder_list)} folder(s)\n"
+                f"Scorer: {scorer}\nFolders: {folder_list}"
+            ),
+        }
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+
 # ── Session Init Task ─────────────────────────────────────────────
 @celery.task(bind=True, name="tasks.init_anipose_session")
 def init_anipose_session(self, config_path: str):

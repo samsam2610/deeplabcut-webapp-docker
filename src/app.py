@@ -27,6 +27,7 @@ USER_DATA_DIR = Path(os.environ.get("USER_DATA_DIR", "/user-data"))
 
 ALLOWED_VIDEO_EXT = {".mp4", ".avi", ".mov", ".mkv", ".mpg", ".mpeg"}
 ALLOWED_CONFIG_EXT = {".toml"}
+ALLOWED_YAML_EXT   = {".yaml", ".yml"}
 
 app = Flask(
     __name__,
@@ -339,6 +340,63 @@ def save_session_config():
     return jsonify({"status": "saved", "config_path": str(config_path)})
 
 
+@app.route("/session/dlc-config", methods=["POST"])
+def upload_dlc_config():
+    """
+    Upload a DeepLabCut config.yaml and attach its path to the active session.
+    Stores the file alongside config.toml in the session directory.
+    """
+    raw = _redis_client.get(_SESSION_KEY)
+    if not raw:
+        return jsonify({"error": "No active session."}), 400
+
+    config_file = request.files.get("config")
+    if not config_file or not config_file.filename:
+        return jsonify({"error": "A config.yaml file is required."}), 400
+    if not _valid_ext(config_file.filename, ALLOWED_YAML_EXT):
+        return jsonify({"error": "DLC config must be a .yaml or .yml file."}), 400
+
+    session_data = json.loads(raw)
+    session_dir  = Path(session_data.get("config_path", "")).parent
+    if not session_dir.is_dir():
+        return jsonify({"error": "Session directory not found."}), 400
+
+    dlc_config_path = session_dir / "config.yaml"
+    config_file.save(str(dlc_config_path))
+
+    session_data["dlc_config_path"] = str(dlc_config_path)
+    session_data["dlc_config_name"] = secure_filename(config_file.filename)
+    _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+
+    return jsonify({
+        "dlc_config_path": str(dlc_config_path),
+        "dlc_config_name": session_data["dlc_config_name"],
+    }), 201
+
+
+@app.route("/session/dlc-config", methods=["GET"])
+def get_dlc_config():
+    """Return the raw text of the active session's DLC config.yaml."""
+    raw = _redis_client.get(_SESSION_KEY)
+    if not raw:
+        return jsonify({"error": "No active session."}), 400
+
+    session_data    = json.loads(raw)
+    dlc_config_path = session_data.get("dlc_config_path", "")
+    if not dlc_config_path:
+        return jsonify({"error": "No DLC config loaded."}), 404
+
+    p = Path(dlc_config_path)
+    if not p.is_file():
+        return jsonify({"error": "DLC config file not found on disk."}), 404
+
+    return jsonify({
+        "content":         p.read_text(),
+        "dlc_config_path": str(dlc_config_path),
+        "dlc_config_name": session_data.get("dlc_config_name", "config.yaml"),
+    })
+
+
 def _clear_session_data():
     """Helper: revoke pending init task, delete config dir, remove Redis key."""
     raw = _redis_client.get(_SESSION_KEY)
@@ -354,22 +412,30 @@ def _clear_session_data():
 
 # ── Session pipeline operations ───────────────────────────────────
 _OPERATION_TASKS = {
-    "calibrate":   "tasks.process_calibrate",
-    "filter_2d":   "tasks.process_filter_2d",
-    "triangulate": "tasks.process_triangulate",
-    "filter_3d":   "tasks.process_filter_3d",
+    # Anipose pipeline
+    "calibrate":                   "tasks.process_calibrate",
+    "filter_2d":                   "tasks.process_filter_2d",
+    "triangulate":                 "tasks.process_triangulate",
+    "filter_3d":                   "tasks.process_filter_3d",
+    # MediaPipe preprocessing
+    "organize_for_anipose":        "tasks.process_organize_for_anipose",
+    "convert_mediapipe_csv_to_h5": "tasks.process_convert_mediapipe_csv_to_h5",
 }
+
+# Operations that do NOT need a config.toml — only session_path + scorer
+_MEDIAPIPE_OPS = {"organize_for_anipose", "convert_mediapipe_csv_to_h5"}
 
 
 @app.route("/run", methods=["POST"])
 def run_operation():
     """
-    Dispatch one of the four single-step Anipose operations against a project
-    folder, using the config.toml stored in the active session.
+    Dispatch a pipeline operation against a project folder.
 
     Expects JSON body:
-      { "operation": "calibrate|filter_2d|triangulate|filter_3d",
-        "project_id": "<folder name under DATA_DIR>" }
+      { "operation": "calibrate|filter_2d|triangulate|filter_3d|organize_for_anipose|convert_mediapipe_csv_to_h5",
+        "project_id": "<folder name under DATA_DIR>",
+        "root": "<optional absolute path>",
+        "scorer": "<scorer name, MediaPipe ops only, default 'User'>" }
     Returns { "task_id", "operation", "project_id" } immediately (202).
     """
     body = request.get_json(force=True) or {}
@@ -392,12 +458,15 @@ def run_operation():
     raw = _redis_client.get(_SESSION_KEY)
     if not raw:
         return jsonify({"error": "No active session. Create a session first."}), 400
-    config_path = json.loads(raw).get("config_path", "")
 
-    task = celery.send_task(
-        _OPERATION_TASKS[operation],
-        kwargs={"session_path": str(project_dir), "config_path": config_path},
-    )
+    if operation in _MEDIAPIPE_OPS:
+        scorer = (body.get("scorer", "") or "User").strip() or "User"
+        task_kwargs = {"session_path": str(project_dir), "scorer": scorer}
+    else:
+        config_path = json.loads(raw).get("config_path", "")
+        task_kwargs = {"session_path": str(project_dir), "config_path": config_path}
+
+    task = celery.send_task(_OPERATION_TASKS[operation], kwargs=task_kwargs)
     return jsonify({
         "task_id":    task.id,
         "operation":  operation,

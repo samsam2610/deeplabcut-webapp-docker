@@ -140,43 +140,85 @@
         </div>
       </div>
 
-      <div class="action-grid">
-        <!-- Calibrate -->
-        <button class="btn-action" data-op="calibrate" title="anipose calibrate">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
-            <line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/>
-            <line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/>
-          </svg>
-          <span>Calibrate</span>
-        </button>
+      <!-- ─── Pipeline mode toggle ───────────────────────────── -->
+      <div style="margin-bottom:.9rem">
+        <label>Pipeline</label>
+        <div class="source-btn-row">
+          <button class="btn-source active" id="pipeline-btn-mediapipe">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12a4 4 0 0 1 8 0"/><line x1="12" y1="8" x2="12" y2="12"/></svg>
+            MediaPipe
+          </button>
+          <button class="btn-source" id="pipeline-btn-deeplabcut">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 20 2 20"/><line x1="12" y1="2" x2="12" y2="20"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+            DeepLabCut
+          </button>
+        </div>
+      </div>
 
-        <!-- Filter 2D -->
-        <button class="btn-action" data-op="filter_2d" title="anipose filter">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-          </svg>
-          <span>Filter 2D</span>
-        </button>
+      <!-- ─── MediaPipe action grid ──────────────────────────── -->
+      <div id="mediapipe-grid">
+        <div class="scorer-row">
+          <label for="scorer-input">Scorer</label>
+          <input type="text" id="scorer-input" value="User" placeholder="User" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="action-grid">
+          <button class="btn-action" data-op="organize_for_anipose" title="Organize cam folders into pose-2d/">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              <line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/>
+            </svg>
+            <span>Organize for Anipose</span>
+          </button>
+          <button class="btn-action" data-op="convert_mediapipe_csv_to_h5" title="Convert CSV labeled data to DLC H5 format">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/>
+              <polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/>
+            </svg>
+            <span>CSV → H5</span>
+          </button>
+        </div>
+      </div>
 
-        <!-- Triangulate -->
-        <button class="btn-action" data-op="triangulate" title="anipose triangulate">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="12 2 22 20 2 20"/>
-            <line x1="12" y1="2" x2="12" y2="20"/>
-            <line x1="7" y1="12" x2="17" y2="12"/>
-          </svg>
-          <span>Triangulate</span>
-        </button>
+      <!-- ─── DeepLabCut / Anipose action grid ──────────────── -->
+      <div id="anipose-grid" class="hidden">
+        <div class="action-grid">
+          <!-- Calibrate -->
+          <button class="btn-action" data-op="calibrate" title="anipose calibrate">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
+              <line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/>
+              <line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/>
+            </svg>
+            <span>Calibrate</span>
+          </button>
 
-        <!-- Filter 3D -->
-        <button class="btn-action" data-op="filter_3d" title="anipose filter-3d">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-            <polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
-          </svg>
-          <span>Filter 3D</span>
-        </button>
+          <!-- Filter 2D -->
+          <button class="btn-action" data-op="filter_2d" title="anipose filter">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            <span>Filter 2D</span>
+          </button>
+
+          <!-- Triangulate -->
+          <button class="btn-action" data-op="triangulate" title="anipose triangulate">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="12 2 22 20 2 20"/>
+              <line x1="12" y1="2" x2="12" y2="20"/>
+              <line x1="7" y1="12" x2="17" y2="12"/>
+            </svg>
+            <span>Triangulate</span>
+          </button>
+
+          <!-- Filter 3D -->
+          <button class="btn-action" data-op="filter_3d" title="anipose filter-3d">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
+            </svg>
+            <span>Filter 3D</span>
+          </button>
+        </div>
       </div>
 
       <!-- ─── Operation progress (shown after a step is launched) ── -->
@@ -219,6 +261,23 @@
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
           Save Config
         </button>
+      </div>
+
+      <!-- ─── DLC config.yaml ──────────────────────────────── -->
+      <div class="dlc-config-section">
+        <div class="dlc-config-header">
+          <h3 class="dlc-config-title">DeepLabCut Config</h3>
+          <span class="dlc-config-path" id="dlc-config-path-display"></span>
+        </div>
+        <p class="dlc-config-subtitle">Load a DeepLabCut <code>config.yaml</code> to associate it with this session.</p>
+        <div class="dlc-config-row">
+          <label class="btn-sm btn-create dlc-config-upload-label" for="dlc-config-input">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+            Load config.yaml
+          </label>
+          <input type="file" id="dlc-config-input" accept=".yaml,.yml" />
+          <span id="dlc-config-status" class="dlc-config-status"></span>
+        </div>
       </div>
     </section>
 

@@ -1054,6 +1054,111 @@ button[type="submit"]:hover .btn-arrow {
 .config-save-status.ok  { color: var(--accent); }
 .config-save-status.err { color: var(--danger); }
 
+/* ── Scorer row (MediaPipe pipeline) ─────────────────────────── */
+.scorer-row {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin-bottom: .75rem;
+}
+
+.scorer-row label {
+  font-size: .78rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.scorer-row input[type="text"] {
+  flex: 1;
+  max-width: 160px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: .82rem;
+  padding: .32rem .65rem;
+  outline: none;
+  transition: border-color .2s;
+}
+
+.scorer-row input[type="text"]:focus {
+  border-color: var(--accent);
+}
+
+/* ── DLC config section (inside config card) ─────────────────── */
+.dlc-config-section {
+  margin-top: 1.6rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--border);
+}
+
+.dlc-config-header {
+  display: flex;
+  align-items: baseline;
+  gap: .7rem;
+  margin-bottom: .3rem;
+}
+
+.dlc-config-title {
+  font-size: .95rem;
+  font-weight: 700;
+  letter-spacing: -.01em;
+}
+
+.dlc-config-path {
+  font-family: var(--mono);
+  font-size: .7rem;
+  color: var(--accent);
+  opacity: .8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dlc-config-subtitle {
+  color: var(--text-dim);
+  font-size: .84rem;
+  line-height: 1.5;
+  margin-bottom: .9rem;
+}
+
+.dlc-config-subtitle code {
+  font-family: var(--mono);
+  font-size: .8rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .05rem .3rem;
+}
+
+.dlc-config-row {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+}
+
+.dlc-config-upload-label {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  white-space: nowrap;
+}
+
+#dlc-config-input { display: none !important; }
+
+.dlc-config-status {
+  font-family: var(--mono);
+  font-size: .75rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.dlc-config-status.ok  { color: var(--accent); }
+.dlc-config-status.err { color: var(--danger); }
+
 /* ── Footer ──────────────────────────────────────────────────── */
 footer {
   text-align: center;

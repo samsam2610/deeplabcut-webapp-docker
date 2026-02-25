@@ -57,6 +57,7 @@
     if (s === "ready") {
       _initConfig().then(() => loadProjects(_currentRoot));
       loadConfig();
+      loadDlcConfig();
     }
   }
 
@@ -182,11 +183,33 @@
   const actionBtns    = document.querySelectorAll(".btn-action");
 
   const OPERATION_LABELS = {
-    calibrate:   "Calibrating cameras",
-    filter_2d:   "Filtering 2D predictions",
-    triangulate: "Triangulating 3D poses",
-    filter_3d:   "Filtering 3D trajectories",
+    calibrate:                   "Calibrating cameras",
+    filter_2d:                   "Filtering 2D predictions",
+    triangulate:                 "Triangulating 3D poses",
+    filter_3d:                   "Filtering 3D trajectories",
+    organize_for_anipose:        "Organizing folders for Anipose",
+    convert_mediapipe_csv_to_h5: "Converting CSV → H5",
   };
+
+  const MEDIAPIPE_OPS = new Set(["organize_for_anipose", "convert_mediapipe_csv_to_h5"]);
+
+  // ── Pipeline mode toggle ─────────────────────────────────────
+  const pipelineBtnMediapipe   = document.getElementById("pipeline-btn-mediapipe");
+  const pipelineBtnDeeplabcut  = document.getElementById("pipeline-btn-deeplabcut");
+  const mediapipeGrid          = document.getElementById("mediapipe-grid");
+  const aniposeGrid            = document.getElementById("anipose-grid");
+  const scorerInput            = document.getElementById("scorer-input");
+
+  function _setPipelineMode(mode) {
+    const isMediapipe = (mode === "mediapipe");
+    pipelineBtnMediapipe.classList.toggle("active",  isMediapipe);
+    pipelineBtnDeeplabcut.classList.toggle("active", !isMediapipe);
+    mediapipeGrid.classList.toggle("hidden",  !isMediapipe);
+    aniposeGrid.classList.toggle("hidden",    isMediapipe);
+  }
+
+  pipelineBtnMediapipe.addEventListener("click",  () => _setPipelineMode("mediapipe"));
+  pipelineBtnDeeplabcut.addEventListener("click", () => _setPipelineMode("deeplabcut"));
 
   // ── Config editor ────────────────────────────────────────────
   const configEditor      = document.getElementById("config-editor");
@@ -235,6 +258,54 @@
       configSaveStatus.className   = "config-save-status err";
     } finally {
       saveConfigBtn.disabled = false;
+    }
+  });
+
+  // ── DLC config.yaml upload ───────────────────────────────────
+  const dlcConfigInput       = document.getElementById("dlc-config-input");
+  const dlcConfigPathDisplay = document.getElementById("dlc-config-path-display");
+  const dlcConfigStatus      = document.getElementById("dlc-config-status");
+
+  async function loadDlcConfig() {
+    try {
+      const res  = await fetch("/session/dlc-config");
+      if (!res.ok) return;   // no DLC config yet — that's fine
+      const data = await res.json();
+      dlcConfigPathDisplay.textContent = data.dlc_config_name || "";
+    } catch (err) {
+      console.error("loadDlcConfig error:", err);
+    }
+  }
+
+  dlcConfigInput.addEventListener("change", async () => {
+    const file = dlcConfigInput.files[0];
+    if (!file) return;
+
+    dlcConfigStatus.textContent = "Uploading…";
+    dlcConfigStatus.className   = "dlc-config-status";
+
+    const fd = new FormData();
+    fd.append("config", file);
+    dlcConfigInput.value = "";
+
+    try {
+      const res  = await fetch("/session/dlc-config", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        dlcConfigStatus.textContent = data.error || "Upload failed";
+        dlcConfigStatus.className   = "dlc-config-status err";
+      } else {
+        dlcConfigStatus.textContent = "✓ Loaded";
+        dlcConfigStatus.className   = "dlc-config-status ok";
+        dlcConfigPathDisplay.textContent = data.dlc_config_name || file.name;
+        setTimeout(() => {
+          dlcConfigStatus.textContent = "";
+          dlcConfigStatus.className   = "dlc-config-status";
+        }, 3000);
+      }
+    } catch (err) {
+      dlcConfigStatus.textContent = "Network error";
+      dlcConfigStatus.className   = "dlc-config-status err";
     }
   });
 
@@ -715,6 +786,9 @@
       try {
         const runBody = { operation, project_id: projectId };
         if (_currentRoot) runBody.root = _currentRoot;
+        if (MEDIAPIPE_OPS.has(operation)) {
+          runBody.scorer = scorerInput.value.trim() || "User";
+        }
         const res  = await fetch("/run", {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
