@@ -5,19 +5,25 @@ import pandas as pd
 from pathlib import Path
 from deeplabcut.utils import auxiliaryfunctions
 
-def organize_for_anipose(parent_path, folder_list, scorer='User'):
+def organize_for_anipose(config, parent_path, folder_list, scorer='User'):
     """
     Groups cam0/cam1 folders into a unified 2d-data structure for Anipose.
     """
-    # 1. Define the base 2d-data directory
-    anipose_2d_path = os.path.join(parent_path, 'pose-2d')
+    # Get list of folders in the pipeline_mediapipe_2d directory
+    pipeline_mediapipe_2d = config["pipeline"]["mediapipe_processed"]
+    mediapipe_folder_path = os.path.join(parent_path, pipeline_mediapipe_2d)
+    mediapipe_folder_list = [f for f in os.listdir(mediapipe_folder_path) if os.path.isdir(os.path.join(mediapipe_folder_path, f))]
+
+    # Define the base 2d-data directory
+    pipeline_pose_2d  = config["pipeline"]["pose_2d"]
+    anipose_2d_path = os.path.join(parent_path, pipeline_pose_2d)
     if not os.path.isdir(anipose_2d_path):
         os.makedirs(anipose_2d_path)
         print(f"Created: {anipose_2d_path}")
 
-    for folder_name in folder_list:
+    for folder_name in mediapipe_folder_list:
         # Source path (where the files currently live)
-        src_folder = os.path.join(parent_path, folder_name)
+        src_folder = os.path.join(mediapipe_folder_path, folder_name)
         
         # 2. Extract the Trial ID (Everything except the 'camX' part)
         # This groups 'sam_backpack_cam0_...' and 'sam_backpack_cam1_...' into one folder
@@ -54,13 +60,17 @@ def organize_for_anipose(parent_path, folder_list, scorer='User'):
 
 
 
-def convert_mediapipe_csv_to_h5(parent_path, folder_list, scorer='User'):
+def convert_mediapipe_csv_to_h5(config, parent_path, folder_list, scorer='User'):
     """
     Refined conversion that includes scorer overwriting and index verification.
     """
-    for folder_name in folder_list:
+    # Get list of folders in the pipeline_mediapipe_2d directory
+    pipeline_mediapipe_2d = config["pipeline"]["mediapipe_processed"]
+    mediapipe_folder_path = os.path.join(parent_path, pipeline_mediapipe_2d)
+    mediapipe_folder_list = [f for f in os.listdir(mediapipe_folder_path) if os.path.isdir(os.path.join(mediapipe_folder_path, f))]
+    for folder_name in mediapipe_folder_list:
         # Navigate to the specific labeled-data subfolder
-        folder_path = os.path.join(parent_path, folder_name)
+        folder_path = os.path.join(mediapipe_folder_path, folder_name)
         
         # Note: Scorer here must match the filename created by MATLAB
         csv_filename = f"CollectedData_{scorer}.csv"

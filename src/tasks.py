@@ -178,11 +178,9 @@ def process_calibrate(self, session_path: str, config_path: str):
     config_local = os.path.join(session_path, "config.toml")
     try:
         try:
-            import tomllib as _tomllib
             with open(config_local, "rb") as _f:
                 config = load_config(config_local)
         except ImportError:
-            import toml as _toml
             config = load_config(config_local)
     except Exception as exc:
         raise RuntimeError(f"Failed to parse config.toml: {exc}")
@@ -304,6 +302,17 @@ def process_organize_for_anipose(self, session_path: str, scorer: str = "User"):
         state="PROGRESS",
         meta={"progress": 10, "stage": "Discovering folders…", "log": ""},
     )
+    # ── Load config ──────────────────────────────────────────────
+    config_local = os.path.join(session_path, "config.toml")
+    try:
+        try:
+            with open(config_local, "rb") as _f:
+                config = load_config(config_local)
+        except ImportError:
+            config = load_config(config_local)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to parse config.toml: {exc}")
+
 
     try:
         folder_list = sorted([
@@ -320,7 +329,7 @@ def process_organize_for_anipose(self, session_path: str, scorer: str = "User"):
             },
         )
 
-        organize_for_anipose(session_path, folder_list, scorer=scorer)
+        organize_for_anipose(config, session_path, folder_list, scorer=scorer)
 
         return {
             "status":    "complete",
@@ -343,6 +352,17 @@ def process_convert_mediapipe_csv_to_h5(self, session_path: str, scorer: str = "
     if not os.path.isdir(session_path):
         raise FileNotFoundError(f"Session folder not found: {session_path}")
 
+    # ── Load config ──────────────────────────────────────────────
+    config_local = os.path.join(session_path, "config.toml")
+    try:
+        try:
+            with open(config_local, "rb") as _f:
+                config = load_config(config_local)
+        except ImportError:
+            config = load_config(config_local)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to parse config.toml: {exc}")
+
     self.update_state(
         state="PROGRESS",
         meta={"progress": 10, "stage": "Discovering folders…", "log": ""},
@@ -363,7 +383,7 @@ def process_convert_mediapipe_csv_to_h5(self, session_path: str, scorer: str = "
             },
         )
 
-        convert_mediapipe_csv_to_h5(session_path, folder_list, scorer=scorer)
+        convert_mediapipe_csv_to_h5(config, session_path, folder_list, scorer=scorer)
 
         return {
             "status":    "complete",
