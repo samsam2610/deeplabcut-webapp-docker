@@ -187,8 +187,15 @@ def process_session_calibrate(config, session_path):
         skip_calib = len(videos) == 0
     else:
         if len(videos) == 0:
-            print('no videos or calibration file found, continuing...')
-            return
+            print('no videos or calibration file found, check for detections.pickle, and if not found, quitting')
+            rows_fname = os.path.join(outdir, 'detections.pickle')
+            if os.path.exists(rows_fname):
+                with open(rows_fname, 'rb') as f:
+                    all_rows = pickle.load(f) 
+                print('found detections.pickle, loading it and calibrating')
+            else:
+                print('no detections.pickle found, quitting')
+                return
         cgroup = CameraGroup.from_names(cam_names, config['calibration']['fisheye'])
 
     board = get_calibration_board(config)
