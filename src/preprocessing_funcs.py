@@ -195,3 +195,66 @@ def convert_mediapipe_to_dlc_csv(config, parent_path, frame_w, frame_h, scorer='
 
         except Exception as e:
             print(f"  [{folder_name}] Error: {e}")
+
+
+def convert_3d_csv_to_mat(config, parent_path, frame_w, frame_h):
+    """
+    Convert Anipose-filtered 3D CSV files back to MediaPipe-format .mat arrays.
+
+    Reads every .csv from pipeline['pose_3d_filter'], extracts 3D pose data,
+    de-normalises x/y by frame dimensions, and saves a .mat file alongside
+    each CSV.  The output array has shape (numFrames, numLandmarks, 4) with
+    channels [x_norm, y_norm, z_raw, likelihood], matching the layout produced
+    by the original MediaPipe recording.
+
+    Bodypart names and count are discovered automatically from *_error columns
+    in the CSV header (same convention used by Anipose filter_3d).
+    """
+    import scipy.io
+
+    pipeline_pose_3d_filter = config['pipeline']['pose_3d_filter']
+    folder_path = os.path.join(parent_path, pipeline_pose_3d_filter)
+
+    if not os.path.isdir(folder_path):
+        print(f"Warning: filtered 3D folder not found: {folder_path}")
+        return
+
+    csv_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.csv')])
+    print(f"Found {len(csv_files)} CSV file(s) in {folder_path}")
+    print(f"Frame size : {frame_w} x {frame_h}")
+
+    for csv_name in csv_files:
+        csv_path = os.path.join(folder_path, csv_name)
+        name     = os.path.splitext(csv_name)[0]
+        mat_path = os.path.join(folder_path, name + '.mat')
+
+        print(f"  [{name}] Reading {csv_name} …")
+
+        try:
+            data = pd.read_csv(csv_path)
+
+            # Discover bodyparts from *_error columns — same convention as filter_pose
+            error_cols = [c for c in data.columns if c.endswith('_error')]
+            bodyparts  = [c[:-6] for c in error_cols]  # strip '_error'
+
+            if not bodyparts:
+                print(f"  [{name}] No '_error' columns found — skipping.")
+                continue
+
+            num_frames    = len(data)
+            num_landmarks = len(bodyparts)
+            print(f"  [{name}] {num_frames} frames, {num_landmarks} landmarks")
+
+            # Build (frames, landmarks, 4): [x_norm, y_norm, z_raw, likelihood]
+            mp_array = np.zeros((num_frames, num_landmarks, 4))
+            for i, bp in enumerate(bodyparts):
+                mp_array[:, i, 0] = data[bp + '_x'].to_numpy() / frame_w
+                mp_array[:, i, 1] = data[bp + '_y'].to_numpy() / frame_h
+                mp_array[:, i, 2] = data[bp + '_z'].to_numpy()
+                mp_array[:, i, 3] = data[bp + '_score'].to_numpy()
+
+            scipy.io.savemat(mat_path, {'landmarks': mp_array})
+            print(f"  [{name}] Saved → {mat_path}")
+
+        except Exception as e:
+            print(f"  [{name}] Error: {e}")

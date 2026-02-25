@@ -353,12 +353,20 @@
     organize_for_anipose:           "Organizing folders for Anipose",
     convert_mediapipe_to_dlc_csv:   "Converting MediaPipe → DLC CSV",
     convert_mediapipe_csv_to_h5:    "Converting CSV → H5",
+    convert_3d_csv_to_mat:          "Converting 3D CSV → .mat",
   };
 
   const MEDIAPIPE_OPS = new Set([
     "organize_for_anipose",
     "convert_mediapipe_csv_to_h5",
     "convert_mediapipe_to_dlc_csv",
+    "convert_3d_csv_to_mat",
+  ]);
+
+  // Ops that need frame_w / frame_h (but not necessarily scorer)
+  const FRAME_DIMS_OPS = new Set([
+    "convert_mediapipe_to_dlc_csv",
+    "convert_3d_csv_to_mat",
   ]);
 
   // ── Pipeline mode toggle ─────────────────────────────────────
@@ -1017,10 +1025,10 @@
       try {
         const runBody = { operation, project_id: projectId };
         if (_currentRoot) runBody.root = _currentRoot;
-        if (MEDIAPIPE_OPS.has(operation)) {
+        if (MEDIAPIPE_OPS.has(operation) && operation !== "convert_3d_csv_to_mat") {
           runBody.scorer = scorerInput.value.trim() || "User";
         }
-        if (operation === "convert_mediapipe_to_dlc_csv") {
+        if (FRAME_DIMS_OPS.has(operation)) {
           const fw = parseInt(frameWInput.value, 10);
           const fh = parseInt(frameHInput.value, 10);
           if (!fw || !fh || fw <= 0 || fh <= 0) {

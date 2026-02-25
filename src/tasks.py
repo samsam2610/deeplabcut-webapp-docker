@@ -491,6 +491,46 @@ def process_convert_mediapipe_csv_to_h5(self, session_path: str, scorer: str = "
         raise RuntimeError(traceback.format_exc()[-3000:])
 
 
+@celery.task(bind=True, name="tasks.process_convert_3d_csv_to_mat")
+def process_convert_3d_csv_to_mat(self, session_path: str,
+                                   frame_w: int = 1920, frame_h: int = 1080):
+    """
+    Convert Anipose-filtered 3D CSVs (pose-3d-filtered/) to MediaPipe-format
+    .mat arrays (landmarks variable, shape frames×landmarks×4).
+    Requires frame_w and frame_h to restore 0-1 normalisation for x/y.
+    """
+    if not os.path.isdir(session_path):
+        raise FileNotFoundError(f"Session folder not found: {session_path}")
+
+    config_local = os.path.join(session_path, "config.toml")
+    try:
+        config = load_config(config_local)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to parse config.toml: {exc}")
+
+    self.update_state(
+        state="PROGRESS",
+        meta={
+            "progress": 10,
+            "stage": f"Converting 3D CSVs → .mat ({frame_w}×{frame_h})…",
+            "log": f"frame_w={frame_w}  frame_h={frame_h}\n",
+        },
+    )
+
+    try:
+        convert_3d_csv_to_mat(config, session_path, frame_w=frame_w, frame_h=frame_h)
+        return {
+            "status":    "complete",
+            "operation": "convert_3d_csv_to_mat",
+            "log": (
+                f"Converted filtered 3D CSVs → .mat\n"
+                f"Frame size : {frame_w}×{frame_h}"
+            ),
+        }
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+
 @celery.task(bind=True, name="tasks.process_convert_mediapipe_to_dlc_csv")
 def process_convert_mediapipe_to_dlc_csv(self, session_path: str, scorer: str = "User",
                                           frame_w: int = 1920, frame_h: int = 1080):

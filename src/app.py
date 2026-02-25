@@ -548,6 +548,7 @@ _OPERATION_TASKS = {
     "organize_for_anipose":           "tasks.process_organize_for_anipose",
     "convert_mediapipe_csv_to_h5":    "tasks.process_convert_mediapipe_csv_to_h5",
     "convert_mediapipe_to_dlc_csv":   "tasks.process_convert_mediapipe_to_dlc_csv",
+    "convert_3d_csv_to_mat":          "tasks.process_convert_3d_csv_to_mat",
 }
 
 # Operations that do NOT need a config.toml — only session_path + scorer
@@ -555,7 +556,11 @@ _MEDIAPIPE_OPS = {
     "organize_for_anipose",
     "convert_mediapipe_csv_to_h5",
     "convert_mediapipe_to_dlc_csv",
+    "convert_3d_csv_to_mat",
 }
+
+# Operations that require frame_w / frame_h
+_FRAME_DIMS_OPS = {"convert_mediapipe_to_dlc_csv", "convert_3d_csv_to_mat"}
 
 
 @app.route("/run", methods=["POST"])
@@ -592,9 +597,11 @@ def run_operation():
         return jsonify({"error": "No active session. Create a session first."}), 400
 
     if operation in _MEDIAPIPE_OPS:
-        scorer = (body.get("scorer", "") or "User").strip() or "User"
-        task_kwargs = {"session_path": str(project_dir), "scorer": scorer}
-        if operation == "convert_mediapipe_to_dlc_csv":
+        task_kwargs = {"session_path": str(project_dir)}
+        if operation != "convert_3d_csv_to_mat":
+            scorer = (body.get("scorer", "") or "User").strip() or "User"
+            task_kwargs["scorer"] = scorer
+        if operation in _FRAME_DIMS_OPS:
             try:
                 frame_w = int(body.get("frame_w", 0))
                 frame_h = int(body.get("frame_h", 0))
