@@ -313,22 +313,33 @@
           Save Config
         </button>
       </div>
+    </section>
 
-      <!-- ─── DLC config.yaml ──────────────────────────────── -->
-      <div class="dlc-config-section">
-        <div class="dlc-config-header">
-          <h3 class="dlc-config-title">DeepLabCut Config</h3>
-          <span class="dlc-config-path" id="dlc-config-path-display"></span>
-        </div>
-        <p class="dlc-config-subtitle">Load a DeepLabCut <code>config.yaml</code> to associate it with this session.</p>
-        <div class="dlc-config-row">
-          <label class="btn-sm btn-create dlc-config-upload-label" for="dlc-config-input">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
-            Load config.yaml
-          </label>
-          <input type="file" id="dlc-config-input" accept=".yaml,.yml" />
-          <span id="dlc-config-status" class="dlc-config-status"></span>
-        </div>
+    <!-- ─── DLC config.yaml (always visible) ────────────────── -->
+    <section class="card" id="dlc-config-card">
+      <div class="config-header">
+        <h2>DeepLabCut Config</h2>
+        <span class="config-path" id="dlc-config-path-display"></span>
+      </div>
+      <p class="subtitle">Upload a DeepLabCut <code>config.yaml</code> to associate with the active session, then edit and save below.</p>
+
+      <div class="dlc-config-row" style="margin-bottom:.9rem">
+        <label class="btn-sm btn-create dlc-config-upload-label" for="dlc-config-input">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+          Load config.yaml
+        </label>
+        <input type="file" id="dlc-config-input" accept=".yaml,.yml" />
+        <span id="dlc-config-status" class="dlc-config-status"></span>
+      </div>
+
+      <textarea id="dlc-config-editor" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="Upload a config.yaml to view and edit its contents…"></textarea>
+
+      <div class="config-footer">
+        <span id="dlc-config-save-status" class="config-save-status"></span>
+        <button id="save-dlc-config-btn" class="btn-sm btn-create">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save Config
+        </button>
       </div>
     </section>
 

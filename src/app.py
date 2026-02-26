@@ -397,6 +397,31 @@ def get_dlc_config():
     })
 
 
+@app.route("/session/dlc-config", methods=["PATCH"])
+def save_dlc_config():
+    """Save edited DLC config.yaml content back to disk."""
+    raw = _redis_client.get(_SESSION_KEY)
+    if not raw:
+        return jsonify({"error": "No active session."}), 400
+
+    session_data    = json.loads(raw)
+    dlc_config_path = session_data.get("dlc_config_path", "")
+    if not dlc_config_path:
+        return jsonify({"error": "No DLC config loaded."}), 404
+
+    p = Path(dlc_config_path)
+    if not p.is_file():
+        return jsonify({"error": "DLC config file not found on disk."}), 404
+
+    body    = request.get_json(force=True) or {}
+    content = body.get("content", "")
+    if not content.strip():
+        return jsonify({"error": "Content cannot be empty."}), 400
+
+    p.write_text(content)
+    return jsonify({"status": "saved", "dlc_config_path": str(dlc_config_path)})
+
+
 @app.route("/fs/list-configs")
 def fs_list_configs():
     """

@@ -1148,12 +1148,8 @@ button[type="submit"]:hover .btn-arrow {
 .detect-dims-status.ok  { color: var(--accent); }
 .detect-dims-status.err { color: var(--danger); }
 
-/* ── DLC config section (inside config card) ─────────────────── */
-.dlc-config-section {
-  margin-top: 1.6rem;
-  padding-top: 1.2rem;
-  border-top: 1px solid var(--border);
-}
+/* ── DLC config card ─────────────────────────────────────────── */
+#dlc-config-editor { height: 28rem; }
 
 .dlc-config-header {
   display: flex;

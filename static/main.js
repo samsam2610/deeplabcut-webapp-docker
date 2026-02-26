@@ -198,6 +198,9 @@
     } catch (err) {
       console.error("Session load error:", err);
     }
+
+    // Load DLC config regardless of session state (card is always visible)
+    loadDlcConfig();
   })();
 
   // ── Server-side config picker ─────────────────────────────────
@@ -503,17 +506,21 @@
     }
   });
 
-  // ── DLC config.yaml upload ───────────────────────────────────
+  // ── DLC config.yaml upload + editor ─────────────────────────
   const dlcConfigInput       = document.getElementById("dlc-config-input");
   const dlcConfigPathDisplay = document.getElementById("dlc-config-path-display");
   const dlcConfigStatus      = document.getElementById("dlc-config-status");
+  const dlcConfigEditor      = document.getElementById("dlc-config-editor");
+  const saveDlcConfigBtn     = document.getElementById("save-dlc-config-btn");
+  const dlcConfigSaveStatus  = document.getElementById("dlc-config-save-status");
 
   async function loadDlcConfig() {
     try {
       const res  = await fetch("/session/dlc-config");
-      if (!res.ok) return;   // no DLC config yet — that's fine
+      if (!res.ok) return;   // no session or no DLC config yet — fine
       const data = await res.json();
       dlcConfigPathDisplay.textContent = data.dlc_config_name || "";
+      if (data.content) dlcConfigEditor.value = data.content;
     } catch (err) {
       console.error("loadDlcConfig error:", err);
     }
@@ -544,10 +551,42 @@
           dlcConfigStatus.textContent = "";
           dlcConfigStatus.className   = "dlc-config-status";
         }, 3000);
+        // Reload editor content after upload
+        loadDlcConfig();
       }
     } catch (err) {
       dlcConfigStatus.textContent = "Network error";
       dlcConfigStatus.className   = "dlc-config-status err";
+    }
+  });
+
+  saveDlcConfigBtn.addEventListener("click", async () => {
+    saveDlcConfigBtn.disabled          = true;
+    dlcConfigSaveStatus.textContent    = "Saving…";
+    dlcConfigSaveStatus.className      = "config-save-status";
+    try {
+      const res  = await fetch("/session/dlc-config", {
+        method:  "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ content: dlcConfigEditor.value }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        dlcConfigSaveStatus.textContent = data.error || "Save failed";
+        dlcConfigSaveStatus.className   = "config-save-status err";
+      } else {
+        dlcConfigSaveStatus.textContent = "Saved";
+        dlcConfigSaveStatus.className   = "config-save-status ok";
+        setTimeout(() => {
+          dlcConfigSaveStatus.textContent = "";
+          dlcConfigSaveStatus.className   = "config-save-status";
+        }, 3000);
+      }
+    } catch (err) {
+      dlcConfigSaveStatus.textContent = "Network error";
+      dlcConfigSaveStatus.className   = "config-save-status err";
+    } finally {
+      saveDlcConfigBtn.disabled = false;
     }
   });
 
