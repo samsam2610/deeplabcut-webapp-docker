@@ -512,13 +512,14 @@
   });
 
   // ── DLC bar + config editor ──────────────────────────────────
-  const dlcDot           = document.getElementById("dlc-dot");
-  const dlcLabel         = document.getElementById("dlc-label");
-  const dlcMeta          = document.getElementById("dlc-meta");
-  const btnDlcFromServer = document.getElementById("btn-dlc-from-server");
-  const btnDlcClear      = document.getElementById("btn-dlc-clear");
-  const dlcConfigInput   = document.getElementById("dlc-config-input");
-  const dlcConfigStatus  = document.getElementById("dlc-config-status");
+  const dlcDot              = document.getElementById("dlc-dot");
+  const dlcLabel            = document.getElementById("dlc-label");
+  const dlcMeta             = document.getElementById("dlc-meta");
+  const btnDlcLoad          = document.getElementById("btn-dlc-load");
+  const btnDlcFromServer    = document.getElementById("btn-dlc-from-server");
+  const btnDlcClear         = document.getElementById("btn-dlc-clear");
+  const dlcConfigInput      = document.getElementById("dlc-config-input");
+  const dlcConfigStatus     = document.getElementById("dlc-config-status");
 
   const dlcConfigCard    = document.getElementById("dlc-config-card");
   const dlcConfigPathDisplay = document.getElementById("dlc-config-path-display");
@@ -531,12 +532,16 @@
       dlcDot.dataset.state = "ready";
       dlcLabel.textContent = "DLC config loaded";
       dlcMeta.textContent  = configName;
+      btnDlcLoad.classList.add("hidden");
+      btnDlcFromServer.classList.add("hidden");
       btnDlcClear.classList.remove("hidden");
       dlcConfigCard.classList.remove("hidden");
     } else {
       dlcDot.dataset.state = "none";
       dlcLabel.textContent = "No DLC config";
       dlcMeta.textContent  = "";
+      btnDlcLoad.classList.remove("hidden");
+      btnDlcFromServer.classList.toggle("hidden", _userDataDir === null);
       btnDlcClear.classList.add("hidden");
       dlcConfigCard.classList.add("hidden");
     }
@@ -547,7 +552,7 @@
       const res  = await fetch("/session/dlc-config");
       if (!res.ok) { applyDlcState(null); return; }
       const data = await res.json();
-      dlcConfigPathDisplay.textContent = data.dlc_config_name || "";
+      dlcConfigPathDisplay.textContent = data.dlc_config_path || data.dlc_config_name || "";
       if (data.content) dlcConfigEditor.value = data.content;
       applyDlcState(data.dlc_config_name || "config.yaml");
     } catch (err) {
