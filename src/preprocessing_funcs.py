@@ -50,7 +50,7 @@ def organize_for_anipose(config, parent_path, folder_list, scorer='User'):
             if os.path.exists(src_file):
                 # We rename the file to include the camera name so Anipose can distinguish them
                 # Example: cam0_CollectedData_User.h5
-                cam_match = re.search(cam_pattern, folder_name)
+                cam_match = re.search(r'cam[0-9]', folder_name)
                 cam_name = cam_match.group(0) if cam_match else "unknown"
                 
                 new_file_name = f"{cam_name}_{file_name}"
