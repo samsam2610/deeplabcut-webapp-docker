@@ -57,11 +57,6 @@
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         Clear Session
       </button>
-      <button class="btn-sm btn-flush-cache" id="btn-flush-cache" title="Delete all stale Celery task results from Redis and clear the task queue">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
-        Flush Cache
-      </button>
-      <span id="flush-cache-status" class="flush-cache-status"></span>
     </div>
   </div>
 
@@ -315,13 +310,23 @@
       </div>
     </section>
 
+    <!-- ─── Admin utilities ──────────────────────────────────── -->
+    <div class="admin-util-row">
+      <span class="admin-util-label">Task queue</span>
+      <button class="btn-sm btn-flush-cache" id="btn-flush-cache" title="Delete all stale Celery task results from Redis and clear the task queue">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+        Flush Cache
+      </button>
+      <span id="flush-cache-status" class="flush-cache-status"></span>
+    </div>
+
     <!-- ─── DLC config.yaml (always visible) ────────────────── -->
     <section class="card" id="dlc-config-card">
       <div class="config-header">
         <h2>DeepLabCut Config</h2>
         <span class="config-path" id="dlc-config-path-display"></span>
       </div>
-      <p class="subtitle">Upload a DeepLabCut <code>config.yaml</code> to associate with the active session, then edit and save below.</p>
+      <p class="subtitle">Load a DeepLabCut <code>config.yaml</code> to associate with the active session, then edit and save below.</p>
 
       <div class="dlc-config-row" style="margin-bottom:.9rem">
         <label class="btn-sm btn-create dlc-config-upload-label" for="dlc-config-input">
@@ -329,10 +334,33 @@
           Load config.yaml
         </label>
         <input type="file" id="dlc-config-input" accept=".yaml,.yml" />
+        <button class="btn-sm btn-server-pick" id="btn-dlc-from-server" disabled title="Load config.yaml from server-side user data volume">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          From server
+        </button>
+        <button class="btn-sm" id="btn-dlc-create-session" disabled title="Generate an Anipose session from this DLC config — coming soon">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Create Session
+        </button>
         <span id="dlc-config-status" class="dlc-config-status"></span>
       </div>
 
-      <textarea id="dlc-config-editor" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="Upload a config.yaml to view and edit its contents…"></textarea>
+      <!-- ─── DLC server-side YAML picker (inline) ─────────── -->
+      <div id="dlc-server-picker" class="dlc-server-picker-panel hidden">
+        <div class="dlc-picker-header">
+          <span class="dlc-picker-title">Select config.yaml from user data</span>
+          <button class="picker-close-btn" id="dlc-picker-close-btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div id="dlc-picker-breadcrumb" class="picker-breadcrumb"></div>
+        <div class="picker-items">
+          <div id="dlc-picker-subdirs" class="picker-subdirs"></div>
+          <div id="dlc-picker-configs" class="picker-configs"></div>
+        </div>
+      </div>
+
+      <textarea id="dlc-config-editor" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="Load a config.yaml to view and edit its contents…"></textarea>
 
       <div class="config-footer">
         <span id="dlc-config-save-status" class="config-save-status"></span>

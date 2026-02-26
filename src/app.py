@@ -422,16 +422,74 @@ def save_dlc_config():
     return jsonify({"status": "saved", "dlc_config_path": str(dlc_config_path)})
 
 
+@app.route("/session/dlc-config/from-path", methods=["POST"])
+def load_dlc_config_from_path():
+    """
+    Attach a server-side config.yaml to the active session without re-uploading.
+    The file is copied into the session directory.
+    Body: { "config_path": "<absolute_server_path>" }
+    """
+    raw = _redis_client.get(_SESSION_KEY)
+    if not raw:
+        return jsonify({"error": "No active session."}), 400
+
+    body = request.get_json(force=True) or {}
+    config_path_str = body.get("config_path", "").strip()
+    if not config_path_str:
+        return jsonify({"error": "config_path is required."}), 400
+
+    config_path = Path(config_path_str).resolve()
+    if config_path.suffix.lower() not in {".yaml", ".yml"}:
+        return jsonify({"error": "config_path must point to a .yaml or .yml file."}), 400
+    if not config_path.is_file():
+        return jsonify({"error": f"File not found: {config_path_str}"}), 404
+
+    # Security: only allow files within known roots
+    allowed_roots = [DATA_DIR.resolve(), USER_DATA_DIR.resolve()]
+    if not any(str(config_path).startswith(str(r) + "/") or config_path == r
+               for r in allowed_roots):
+        return jsonify({"error": "Access denied: path is outside allowed directories."}), 403
+
+    session_data = json.loads(raw)
+    session_dir  = Path(session_data.get("config_path", "")).parent
+    if not session_dir.is_dir():
+        return jsonify({"error": "Session directory not found."}), 400
+
+    dlc_config_path = session_dir / "config.yaml"
+    shutil.copy2(str(config_path), str(dlc_config_path))
+
+    session_data["dlc_config_path"] = str(dlc_config_path)
+    session_data["dlc_config_name"] = config_path.name
+    _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+
+    return jsonify({
+        "dlc_config_path": str(dlc_config_path),
+        "dlc_config_name": session_data["dlc_config_name"],
+    }), 201
+
+
 @app.route("/fs/list-configs")
 def fs_list_configs():
     """
-    List .toml files and immediate subdirectories at a server-side path.
+    List config files and immediate subdirectories at a server-side path.
     Only accepts paths within USER_DATA_DIR or DATA_DIR.
-    Query param: path=<absolute_path>
+    Query params:
+      path=<absolute_path>
+      ext=<.toml|.yaml|.yml>  (default .toml; .yaml also matches .yml)
     """
     path_str = request.args.get("path", "").strip()
     if not path_str:
         return jsonify({"error": "path parameter is required."}), 400
+    ext = request.args.get("ext", ".toml").lower()
+    allowed_exts_map = {
+        ".toml": {".toml"},
+        ".yaml": {".yaml", ".yml"},
+        ".yml":  {".yaml", ".yml"},
+    }
+    if ext not in allowed_exts_map:
+        return jsonify({"error": "Unsupported ext parameter."}), 400
+    match_exts = allowed_exts_map[ext]
+
     p = Path(path_str).resolve()
     # Security: only allow paths within known roots
     allowed_roots = [DATA_DIR.resolve(), USER_DATA_DIR.resolve()]
@@ -441,7 +499,7 @@ def fs_list_configs():
         return jsonify({"error": f"Directory not found: {path_str}"}), 404
     configs = sorted([
         f.name for f in p.iterdir()
-        if f.is_file() and f.suffix.lower() == ".toml"
+        if f.is_file() and f.suffix.lower() in match_exts
     ])
     subdirs = sorted([
         d.name for d in p.iterdir()

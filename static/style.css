@@ -1150,6 +1150,50 @@ button[type="submit"]:hover .btn-arrow {
 .detect-dims-status.ok  { color: var(--accent); }
 .detect-dims-status.err { color: var(--danger); }
 
+/* ── Admin utility row (flush cache, always visible) ─────────── */
+.admin-util-row {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .55rem .9rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.admin-util-label {
+  font-size: .75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+  flex: 1;
+}
+
+/* ── DLC server-side YAML picker (inline in card) ────────────── */
+.dlc-server-picker-panel {
+  margin-bottom: .9rem;
+  padding: .6rem .75rem .65rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.dlc-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: .45rem;
+}
+
+.dlc-picker-title {
+  font-size: .73rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+}
+
 /* ── DLC config card ─────────────────────────────────────────── */
 .dlc-config-header {
   display: flex;
