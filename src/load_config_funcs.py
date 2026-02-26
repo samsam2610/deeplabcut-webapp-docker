@@ -38,7 +38,8 @@ DEFAULT_CONFIG = {
         'constraints': [],
         'constraints_weak': [],
         'optim_chunking': False,
-        'optim_chunking_size': 1000
+        'optim_chunking_size': 1000,
+        'cam_regex': 'cam[0-9]'
     },
     'pipeline': {
         'mediapipe_processed': 'mediapipe-processed',
