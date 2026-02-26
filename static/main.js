@@ -144,6 +144,9 @@
       console.error("Clear session error:", err);
     }
     applySessionState({ status: "none" });
+    applyDlcState(null);
+    dlcConfigEditor.value = "";
+    dlcConfigPathDisplay.textContent = "";
   });
 
   // ── Flush Redis cache ─────────────────────────────────────────
@@ -185,7 +188,7 @@
         _userDataDir = cfgData.user_data_dir;
         sourceBtnUserData.disabled = false;
         sourceBtnUserData.title    = `User data volume: ${cfgData.user_data_dir}`;
-        btnDlcFromServer.disabled  = false;
+        btnDlcFromServer.classList.remove("hidden");
         btnDlcFromServer.title     = `Load config.yaml from user data: ${cfgData.user_data_dir}`;
       }
     } catch (err) {
@@ -508,24 +511,48 @@
     }
   });
 
-  // ── DLC config.yaml upload + editor ─────────────────────────
-  const dlcConfigInput       = document.getElementById("dlc-config-input");
+  // ── DLC bar + config editor ──────────────────────────────────
+  const dlcDot           = document.getElementById("dlc-dot");
+  const dlcLabel         = document.getElementById("dlc-label");
+  const dlcMeta          = document.getElementById("dlc-meta");
+  const btnDlcFromServer = document.getElementById("btn-dlc-from-server");
+  const btnDlcClear      = document.getElementById("btn-dlc-clear");
+  const dlcConfigInput   = document.getElementById("dlc-config-input");
+  const dlcConfigStatus  = document.getElementById("dlc-config-status");
+
+  const dlcConfigCard    = document.getElementById("dlc-config-card");
   const dlcConfigPathDisplay = document.getElementById("dlc-config-path-display");
-  const dlcConfigStatus      = document.getElementById("dlc-config-status");
   const dlcConfigEditor      = document.getElementById("dlc-config-editor");
   const saveDlcConfigBtn     = document.getElementById("save-dlc-config-btn");
   const dlcConfigSaveStatus  = document.getElementById("dlc-config-save-status");
-  const btnDlcFromServer     = document.getElementById("btn-dlc-from-server");
+
+  function applyDlcState(configName) {
+    if (configName) {
+      dlcDot.dataset.state = "ready";
+      dlcLabel.textContent = "DLC config loaded";
+      dlcMeta.textContent  = configName;
+      btnDlcClear.classList.remove("hidden");
+      dlcConfigCard.classList.remove("hidden");
+    } else {
+      dlcDot.dataset.state = "none";
+      dlcLabel.textContent = "No DLC config";
+      dlcMeta.textContent  = "";
+      btnDlcClear.classList.add("hidden");
+      dlcConfigCard.classList.add("hidden");
+    }
+  }
 
   async function loadDlcConfig() {
     try {
       const res  = await fetch("/session/dlc-config");
-      if (!res.ok) return;   // no session or no DLC config yet — fine
+      if (!res.ok) { applyDlcState(null); return; }
       const data = await res.json();
       dlcConfigPathDisplay.textContent = data.dlc_config_name || "";
       if (data.content) dlcConfigEditor.value = data.content;
+      applyDlcState(data.dlc_config_name || "config.yaml");
     } catch (err) {
       console.error("loadDlcConfig error:", err);
+      applyDlcState(null);
     }
   }
 
@@ -549,12 +576,7 @@
       } else {
         dlcConfigStatus.textContent = "✓ Loaded";
         dlcConfigStatus.className   = "dlc-config-status ok";
-        dlcConfigPathDisplay.textContent = data.dlc_config_name || file.name;
-        setTimeout(() => {
-          dlcConfigStatus.textContent = "";
-          dlcConfigStatus.className   = "dlc-config-status";
-        }, 3000);
-        // Reload editor content after upload
+        setTimeout(() => { dlcConfigStatus.textContent = ""; dlcConfigStatus.className = "dlc-config-status"; }, 3000);
         loadDlcConfig();
       }
     } catch (err) {
@@ -563,10 +585,24 @@
     }
   });
 
+  btnDlcClear.addEventListener("click", async () => {
+    if (!confirm("Remove DLC config from the active session?")) return;
+    try {
+      const res = await fetch("/session/dlc-config", { method: "DELETE" });
+      if (res.ok) {
+        dlcConfigEditor.value = "";
+        dlcConfigPathDisplay.textContent = "";
+        applyDlcState(null);
+      }
+    } catch (err) {
+      console.error("Clear DLC config error:", err);
+    }
+  });
+
   saveDlcConfigBtn.addEventListener("click", async () => {
-    saveDlcConfigBtn.disabled          = true;
-    dlcConfigSaveStatus.textContent    = "Saving…";
-    dlcConfigSaveStatus.className      = "config-save-status";
+    saveDlcConfigBtn.disabled       = true;
+    dlcConfigSaveStatus.textContent = "Saving…";
+    dlcConfigSaveStatus.className   = "config-save-status";
     try {
       const res  = await fetch("/session/dlc-config", {
         method:  "PATCH",
@@ -594,37 +630,28 @@
   });
 
   // ── DLC server-side YAML picker ──────────────────────────────
-  const dlcServerPicker    = document.getElementById("dlc-server-picker");
-  const dlcPickerBreadcrumb= document.getElementById("dlc-picker-breadcrumb");
-  const dlcPickerSubdirs   = document.getElementById("dlc-picker-subdirs");
-  const dlcPickerConfigs   = document.getElementById("dlc-picker-configs");
-  const dlcPickerCloseBtn  = document.getElementById("dlc-picker-close-btn");
+  const dlcServerPicker     = document.getElementById("dlc-server-picker");
+  const dlcPickerBreadcrumb = document.getElementById("dlc-picker-breadcrumb");
+  const dlcPickerSubdirs    = document.getElementById("dlc-picker-subdirs");
+  const dlcPickerConfigs    = document.getElementById("dlc-picker-configs");
+  const dlcPickerCloseBtn   = document.getElementById("dlc-picker-close-btn");
 
-  function _closeDlcPicker() {
-    dlcServerPicker.classList.add("hidden");
-  }
-
-  function _openDlcPicker() {
-    dlcServerPicker.classList.remove("hidden");
-    _refreshDlcPickerNav(_userDataDir);
-  }
+  function _closeDlcPicker() { dlcServerPicker.classList.add("hidden"); }
+  function _openDlcPicker()  { dlcServerPicker.classList.remove("hidden"); _refreshDlcPickerNav(_userDataDir); }
 
   async function _refreshDlcPickerNav(path) {
-    // Breadcrumb
     const baseName = _userDataDir.split("/").filter(Boolean).pop() || "user-data";
     const rel = path.substring(_userDataDir.length).split("/").filter(Boolean);
     let crumbHTML = `<button class="picker-bc-seg" data-path="${_userDataDir}">${baseName}</button>`;
     let cumPath = _userDataDir;
     rel.forEach((part, i) => {
       cumPath += "/" + part;
-      const isLast = (i === rel.length - 1);
       crumbHTML += `<span class="picker-bc-sep">›</span>`;
-      crumbHTML += `<button class="picker-bc-seg${isLast ? " active" : ""}" data-path="${cumPath}">${part}</button>`;
+      crumbHTML += `<button class="picker-bc-seg${i === rel.length - 1 ? " active" : ""}" data-path="${cumPath}">${part}</button>`;
     });
     dlcPickerBreadcrumb.innerHTML = crumbHTML;
-    dlcPickerBreadcrumb.querySelectorAll(".picker-bc-seg").forEach(seg => {
-      seg.addEventListener("click", () => _refreshDlcPickerNav(seg.dataset.path));
-    });
+    dlcPickerBreadcrumb.querySelectorAll(".picker-bc-seg").forEach(seg =>
+      seg.addEventListener("click", () => _refreshDlcPickerNav(seg.dataset.path)));
 
     dlcPickerSubdirs.innerHTML = '<span class="picker-loading">Loading…</span>';
     dlcPickerConfigs.innerHTML = "";
@@ -633,49 +660,31 @@
       const res  = await fetch(`/fs/list-configs?path=${encodeURIComponent(path)}&ext=.yaml`);
       const data = await res.json();
 
-      // Subdirs
       dlcPickerSubdirs.innerHTML = "";
       if (path !== _userDataDir) {
         const upBtn = document.createElement("button");
-        upBtn.className   = "picker-subfolder-chip up";
-        upBtn.textContent = "..";
-        upBtn.title       = "Go up one level";
-        const parent = path.split("/").slice(0, -1).join("/") || "/";
-        upBtn.addEventListener("click", () => _refreshDlcPickerNav(parent));
+        upBtn.className = "picker-subfolder-chip up"; upBtn.textContent = ".."; upBtn.title = "Go up";
+        upBtn.addEventListener("click", () => _refreshDlcPickerNav(path.split("/").slice(0, -1).join("/") || "/"));
         dlcPickerSubdirs.appendChild(upBtn);
       }
-
       const subs = res.ok ? (data.subdirs || []) : [];
       if (subs.length === 0 && dlcPickerSubdirs.children.length === 0) {
-        const msg = document.createElement("span");
-        msg.className   = "picker-no-items";
-        msg.textContent = "No subfolders";
-        dlcPickerSubdirs.appendChild(msg);
+        const msg = document.createElement("span"); msg.className = "picker-no-items"; msg.textContent = "No subfolders"; dlcPickerSubdirs.appendChild(msg);
       } else {
         subs.forEach(name => {
-          const chip = document.createElement("button");
-          chip.className   = "picker-subfolder-chip";
-          chip.textContent = name;
-          chip.title       = `Navigate into ${name}/`;
+          const chip = document.createElement("button"); chip.className = "picker-subfolder-chip"; chip.textContent = name; chip.title = `Navigate into ${name}/`;
           chip.addEventListener("click", () => _refreshDlcPickerNav(path + "/" + name));
           dlcPickerSubdirs.appendChild(chip);
         });
       }
 
-      // .yaml files
       dlcPickerConfigs.innerHTML = "";
       const configs = res.ok ? (data.configs || []) : [];
       if (configs.length === 0) {
-        const msg = document.createElement("span");
-        msg.className   = "picker-no-items";
-        msg.textContent = "No .yaml files here";
-        dlcPickerConfigs.appendChild(msg);
+        const msg = document.createElement("span"); msg.className = "picker-no-items"; msg.textContent = "No .yaml files here"; dlcPickerConfigs.appendChild(msg);
       } else {
         configs.forEach(name => {
-          const chip = document.createElement("button");
-          chip.className   = "picker-config-chip";
-          chip.textContent = name;
-          chip.title       = `Load ${name} as DLC config`;
+          const chip = document.createElement("button"); chip.className = "picker-config-chip"; chip.textContent = name; chip.title = `Load ${name}`;
           chip.addEventListener("click", () => _loadDlcConfigFromPath(path + "/" + name));
           dlcPickerConfigs.appendChild(chip);
         });
@@ -688,15 +697,12 @@
 
   async function _loadDlcConfigFromPath(configPath) {
     _closeDlcPicker();
-
     dlcConfigStatus.textContent = "Loading…";
     dlcConfigStatus.className   = "dlc-config-status";
-
     try {
       const res  = await fetch("/session/dlc-config/from-path", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ config_path: configPath }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config_path: configPath }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -705,11 +711,7 @@
       } else {
         dlcConfigStatus.textContent = "✓ Loaded";
         dlcConfigStatus.className   = "dlc-config-status ok";
-        dlcConfigPathDisplay.textContent = data.dlc_config_name || configPath.split("/").pop();
-        setTimeout(() => {
-          dlcConfigStatus.textContent = "";
-          dlcConfigStatus.className   = "dlc-config-status";
-        }, 3000);
+        setTimeout(() => { dlcConfigStatus.textContent = ""; dlcConfigStatus.className = "dlc-config-status"; }, 3000);
         loadDlcConfig();
       }
     } catch (err) {
@@ -860,7 +862,7 @@
         _userDataDir = data.user_data_dir;
         sourceBtnUserData.disabled = false;
         sourceBtnUserData.title    = `User data volume: ${data.user_data_dir}`;
-        btnDlcFromServer.disabled  = false;
+        btnDlcFromServer.classList.remove("hidden");
         btnDlcFromServer.title     = `Load config.yaml from user data: ${data.user_data_dir}`;
       }
     } catch (err) {

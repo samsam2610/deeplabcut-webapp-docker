@@ -34,9 +34,59 @@
     <span class="badge">v1.0</span>
   </header>
 
-  <!-- ─── Session bar ──────────────────────────────────────── -->
+  <!-- ─── DLC session bar ─────────────────────────────────────── -->
+  <div class="session-bar" id="dlc-bar">
+    <div class="session-status">
+      <span class="bar-label">DLC</span>
+      <span class="session-dot" id="dlc-dot" data-state="none"></span>
+      <div class="session-text">
+        <span id="dlc-label">No DLC config</span>
+        <span class="session-meta" id="dlc-meta"></span>
+      </div>
+    </div>
+    <div class="session-btns">
+      <label class="btn-sm btn-create" for="dlc-config-input" title="Upload a config.yaml to load DLC config">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+        Load config.yaml
+      </label>
+      <input type="file" id="dlc-config-input" accept=".yaml,.yml" />
+      <button class="btn-sm btn-server-pick hidden" id="btn-dlc-from-server" title="Load config.yaml from server-side user data volume">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+        From server
+      </button>
+      <button class="btn-sm" id="btn-dlc-create-session" disabled title="Generate an Anipose session from this DLC config — coming soon">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Create Session
+      </button>
+      <button class="btn-sm btn-danger hidden" id="btn-dlc-clear" title="Remove DLC config from session">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        Clear
+      </button>
+      <span id="dlc-config-status" class="dlc-config-status"></span>
+    </div>
+  </div>
+
+  <!-- ─── DLC server-side YAML picker ─────────────────────────── -->
+  <div id="dlc-server-picker" class="session-server-picker hidden">
+    <div class="picker-inner">
+      <div class="picker-header">
+        <span class="picker-title">Select config.yaml from user data</span>
+        <button class="picker-close-btn" id="dlc-picker-close-btn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="dlc-picker-breadcrumb" class="picker-breadcrumb"></div>
+      <div class="picker-items">
+        <div id="dlc-picker-subdirs" class="picker-subdirs"></div>
+        <div id="dlc-picker-configs" class="picker-configs"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Anipose session bar ───────────────────────────────────── -->
   <div class="session-bar" id="session-bar">
     <div class="session-status">
+      <span class="bar-label">Anipose</span>
       <span class="session-dot" id="session-dot" data-state="none"></span>
       <div class="session-text">
         <span id="session-label">No active session</span>
@@ -44,7 +94,7 @@
       </div>
     </div>
     <div class="session-btns">
-      <label class="btn-sm btn-create" id="btn-create-session" for="session-config-input" title="Upload config.toml to initialise a DLC session">
+      <label class="btn-sm btn-create" id="btn-create-session" for="session-config-input" title="Upload config.toml to initialise an Anipose session">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         Create Session
       </label>
@@ -60,7 +110,7 @@
     </div>
   </div>
 
-  <!-- ─── Server-side config picker ──────────────────────────── -->
+  <!-- ─── Anipose server-side config picker ─────────────────────── -->
   <div id="session-server-picker" class="session-server-picker hidden">
     <div class="picker-inner">
       <div class="picker-header">
@@ -291,6 +341,22 @@
       </div>
     </section>
 
+    <!-- ─── DLC config editor (shown when DLC config is loaded) ── -->
+    <section class="card hidden" id="dlc-config-card">
+      <div class="config-header">
+        <h2>DeepLabCut Config</h2>
+        <span class="config-path" id="dlc-config-path-display"></span>
+      </div>
+      <textarea id="dlc-config-editor" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="Config content will appear here once loaded…"></textarea>
+      <div class="config-footer">
+        <span id="dlc-config-save-status" class="config-save-status"></span>
+        <button id="save-dlc-config-btn" class="btn-sm btn-create">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save Config
+        </button>
+      </div>
+    </section>
+
     <!-- ─── Config editor (shown when session is ready) ────── -->
     <section class="card hidden" id="config-card">
       <div class="config-header">
@@ -319,57 +385,6 @@
       </button>
       <span id="flush-cache-status" class="flush-cache-status"></span>
     </div>
-
-    <!-- ─── DLC config.yaml (always visible) ────────────────── -->
-    <section class="card" id="dlc-config-card">
-      <div class="config-header">
-        <h2>DeepLabCut Config</h2>
-        <span class="config-path" id="dlc-config-path-display"></span>
-      </div>
-      <p class="subtitle">Load a DeepLabCut <code>config.yaml</code> to associate with the active session, then edit and save below.</p>
-
-      <div class="dlc-config-row" style="margin-bottom:.9rem">
-        <label class="btn-sm btn-create dlc-config-upload-label" for="dlc-config-input">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
-          Load config.yaml
-        </label>
-        <input type="file" id="dlc-config-input" accept=".yaml,.yml" />
-        <button class="btn-sm btn-server-pick" id="btn-dlc-from-server" disabled title="Load config.yaml from server-side user data volume">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
-          From server
-        </button>
-        <button class="btn-sm" id="btn-dlc-create-session" disabled title="Generate an Anipose session from this DLC config — coming soon">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Create Session
-        </button>
-        <span id="dlc-config-status" class="dlc-config-status"></span>
-      </div>
-
-      <!-- ─── DLC server-side YAML picker (inline) ─────────── -->
-      <div id="dlc-server-picker" class="dlc-server-picker-panel hidden">
-        <div class="dlc-picker-header">
-          <span class="dlc-picker-title">Select config.yaml from user data</span>
-          <button class="picker-close-btn" id="dlc-picker-close-btn">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-        <div id="dlc-picker-breadcrumb" class="picker-breadcrumb"></div>
-        <div class="picker-items">
-          <div id="dlc-picker-subdirs" class="picker-subdirs"></div>
-          <div id="dlc-picker-configs" class="picker-configs"></div>
-        </div>
-      </div>
-
-      <textarea id="dlc-config-editor" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="Load a config.yaml to view and edit its contents…"></textarea>
-
-      <div class="config-footer">
-        <span id="dlc-config-save-status" class="config-save-status"></span>
-        <button id="save-dlc-config-btn" class="btn-sm btn-create">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-          Save Config
-        </button>
-      </div>
-    </section>
 
    </div><!-- /.main-stack -->
   </main>

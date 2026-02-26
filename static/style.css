@@ -118,7 +118,18 @@ body {
   min-width: 0;
 }
 
-#session-label {
+.bar-label {
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  opacity: .5;
+  flex-shrink: 0;
+  min-width: 3.2rem;
+}
+
+#session-label, #dlc-label {
   color: var(--text-dim);
   font-weight: 500;
   white-space: nowrap;

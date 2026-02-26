@@ -422,6 +422,19 @@ def save_dlc_config():
     return jsonify({"status": "saved", "dlc_config_path": str(dlc_config_path)})
 
 
+@app.route("/session/dlc-config", methods=["DELETE"])
+def clear_dlc_config():
+    """Remove DLC config association from the active session (file stays on disk)."""
+    raw = _redis_client.get(_SESSION_KEY)
+    if not raw:
+        return jsonify({"error": "No active session."}), 400
+    session_data = json.loads(raw)
+    session_data.pop("dlc_config_path", None)
+    session_data.pop("dlc_config_name", None)
+    _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+    return jsonify({"status": "cleared"})
+
+
 @app.route("/session/dlc-config/from-path", methods=["POST"])
 def load_dlc_config_from_path():
     """
