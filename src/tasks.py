@@ -360,11 +360,7 @@ def process_filter_3d(self, session_path: str, config_path: str):
     # ── Load config ──────────────────────────────────────────────
     config_local = os.path.join(session_path, "config.toml")
     try:
-        try:
-            with open(config_local, "rb") as _f:
-                config = load_config(config_local)
-        except ImportError:
-            config = load_config(config_local)
+        config = load_config(config_local)
     except Exception as exc:
         raise RuntimeError(f"Failed to parse config.toml: {exc}")
     
@@ -399,14 +395,9 @@ def process_organize_for_anipose(self, session_path: str, scorer: str = "User"):
     # ── Load config ──────────────────────────────────────────────
     config_local = os.path.join(session_path, "config.toml")
     try:
-        try:
-            with open(config_local, "rb") as _f:
-                config = load_config(config_local)
-        except ImportError:
-            config = load_config(config_local)
+        config = load_config(config_local)
     except Exception as exc:
         raise RuntimeError(f"Failed to parse config.toml: {exc}")
-
 
     try:
         folder_list = sorted([
@@ -449,11 +440,7 @@ def process_convert_mediapipe_csv_to_h5(self, session_path: str, scorer: str = "
     # ── Load config ──────────────────────────────────────────────
     config_local = os.path.join(session_path, "config.toml")
     try:
-        try:
-            with open(config_local, "rb") as _f:
-                config = load_config(config_local)
-        except ImportError:
-            config = load_config(config_local)
+        config = load_config(config_local)
     except Exception as exc:
         raise RuntimeError(f"Failed to parse config.toml: {exc}")
 
