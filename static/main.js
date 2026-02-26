@@ -24,7 +24,7 @@
     const isIdle = (s === "none" || s === "error");
 
     if (s === "none") {
-      sessionLabel.textContent = "No active session";
+      sessionLabel.textContent = "No active Anipose session";
       sessionMeta.textContent  = "";
       btnCreate.classList.remove("hidden");
       btnClear.classList.add("hidden");
@@ -530,7 +530,7 @@
   function applyDlcState(configName) {
     if (configName) {
       dlcDot.dataset.state = "ready";
-      dlcLabel.textContent = "DLC config loaded";
+      dlcLabel.textContent = "DLC session active";
       dlcMeta.textContent  = configName;
       btnDlcLoad.classList.add("hidden");
       btnDlcFromServer.classList.add("hidden");
@@ -538,7 +538,7 @@
       dlcConfigCard.classList.remove("hidden");
     } else {
       dlcDot.dataset.state = "none";
-      dlcLabel.textContent = "No DLC config";
+      dlcLabel.textContent = "No active DLC session";
       dlcMeta.textContent  = "";
       btnDlcLoad.classList.remove("hidden");
       btnDlcFromServer.classList.toggle("hidden", _userDataDir === null);

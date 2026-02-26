@@ -152,6 +152,14 @@ body {
   flex-shrink: 0;
 }
 
+/* Pin both primary session-create buttons to the same width so
+   the "From server" button aligns vertically across both bars. */
+#btn-create-session,
+#btn-dlc-load {
+  min-width: 11rem;
+  justify-content: center;
+}
+
 .btn-sm {
   display: inline-flex;
   align-items: center;
