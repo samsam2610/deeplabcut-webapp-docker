@@ -1012,7 +1012,8 @@ button[type="submit"]:hover .btn-arrow {
   white-space: nowrap;
 }
 
-#config-editor {
+#config-editor,
+#dlc-config-editor {
   width: 100%;
   min-height: 260px;
   margin-top: 1rem;
@@ -1032,7 +1033,8 @@ button[type="submit"]:hover .btn-arrow {
   overflow-x: auto;
 }
 
-#config-editor:focus {
+#config-editor:focus,
+#dlc-config-editor:focus {
   border-color: var(--accent);
 }
 
@@ -1149,8 +1151,6 @@ button[type="submit"]:hover .btn-arrow {
 .detect-dims-status.err { color: var(--danger); }
 
 /* ── DLC config card ─────────────────────────────────────────── */
-#dlc-config-editor { height: 28rem; }
-
 .dlc-config-header {
   display: flex;
   align-items: baseline;
