@@ -1548,3 +1548,111 @@ footer {
   color: var(--accent);
   background: rgba(110,231,183,.04);
 }
+
+/* ── Frame Extractor ─────────────────────────────────────────── */
+
+.fe-video-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: .4rem;
+  background: var(--surface-2);
+}
+
+.fe-video-item {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .38rem .65rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+  font-size: .82rem;
+}
+.fe-video-item:hover {
+  background: rgba(110,231,183,.06);
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+.fe-video-item.active {
+  background: rgba(110,231,183,.1);
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+.fe-video-item svg { flex-shrink: 0; color: var(--text-dim); }
+.fe-video-item.active svg { color: var(--accent); }
+
+.fe-video-wrap {
+  width: 100%;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: .75rem;
+  border: 1px solid var(--border);
+}
+
+#fe-video {
+  width: 100%;
+  max-height: 320px;
+  display: block;
+  object-fit: contain;
+}
+
+.fe-controls {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  margin-bottom: .5rem;
+  flex-wrap: wrap;
+}
+
+.fe-ctrl-btn {
+  padding: .32rem .6rem;
+  min-width: 2.2rem;
+  justify-content: center;
+}
+
+.fe-frame-counter {
+  font-family: var(--mono);
+  font-size: .75rem;
+  color: var(--text-dim);
+  margin-left: .25rem;
+}
+
+.fe-time-display {
+  font-family: var(--mono);
+  font-size: .75rem;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+
+.fe-seek {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+  height: 4px;
+  margin-bottom: .25rem;
+}
+
+.fe-extract-count {
+  font-family: var(--mono);
+  font-size: .78rem;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.fe-extract-status {
+  display: block;
+  font-family: var(--mono);
+  font-size: .74rem;
+  color: var(--text-dim);
+  margin-top: .35rem;
+  min-height: 1.1rem;
+}
+.fe-extract-status.ok  { color: var(--accent); }
+.fe-extract-status.err { color: var(--danger); }

@@ -528,6 +528,7 @@
   const dlcSelectStatus     = document.getElementById("dlc-select-status");
   const dlcPipelineSection  = document.getElementById("dlc-pipeline-section");
   const dlcNoConfigMsg      = document.getElementById("dlc-no-config-msg");
+  const dlcFrameExtractLaunch = document.getElementById("dlc-frame-extract-launch");
   const dlcActivePath       = document.getElementById("dlc-active-path");
   const dlcPipelineFolders  = document.getElementById("dlc-pipeline-folders");
   const dlcRefreshBtn       = document.getElementById("dlc-refresh-btn");
@@ -545,6 +546,7 @@
       btnDlcClear.classList.add("hidden");
       dlcPipelineSection.classList.add("hidden");
       dlcNoConfigMsg.classList.add("hidden");
+      dlcFrameExtractLaunch.classList.add("hidden");
     } else {
       dlcDot.dataset.state = "ready";
       dlcLabel.textContent = data.has_config ? "DLC project active" : "DLC project (no config.yaml)";
@@ -557,10 +559,12 @@
         dlcActivePath.textContent = data.project_path || "";
         dlcPipelineSection.classList.remove("hidden");
         dlcNoConfigMsg.classList.add("hidden");
+        dlcFrameExtractLaunch.classList.remove("hidden");
         _browseDlcPipeline();
       } else {
         dlcPipelineSection.classList.add("hidden");
         dlcNoConfigMsg.classList.remove("hidden");
+        dlcFrameExtractLaunch.classList.add("hidden");
       }
 
       // Keep card open
@@ -1505,6 +1509,249 @@
     progressTitle.textContent = "Processing";  // reset title for next run
     actionBtns.forEach(b => { b.disabled = false; });
   });
+
+  // ── Frame Extractor ──────────────────────────────────────────
+  (function () {
+    const feCard        = document.getElementById("frame-extractor-card");
+    const feOpenBtn     = document.getElementById("btn-open-frame-extractor");
+    const feCloseBtn    = document.getElementById("btn-close-frame-extractor");
+    const feBtnProject  = document.getElementById("fe-btn-from-project");
+    const feBtnUpload   = document.getElementById("fe-btn-upload");
+    const feProjectVids = document.getElementById("fe-project-videos");
+    const feVideoList   = document.getElementById("fe-video-list");
+    const feUploadSec   = document.getElementById("fe-upload-section");
+    const feFileInput   = document.getElementById("fe-video-file-input");
+    const feUploadStatus= document.getElementById("fe-upload-status");
+    const fePlayerSec   = document.getElementById("fe-player-section");
+    const feVideo       = document.getElementById("fe-video");
+    const feCanvas      = document.getElementById("fe-canvas");
+    const feBtnPlay     = document.getElementById("fe-btn-play");
+    const fePlayIcon    = document.getElementById("fe-play-icon");
+    const fePauseIcon   = document.getElementById("fe-pause-icon");
+    const feBtnPrev     = document.getElementById("fe-btn-prev");
+    const feBtnNext     = document.getElementById("fe-btn-next");
+    const feFrameCounter= document.getElementById("fe-frame-counter");
+    const feTimeDisplay = document.getElementById("fe-time-display");
+    const feSeek        = document.getElementById("fe-seek");
+    const feBtnExtract  = document.getElementById("fe-btn-extract");
+    const feExtractCount= document.getElementById("fe-extract-count");
+    const feExtractStatus = document.getElementById("fe-extract-status");
+
+    let _feFps         = 30;
+    let _feFrameCount  = 0;
+    let _feCurrentVideo= null; // filename string
+    let _feExtracted   = 0;
+    let _feSeekDragging= false;
+
+    // ── Open / close ────────────────────────────────────────────
+    feOpenBtn.addEventListener("click", () => {
+      feCard.classList.remove("hidden");
+      feCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      _feLoadProjectVideos();
+    });
+
+    feCloseBtn.addEventListener("click", () => {
+      feCard.classList.add("hidden");
+      feVideo.pause();
+      feVideo.src = "";
+      fePlayerSec.classList.add("hidden");
+      _feCurrentVideo = null;
+    });
+
+    // ── Source toggle ────────────────────────────────────────────
+    feBtnProject.addEventListener("click", () => {
+      feBtnProject.classList.add("active");
+      feBtnUpload.classList.remove("active");
+      feProjectVids.classList.remove("hidden");
+      feUploadSec.classList.add("hidden");
+      _feLoadProjectVideos();
+    });
+
+    feBtnUpload.addEventListener("click", () => {
+      feBtnUpload.classList.add("active");
+      feBtnProject.classList.remove("active");
+      feUploadSec.classList.remove("hidden");
+      feProjectVids.classList.add("hidden");
+    });
+
+    // ── List project videos ──────────────────────────────────────
+    async function _feLoadProjectVideos() {
+      feVideoList.innerHTML = '<p class="explorer-empty">Loading…</p>';
+      try {
+        const res  = await fetch("/dlc/project/videos");
+        const data = await res.json();
+        if (data.error) { feVideoList.innerHTML = `<p class="explorer-empty">${data.error}</p>`; return; }
+        if (!data.videos.length) { feVideoList.innerHTML = '<p class="explorer-empty">No videos in project videos/ folder.</p>'; return; }
+
+        feVideoList.innerHTML = "";
+        data.videos.forEach(v => {
+          const item = document.createElement("div");
+          item.className = "fe-video-item";
+          item.innerHTML = `
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2" width="20" height="20" rx="3"/>
+              <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/>
+            </svg>
+            <span>${v.name}</span>`;
+          item.addEventListener("click", () => _feSelectProjectVideo(v.name, item));
+          feVideoList.appendChild(item);
+        });
+      } catch (err) {
+        feVideoList.innerHTML = `<p class="explorer-empty">Error: ${err.message}</p>`;
+      }
+    }
+
+    async function _feSelectProjectVideo(filename, itemEl) {
+      // Update active state
+      feVideoList.querySelectorAll(".fe-video-item").forEach(el => el.classList.remove("active"));
+      itemEl.classList.add("active");
+
+      _feCurrentVideo = filename;
+      _feExtracted = 0;
+      feExtractCount.textContent = "0 frames saved";
+      feExtractStatus.textContent = "";
+      feExtractStatus.className = "fe-extract-status";
+
+      // Fetch video metadata (fps, frame count)
+      try {
+        const res  = await fetch(`/dlc/project/video-info/${encodeURIComponent(filename)}`);
+        const info = await res.json();
+        _feFps        = info.fps || 30;
+        _feFrameCount = info.frame_count || 0;
+      } catch (_) {
+        _feFps = 30; _feFrameCount = 0;
+      }
+
+      feVideo.src = `/dlc/project/video-stream/${encodeURIComponent(filename)}`;
+      feVideo.load();
+      fePlayerSec.classList.remove("hidden");
+      _feUpdateFrameDisplay();
+    }
+
+    // ── File upload ──────────────────────────────────────────────
+    feFileInput.addEventListener("change", async () => {
+      const file = feFileInput.files[0];
+      if (!file) return;
+      feUploadStatus.textContent = "Uploading…";
+      const fd = new FormData();
+      fd.append("video", file);
+      try {
+        const res  = await fetch("/dlc/project/video-upload", { method: "POST", body: fd });
+        const data = await res.json();
+        if (data.error) { feUploadStatus.textContent = `Error: ${data.error}`; return; }
+        feUploadStatus.textContent = `Saved as ${data.saved}`;
+        _feCurrentVideo = data.saved;
+        _feExtracted = 0;
+        feExtractCount.textContent = "0 frames saved";
+        feExtractStatus.textContent = "";
+        feExtractStatus.className = "fe-extract-status";
+
+        try {
+          const res2  = await fetch(`/dlc/project/video-info/${encodeURIComponent(data.saved)}`);
+          const info  = await res2.json();
+          _feFps        = info.fps || 30;
+          _feFrameCount = info.frame_count || 0;
+        } catch (_) { _feFps = 30; _feFrameCount = 0; }
+
+        feVideo.src = `/dlc/project/video-stream/${encodeURIComponent(data.saved)}`;
+        feVideo.load();
+        fePlayerSec.classList.remove("hidden");
+        _feUpdateFrameDisplay();
+      } catch (err) {
+        feUploadStatus.textContent = `Upload failed: ${err.message}`;
+      }
+      feFileInput.value = "";
+    });
+
+    // ── Video event listeners ────────────────────────────────────
+    feVideo.addEventListener("timeupdate", () => {
+      if (!_feSeekDragging) _feUpdateFrameDisplay();
+    });
+
+    feVideo.addEventListener("play",  () => { fePlayIcon.classList.add("hidden"); fePauseIcon.classList.remove("hidden"); });
+    feVideo.addEventListener("pause", () => { fePlayIcon.classList.remove("hidden"); fePauseIcon.classList.add("hidden"); });
+    feVideo.addEventListener("ended", () => { fePlayIcon.classList.remove("hidden"); fePauseIcon.classList.add("hidden"); });
+
+    function _feUpdateFrameDisplay() {
+      const t     = feVideo.currentTime;
+      const frame = Math.round(t * _feFps);
+      const total = _feFrameCount || Math.round((feVideo.duration || 0) * _feFps);
+      feFrameCounter.textContent = `Frame ${frame} / ${total}`;
+      feTimeDisplay.textContent  = `${t.toFixed(3)} s`;
+      if (feVideo.duration > 0 && !_feSeekDragging) {
+        feSeek.value = Math.round((t / feVideo.duration) * 1000);
+      }
+    }
+
+    // ── Controls ─────────────────────────────────────────────────
+    feBtnPlay.addEventListener("click", () => {
+      if (feVideo.paused) feVideo.play(); else feVideo.pause();
+    });
+
+    feBtnPrev.addEventListener("click", () => {
+      feVideo.pause();
+      feVideo.currentTime = Math.max(0, feVideo.currentTime - 1 / _feFps);
+    });
+
+    feBtnNext.addEventListener("click", () => {
+      feVideo.pause();
+      feVideo.currentTime = Math.min(feVideo.duration || 0, feVideo.currentTime + 1 / _feFps);
+    });
+
+    // Keyboard frame stepping when player is visible
+    document.addEventListener("keydown", e => {
+      if (fePlayerSec.classList.contains("hidden")) return;
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.key === "ArrowLeft")  { e.preventDefault(); feBtnPrev.click(); }
+      if (e.key === "ArrowRight") { e.preventDefault(); feBtnNext.click(); }
+      if (e.key === " ")          { e.preventDefault(); feBtnPlay.click(); }
+    });
+
+    // Seek slider
+    feSeek.addEventListener("mousedown", () => { _feSeekDragging = true; });
+    feSeek.addEventListener("touchstart", () => { _feSeekDragging = true; });
+    feSeek.addEventListener("input", () => {
+      if (feVideo.duration) feVideo.currentTime = (feSeek.value / 1000) * feVideo.duration;
+      _feUpdateFrameDisplay();
+    });
+    feSeek.addEventListener("change", () => { _feSeekDragging = false; });
+
+    // ── Extract frame ────────────────────────────────────────────
+    feBtnExtract.addEventListener("click", async () => {
+      if (!_feCurrentVideo) return;
+      if (feVideo.readyState < 2) { feExtractStatus.textContent = "Video not ready."; return; }
+
+      feCanvas.width  = feVideo.videoWidth;
+      feCanvas.height = feVideo.videoHeight;
+      feCanvas.getContext("2d").drawImage(feVideo, 0, 0);
+
+      feCanvas.toBlob(async blob => {
+        if (!blob) { feExtractStatus.textContent = "Could not capture frame."; feExtractStatus.className = "fe-extract-status err"; return; }
+        const fd = new FormData();
+        fd.append("video_name", _feCurrentVideo);
+        fd.append("frame", blob, "frame.png");
+        try {
+          feBtnExtract.disabled = true;
+          const res  = await fetch("/dlc/project/save-frame", { method: "POST", body: fd });
+          const data = await res.json();
+          if (data.error) {
+            feExtractStatus.textContent = `Error: ${data.error}`;
+            feExtractStatus.className = "fe-extract-status err";
+          } else {
+            _feExtracted = data.frame_count;
+            feExtractCount.textContent = `${_feExtracted} frame${_feExtracted !== 1 ? "s" : ""} saved`;
+            feExtractStatus.textContent = `Saved ${data.saved} → ${data.folder}/`;
+            feExtractStatus.className = "fe-extract-status ok";
+          }
+        } catch (err) {
+          feExtractStatus.textContent = `Network error: ${err.message}`;
+          feExtractStatus.className = "fe-extract-status err";
+        } finally {
+          feBtnExtract.disabled = false;
+        }
+      }, "image/png");
+    });
+  })();
 
   // ── Inspect Video ────────────────────────────────────────────
   document.getElementById("inspect-video-btn")?.addEventListener("click", () => {

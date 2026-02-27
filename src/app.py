@@ -1112,6 +1112,158 @@ def dlc_project_download():
                      mimetype="application/zip")
 
 
+# ── DLC Frame Extractor ───────────────────────────────────────────
+
+@app.route("/dlc/project/videos")
+def dlc_list_videos():
+    """List video files in the active DLC project's videos folder."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not project_path.is_dir():
+        return jsonify({"error": "Project directory not found."}), 404
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    videos_dir = project_path / "videos"
+    videos = []
+    if videos_dir.is_dir():
+        for f in sorted(videos_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in ALLOWED_VIDEO_EXT:
+                videos.append({"name": f.name, "size": f.stat().st_size})
+
+    return jsonify({"videos": videos})
+
+
+@app.route("/dlc/project/video-info/<path:filename>")
+def dlc_video_info(filename: str):
+    """Return FPS, frame count, width, height for a video in the videos folder."""
+    import cv2
+
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    video_path = (project_path / "videos" / filename).resolve()
+    if not video_path.is_relative_to((project_path / "videos").resolve()):
+        return jsonify({"error": "Invalid path."}), 400
+    if not video_path.is_file():
+        return jsonify({"error": "Video not found."}), 404
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return jsonify({"error": "Could not open video."}), 400
+
+    fps         = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width       = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+
+    return jsonify({"fps": fps, "frame_count": frame_count, "width": width, "height": height})
+
+
+@app.route("/dlc/project/video-stream/<path:filename>")
+def dlc_video_stream(filename: str):
+    """Stream a video file from the active DLC project's videos folder."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    videos_dir = (project_path / "videos").resolve()
+    video_path = (videos_dir / filename).resolve()
+    if not video_path.is_relative_to(videos_dir):
+        return jsonify({"error": "Invalid path."}), 400
+    if not video_path.is_file():
+        return jsonify({"error": "Video not found."}), 404
+    if video_path.suffix.lower() not in ALLOWED_VIDEO_EXT:
+        return jsonify({"error": "Unsupported video format."}), 400
+
+    return send_file(str(video_path), conditional=True)
+
+
+@app.route("/dlc/project/video-upload", methods=["POST"])
+def dlc_video_upload():
+    """Upload a video into the active DLC project's videos folder."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not project_path.is_dir():
+        return jsonify({"error": "Project directory not found."}), 404
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    video_file = request.files.get("video")
+    if not video_file or not video_file.filename:
+        return jsonify({"error": "No video file provided."}), 400
+    if not _valid_ext(video_file.filename, ALLOWED_VIDEO_EXT):
+        return jsonify({"error": "Unsupported video format."}), 400
+
+    videos_dir = project_path / "videos"
+    videos_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_name = secure_filename(video_file.filename)
+    video_file.save(str(videos_dir / safe_name))
+
+    return jsonify({"saved": safe_name}), 201
+
+
+@app.route("/dlc/project/save-frame", methods=["POST"])
+def dlc_save_frame():
+    """
+    Save an extracted video frame PNG to labeled-data/<video_stem>/.
+    Form fields: video_name (str), frame (PNG file).
+    Returns the saved filename and running frame count.
+    """
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not project_path.is_dir():
+        return jsonify({"error": "Project directory not found."}), 404
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    video_name = request.form.get("video_name", "").strip()
+    frame_file = request.files.get("frame")
+    if not video_name:
+        return jsonify({"error": "video_name is required."}), 400
+    if not frame_file:
+        return jsonify({"error": "frame image is required."}), 400
+
+    video_stem  = Path(secure_filename(video_name)).stem
+    labeled_dir = project_path / "labeled-data" / video_stem
+    labeled_dir.mkdir(parents=True, exist_ok=True)
+
+    existing_count = len([f for f in labeled_dir.iterdir() if f.suffix == ".png"])
+    frame_filename = f"img{existing_count:04d}.png"
+    frame_file.save(str(labeled_dir / frame_filename))
+
+    return jsonify({
+        "saved":       frame_filename,
+        "folder":      f"labeled-data/{video_stem}",
+        "frame_count": existing_count + 1,
+    }), 201
+
+
 # ── Visualization helpers ─────────────────────────────────────────
 
 def _natural_keys(text: str) -> list:
