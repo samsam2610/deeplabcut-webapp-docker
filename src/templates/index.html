@@ -313,6 +313,18 @@
         </button>
       </div>
 
+      <!-- ─── Inspect Video ──────────────────────────────────────── -->
+      <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+        <button id="inspect-video-btn" class="btn-action inspect-btn" style="width:100%;gap:.55rem">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/>
+            <path d="M21 21l-4.35-4.35"/>
+            <circle cx="11" cy="11" r="3" fill="currentColor" opacity=".25"/>
+          </svg>
+          <span>Inspect Video</span>
+        </button>
+      </div>
+
       <!-- ─── Operation progress (shown after a step is launched) ── -->
       <div id="operation-progress" class="hidden" style="margin-top:1.4rem">
         <div class="progress-header">
@@ -391,5 +403,11 @@
   </footer>
 
   <script src="/static/main.js"></script>
+
+  <!-- ─── Behavior Inspector full-screen overlay ───────────────── -->
+  <div id="inspector-overlay" class="hidden">
+    <button id="inspector-close-btn" onclick="closeInspector()">&#x2715; Close</button>
+    <iframe id="inspector-frame" src="" allowfullscreen></iframe>
+  </div>
 </body>
 </html>

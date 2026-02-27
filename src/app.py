@@ -1367,6 +1367,404 @@ def static_files(filename):
     return send_from_directory("static", filename)
 
 
+# ── Behavior Inspector page ───────────────────────────────────────
+@app.route("/inspector")
+def inspector_page():
+    return render_template("inspector.html")
+
+
+# ── Behavior Inspector adapter routes ────────────────────────────
+# These match the URL patterns expected by inspector/script.js and
+# map them to the existing project-based data in DATA_DIR.
+
+_inspector_tokens: set = set()
+
+
+def _inspector_project_dir(session: str) -> Path:
+    """Resolve DATA_DIR/<session> safely."""
+    p = (DATA_DIR / session).resolve()
+    if not p.is_relative_to(DATA_DIR.resolve()):
+        raise ValueError("Invalid session path.")
+    return p
+
+
+def _inspector_split_subpath(subpath: str):
+    """Split 'folderA|folderB/name' → (folder_parts, name).
+
+    folder_parts is a list of path components (may be empty for top-level).
+    """
+    subpath = subpath.lstrip("/")
+    if "/" in subpath:
+        folder_key, name = subpath.rsplit("/", 1)
+    else:
+        folder_key, name = "", subpath
+    parts = [p for p in folder_key.split("|") if p]
+    return parts, name
+
+
+def _inspector_load_config(project_dir: Path) -> dict:
+    cfg_path = project_dir / "config.toml"
+    if not cfg_path.is_file():
+        return {}
+    import toml as _toml
+    return _toml.load(str(cfg_path))
+
+
+@app.route("/metadata/<session>")
+def inspector_metadata(session: str):
+    """Return labeling scheme in index form for behavior inspector script."""
+    try:
+        project_dir = _inspector_project_dir(session)
+    except ValueError:
+        return jsonify({"error": "Invalid session."}), 400
+
+    config = _inspector_load_config(project_dir)
+    scheme = config.get("labeling", {}).get("scheme", [])
+    video_speed = config.get("converted_video_speed", 1)
+
+    bodyparts: list = []
+    for bp_list in scheme:
+        for bp in bp_list:
+            if bp not in bodyparts:
+                bodyparts.append(bp)
+    kps = {bp: i for i, bp in enumerate(bodyparts)}
+    idx_scheme = [[kps[bp] for bp in bp_list] for bp_list in scheme]
+
+    return jsonify({"video_speed": video_speed, "scheme": idx_scheme})
+
+
+@app.route("/get-trials/<session>")
+def inspector_get_trials(session: str):
+    """Return trial/folder structure for behavior inspector script."""
+    import os as _os
+    from collections import defaultdict as _dd
+
+    try:
+        project_dir = _inspector_project_dir(session)
+    except ValueError:
+        return jsonify({"error": "Invalid session."}), 400
+
+    if not project_dir.is_dir():
+        return jsonify({"error": f"Session not found: {session}"}), 404
+
+    config = _inspector_load_config(project_dir)
+    pipeline   = config.get("pipeline", {})
+    videos_raw = pipeline.get("videos_raw_mp4", pipeline.get("videos_raw", "videos-raw-mp4"))
+    vid_ext    = config.get("video_extension", "avi")
+    vid_exts   = {f".{vid_ext.lstrip('.')}", ".mp4", ".avi", ".mov", ".mkv"}
+
+    # Load behaviors.json for session/trial behavior metadata
+    behaviors_path = project_dir / "behaviors.json"
+    behaviors: dict = {}
+    if behaviors_path.is_file():
+        try:
+            with open(str(behaviors_path)) as _f:
+                behaviors = json.load(_f)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    session_behaviors_set: set = set()
+    trial_behaviors: dict = {}
+
+    folders_out = []
+    for root_str, dirs, _ in _os.walk(str(project_dir)):
+        dirs.sort()
+        root_path  = Path(root_str)
+        video_dir  = root_path / videos_raw
+        if not video_dir.is_dir():
+            continue
+
+        video_files = sorted(
+            [f for f in video_dir.iterdir()
+             if f.is_file() and f.suffix.lower() in vid_exts],
+            key=lambda p: _natural_keys(p.name),
+        )
+        if not video_files:
+            continue
+
+        rel = root_path.relative_to(project_dir)
+        folder_key = "|".join(rel.parts) if str(rel) != "." else ""
+
+        # Group by trial name
+        trial_groups: dict = _dd(list)
+        for vf in video_files:
+            tname = _get_video_name(config, vf.name)
+            cname = _get_cam_name(config, vf.name)
+            trial_groups[tname].append({"file": vf.name, "cam": cname})
+
+        files_out = []
+        for tname in sorted(trial_groups.keys(), key=_natural_keys):
+            cams = sorted(trial_groups[tname], key=lambda x: _natural_keys(x["cam"]))
+            files_out.append({
+                "vidname":  tname,
+                "camnames": [c["cam"] for c in cams],
+                "files":    [c["file"] for c in cams],
+            })
+            # Collect behavior info for this trial
+            rel_path = f"{session}/{folder_key}/{tname}"
+            folder_behaviors = behaviors.get(folder_key, {}).get(tname, {})
+            if folder_behaviors:
+                bnames = {b["behavior"] for b in folder_behaviors.values() if b.get("behavior")}
+                session_behaviors_set.update(bnames)
+                trial_behaviors[rel_path] = {b: True for b in bnames}
+
+        folders_out.append({"folder": folder_key, "files": files_out})
+
+    folders_out.sort(key=lambda x: _natural_keys(x["folder"]))
+
+    return jsonify({
+        "session":          session,
+        "folders":          folders_out,
+        "sessionBehaviors": sorted(session_behaviors_set),
+        "trialBehaviors":   trial_behaviors,
+    })
+
+
+@app.route("/pose3d/<session>/<path:subpath>")
+def inspector_pose3d(session: str, subpath: str):
+    """Return 3D pose as [n_frames, n_bodyparts, 3] for behavior inspector."""
+    import numpy as _np
+    import pandas as _pd
+
+    try:
+        project_dir = _inspector_project_dir(session)
+    except ValueError:
+        return jsonify({"error": "Invalid session."}), 400
+
+    folder_parts, vidname = _inspector_split_subpath(subpath)
+    csv_path = project_dir.joinpath(*folder_parts) / "pose-3d" / f"{vidname}.csv"
+    if not csv_path.is_file():
+        return jsonify([])
+
+    try:
+        data = _pd.read_csv(str(csv_path))
+    except Exception:
+        return jsonify([])
+
+    config     = _inspector_load_config(project_dir)
+    scheme     = config.get("labeling", {}).get("scheme", [])
+    bodyparts  = []
+    for bp_list in scheme:
+        for bp in bp_list:
+            if bp not in bodyparts:
+                bodyparts.append(bp)
+
+    if not bodyparts:
+        bodyparts = [c[:-2] for c in data.columns if c.endswith("_x")]
+
+    vecs = []
+    for bp in bodyparts:
+        cols = [f"{bp}_x", f"{bp}_y", f"{bp}_z"]
+        if not all(c in data.columns for c in cols):
+            continue
+        vec = data[cols].to_numpy(dtype=float)
+        err_col = f"{bp}_error"
+        if err_col in data.columns:
+            err = data[err_col].to_numpy(dtype=float)
+            err[~_np.isfinite(err)] = 1000.0
+            vec[err > 50] = _np.nan
+        vecs.append(vec)
+
+    if not vecs:
+        return jsonify([])
+
+    vecs = _np.array(vecs).swapaxes(0, 1)   # [n_frames, n_bps, 3]
+    m    = _np.nanmean(vecs, axis=0)
+    std  = float(_np.nanmedian(_np.diff(_np.nanpercentile(m, [25, 75], axis=0), axis=0)))
+    if std == 0:
+        std = 1.0
+    vecs = 0.3 * vecs / std
+    cm   = _np.nanmean(_np.nanmean(vecs, axis=1), axis=0)
+    vecs = vecs - cm
+    vecs[~_np.isfinite(vecs)] = 0.0
+
+    return jsonify(vecs.tolist())
+
+
+@app.route("/pose2dproj/<session>/<path:subpath>")
+def inspector_pose2dproj(_session: str, _subpath: str):
+    """Stub — 2D projections require aniposelib calibration (not yet integrated)."""
+    return jsonify({})
+
+
+@app.route("/video/<session>/<path:subpath>")
+def inspector_video(session: str, subpath: str):
+    """Serve a raw video file for the behavior inspector."""
+    try:
+        project_dir = _inspector_project_dir(session)
+    except ValueError:
+        return jsonify({"error": "Invalid session."}), 400
+
+    folder_parts, filename = _inspector_split_subpath(subpath)
+    config     = _inspector_load_config(project_dir)
+    pipeline   = config.get("pipeline", {})
+    videos_raw = pipeline.get("videos_raw_mp4", pipeline.get("videos_raw", "videos-raw-mp4"))
+
+    video_path = project_dir.joinpath(*folder_parts) / videos_raw / filename
+    if not video_path.is_file():
+        return jsonify({"error": "Video not found."}), 404
+
+    mime_map = {
+        ".mp4": "video/mp4", ".avi": "video/x-msvideo",
+        ".mov": "video/quicktime", ".mkv": "video/x-matroska",
+        ".mpg": "video/mpeg", ".mpeg": "video/mpeg",
+    }
+    mimetype = mime_map.get(video_path.suffix.lower(), "application/octet-stream")
+    return send_from_directory(str(video_path.parent), video_path.name,
+                               mimetype=mimetype, conditional=True)
+
+
+@app.route("/framerate/<session>/<path:subpath>")
+def inspector_framerate(session: str, subpath: str):
+    """Return video FPS as a bare number (required by inspector script)."""
+    import cv2 as _cv2
+
+    try:
+        project_dir = _inspector_project_dir(session)
+    except ValueError:
+        return jsonify({"error": "Invalid session."}), 400
+
+    folder_parts, filename = _inspector_split_subpath(subpath)
+    config     = _inspector_load_config(project_dir)
+    pipeline   = config.get("pipeline", {})
+    videos_raw = pipeline.get("videos_raw_mp4", pipeline.get("videos_raw", "videos-raw-mp4"))
+
+    video_path = project_dir.joinpath(*folder_parts) / videos_raw / filename
+    if not video_path.is_file():
+        return jsonify({"error": "Video not found."}), 404
+
+    cap = _cv2.VideoCapture(str(video_path))
+    fps = cap.get(_cv2.CAP_PROP_FPS)
+    cap.release()
+    return jsonify(fps if fps > 0 else 30.0)
+
+
+@app.route("/behavior/<session>/<path:subpath>")
+def inspector_behavior(session: str, subpath: str):
+    """Return behavior bouts for a specific trial from behaviors.json."""
+    try:
+        project_dir = _inspector_project_dir(session)
+    except ValueError:
+        return jsonify({"error": "Invalid session."}), 400
+
+    folder_parts, vidname = _inspector_split_subpath(subpath)
+    folder_key = "|".join(folder_parts)
+
+    beh_path = project_dir / "behaviors.json"
+    if not beh_path.is_file():
+        return jsonify({})
+
+    try:
+        with open(str(beh_path)) as _f:
+            behaviors = json.load(_f)
+    except (json.JSONDecodeError, OSError):
+        return jsonify({})
+
+    return jsonify(behaviors.get(folder_key, {}).get(vidname, {}))
+
+
+@app.route("/download-behavior/<session>")
+def inspector_download_behavior(session: str):
+    """Download the full behaviors.json for a session."""
+    try:
+        project_dir = _inspector_project_dir(session)
+    except ValueError:
+        return jsonify({"error": "Invalid session."}), 400
+
+    beh_path = project_dir / "behaviors.json"
+    if not beh_path.is_file():
+        return jsonify({})
+
+    try:
+        with open(str(beh_path)) as _f:
+            behaviors = json.load(_f)
+    except (json.JSONDecodeError, OSError):
+        return jsonify({})
+
+    return jsonify(behaviors)
+
+
+@app.route("/unlock-editing", methods=["POST"])
+def inspector_unlock_editing():
+    """Validate password and issue a session token for behavior editing."""
+    import string as _string
+    import random as _random
+    body = request.get_json(force=True) or {}
+    password = body.get("password", "")
+    server_pw = os.environ.get("INSPECTOR_PASSWORD", "password")
+    token = -1
+    if password == server_pw:
+        token = "".join(_random.choices(_string.ascii_letters + "_", k=10))
+        _inspector_tokens.add(token)
+    valid = token in _inspector_tokens
+    return jsonify({"token": token, "valid": valid})
+
+
+@app.route("/get-token/<token>")
+def inspector_get_token(token: str):
+    """Check whether a token is still valid."""
+    return jsonify({"valid": token in _inspector_tokens})
+
+
+@app.route("/update-behavior", methods=["POST"])
+def inspector_update_behavior():
+    """Apply behavior change-log from inspector to behaviors.json."""
+    from collections import defaultdict as _dd
+    body   = request.get_json(force=True) or {}
+    token  = body.get("token", "")
+    if token not in _inspector_tokens:
+        return "invalid token", 403
+
+    changes_by_session: dict = _dd(list)
+    for bout_changes in body.get("allBehaviorChanges", {}).values():
+        for change in bout_changes:
+            changes_by_session[change["session"]].append(change)
+
+    for sess, changes in changes_by_session.items():
+        try:
+            project_dir = _inspector_project_dir(sess)
+        except ValueError:
+            continue
+
+        beh_path = project_dir / "behaviors.json"
+        if beh_path.is_file():
+            try:
+                with open(str(beh_path)) as _f:
+                    beh_dict = json.load(_f)
+            except (json.JSONDecodeError, OSError):
+                beh_dict = {}
+        else:
+            beh_dict = {}
+
+        for change in changes:
+            mod = change.get("modification")
+            if mod == "added":
+                bout = change["new"]
+                fk, fn, bid = bout["folders"], bout["filename"], bout["bout_id"]
+                beh_dict.setdefault(fk, {}).setdefault(fn, {})[bid] = bout
+            elif mod == "removed":
+                bout = change["old"]
+                fk, fn, bid = bout["folders"], bout["filename"], bout["bout_id"]
+                try:
+                    del beh_dict[fk][fn][bid]
+                except KeyError:
+                    pass
+            else:
+                bout  = change["old"]
+                edits = change.get("new", {})
+                bout.update(edits)
+                fk, fn, bid = bout["folders"], bout["filename"], bout["bout_id"]
+                beh_dict.setdefault(fk, {}).setdefault(fn, {})[bid] = bout
+
+        try:
+            with open(str(beh_path), "w") as _f:
+                json.dump(beh_dict, _f, indent=4)
+        except OSError:
+            pass
+
+    return "behavior labels successfully updated"
+
+
 # ── Entry point ───────────────────────────────────────────────────
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)

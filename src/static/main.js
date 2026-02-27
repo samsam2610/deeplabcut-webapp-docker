@@ -1326,4 +1326,29 @@
     actionBtns.forEach(b => { b.disabled = false; });
   });
 
+  // ── Inspect Video ────────────────────────────────────────────
+  document.getElementById("inspect-video-btn")?.addEventListener("click", () => {
+    const projectId = folderSelect.value;
+    if (!projectId) {
+      alert("Select a project folder first.");
+      return;
+    }
+    const overlay = document.getElementById("inspector-overlay");
+    const frame   = document.getElementById("inspector-frame");
+    frame.src = `/inspector#${encodeURIComponent(projectId)}`;
+    overlay.classList.remove("hidden");
+  });
+
 })();
+
+function closeInspector() {
+  const overlay = document.getElementById("inspector-overlay");
+  const frame   = document.getElementById("inspector-frame");
+  overlay.classList.add("hidden");
+  frame.src = "";
+}
+
+// Handle close message posted from inside the inspector iframe
+window.addEventListener("message", e => {
+  if (e.data === "closeInspector") closeInspector();
+});
