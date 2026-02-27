@@ -2,3 +2,7 @@ flask==3.0.*
 gunicorn==21.*
 celery[redis]==5.3.*
 redis==5.*
+toml
+numpy
+pandas
+opencv-python-headless
