@@ -1500,15 +1500,27 @@ footer {
   color: var(--text);
 }
 
-/* ── Inspect button variant ──────────────────────────────────── */
-.btn-action.inspect-btn {
+/* ── Inspect button ──────────────────────────────────────────── */
+.inspect-btn {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
   justify-content: center;
-  font-size: .82rem;
+  gap: .55rem;
+  padding: .75rem 1rem;
   background: transparent;
-  border-color: var(--border-lit);
+  border: 1px solid var(--border-lit);
+  border-radius: var(--radius);
   color: var(--text-dim);
+  font-family: var(--font);
+  font-size: .82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color .2s, background .2s, color .2s;
+  width: 100%;
 }
-.btn-action.inspect-btn:hover {
+.inspect-btn:hover {
   border-color: var(--accent-dim);
   color: var(--accent);
+  background: rgba(110,231,183,.04);
 }
