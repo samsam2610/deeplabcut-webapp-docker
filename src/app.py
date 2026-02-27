@@ -1260,11 +1260,16 @@ def dlc_save_frame():
     except Exception:
         return jsonify({"error": "Invalid frame_data (expected base64)."}), 400
 
-    # Decode JPEG bytes → save losslessly as PNG (DLC expects PNG)
+    # Decode JPEG bytes → encode losslessly as PNG → write via Python (cv2.imwrite
+    # can silently return False on some systems; imencode + write_bytes is reliable)
     nparr = np.frombuffer(img_bytes, np.uint8)
     img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         return jsonify({"error": "Could not decode image data."}), 400
+
+    ok, png_buf = cv2.imencode(".png", img)
+    if not ok:
+        return jsonify({"error": "Could not encode frame as PNG."}), 500
 
     video_stem  = Path(secure_filename(video_name)).stem
     labeled_dir = project_path / "labeled-data" / video_stem
@@ -1272,7 +1277,7 @@ def dlc_save_frame():
 
     existing_count = len([f for f in labeled_dir.iterdir() if f.suffix == ".png"])
     frame_filename = f"img{existing_count:04d}.png"
-    cv2.imwrite(str(labeled_dir / frame_filename), img)
+    (labeled_dir / frame_filename).write_bytes(png_buf.tobytes())
 
     return jsonify({
         "saved":       frame_filename,
