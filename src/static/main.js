@@ -1749,7 +1749,7 @@
         } else {
           _feExtracted = data.frame_count;
           feExtractCount.textContent = `${_feExtracted} frame${_feExtracted !== 1 ? "s" : ""} saved`;
-          feExtractStatus.textContent = `Saved ${data.saved} → ${data.folder}/`;
+          feExtractStatus.textContent = `Saved ${data.saved} → ${data.abs_path}`;
           feExtractStatus.className = "fe-extract-status ok";
         }
       } catch (err) {

@@ -1282,6 +1282,7 @@ def dlc_save_frame():
     return jsonify({
         "saved":       frame_filename,
         "folder":      f"labeled-data/{video_stem}",
+        "abs_path":    str(labeled_dir / frame_filename),
         "frame_count": existing_count + 1,
     }), 201
 
