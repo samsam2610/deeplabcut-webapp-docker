@@ -28,8 +28,8 @@ ENV PATH="/home/appuser/.local/bin:${PATH}"
 
 # ---------- Application code ----------
 COPY --chown=appuser:appuser src/app.py .
-COPY --chown=appuser:appuser templates/ templates/
-COPY --chown=appuser:appuser static/ static/
+COPY --chown=appuser:appuser src/templates/ templates/
+COPY --chown=appuser:appuser src/static/ static/
 
 EXPOSE 5000
 
