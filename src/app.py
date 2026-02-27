@@ -39,7 +39,16 @@ app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2 GB max upload
 # ── Redis (direct client for session storage) ─────────────────────
 _REDIS_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
 _redis_client = _redis.Redis.from_url(_REDIS_URL, decode_responses=True)
-_SESSION_KEY = "webapp:session"
+_SESSION_KEY     = "webapp:session"
+_DLC_PROJECT_KEY = "webapp:dlc_project"
+
+# Standard DLC project pipeline folders
+DLC_PIPELINE_FOLDERS = [
+    ("Models",             "dlc-models"),
+    ("Labeled Data",       "labeled-data"),
+    ("Training Datasets",  "training-datasets"),
+    ("Videos",             "videos"),
+]
 
 # ── Celery (client-side only — worker is in tasks.py) ─────────────
 celery = Celery(
@@ -835,6 +844,272 @@ def _parse_pipeline_section(config_text: str) -> dict:
         if m:
             result[m.group(1)] = m.group(2)
     return result
+
+
+# ── DLC Project Manager ───────────────────────────────────────────
+
+def _dlc_project_security_check(p: Path) -> bool:
+    """Return True if p is inside an allowed data root."""
+    allowed_roots = [DATA_DIR.resolve(), USER_DATA_DIR.resolve()]
+    pr = p.resolve()
+    return any(pr == r or str(pr).startswith(str(r) + "/") for r in allowed_roots)
+
+
+@app.route("/dlc/project", methods=["GET"])
+def get_dlc_project():
+    """Return the current DLC project state."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"status": "none"}), 200
+    return jsonify(json.loads(raw)), 200
+
+
+@app.route("/dlc/project", methods=["POST"])
+def set_dlc_project():
+    """
+    Set the active DLC project by providing its server-side folder path.
+    Checks for config.yaml and returns project metadata.
+    Body: { "path": "<absolute_path_to_dlc_project_folder>" }
+    """
+    body = request.get_json(force=True) or {}
+    path_str = body.get("path", "").strip()
+    if not path_str:
+        return jsonify({"error": "path is required."}), 400
+
+    p = Path(path_str).resolve()
+    if not _dlc_project_security_check(p):
+        return jsonify({"error": "Access denied: path is outside allowed directories."}), 403
+    if not p.is_dir():
+        return jsonify({"error": f"Directory not found: {path_str}"}), 404
+
+    has_config  = (p / "config.yaml").is_file()
+    config_path = str(p / "config.yaml") if has_config else None
+
+    project_data = {
+        "project_path": str(p),
+        "project_name": p.name,
+        "has_config":   has_config,
+        "config_path":  config_path,
+    }
+    _redis_client.set(_DLC_PROJECT_KEY, json.dumps(project_data))
+    return jsonify(project_data), 200
+
+
+@app.route("/dlc/project", methods=["DELETE"])
+def clear_dlc_project():
+    """Clear the active DLC project session."""
+    _redis_client.delete(_DLC_PROJECT_KEY)
+    return jsonify({"status": "cleared"}), 200
+
+
+@app.route("/dlc/project/browse")
+def browse_dlc_project():
+    """List files in each DLC pipeline folder for the active DLC project."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not project_path.is_dir():
+        return jsonify({"error": "Project directory not found."}), 404
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    folders = []
+    for key, folder_name in DLC_PIPELINE_FOLDERS:
+        folder_path = project_path / folder_name
+        files = []
+        if folder_path.is_dir():
+            for item in sorted(folder_path.iterdir()):
+                if item.is_file() and not item.name.startswith("."):
+                    files.append({"name": item.name, "size": item.stat().st_size})
+        folders.append({
+            "key":    key,
+            "folder": folder_name,
+            "files":  files,
+            "exists": folder_path.is_dir(),
+        })
+
+    return jsonify({
+        "project_path": str(project_path),
+        "project_name": project_data.get("project_name", ""),
+        "has_config":   project_data.get("has_config", False),
+        "folders":      folders,
+    })
+
+
+@app.route("/dlc/project/config", methods=["GET"])
+def get_dlc_project_config():
+    """Return the raw text of the active DLC project's config.yaml."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+    project_data = json.loads(raw)
+    config_path  = Path(project_data.get("config_path", "") or "")
+    if not config_path.is_file():
+        return jsonify({"error": "config.yaml not found in project."}), 404
+    return jsonify({"content": config_path.read_text(), "config_path": str(config_path)})
+
+
+@app.route("/dlc/project/config", methods=["PATCH"])
+def save_dlc_project_config():
+    """Overwrite the active DLC project's config.yaml."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+    project_data = json.loads(raw)
+    config_path  = Path(project_data.get("config_path", "") or "")
+    if not config_path.is_file():
+        return jsonify({"error": "config.yaml not found in project."}), 404
+
+    body    = request.get_json(force=True) or {}
+    content = body.get("content", "")
+    if not content.strip():
+        return jsonify({"error": "Content cannot be empty."}), 400
+    config_path.write_text(content)
+    return jsonify({"status": "saved"})
+
+
+@app.route("/dlc/project/upload", methods=["POST"])
+def dlc_project_upload():
+    """
+    Upload files into a DLC pipeline folder of the active project.
+    Form fields: folder (one of the DLC pipeline folders), files[]
+    """
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not project_path.is_dir():
+        return jsonify({"error": "Project directory not found."}), 404
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    folder_name = request.form.get("folder", "").strip()
+    dlc_folder_names = [f for _, f in DLC_PIPELINE_FOLDERS]
+    if folder_name not in dlc_folder_names:
+        return jsonify({"error": f"Invalid DLC folder: '{folder_name}'."}), 400
+
+    files = request.files.getlist("files[]")
+    if not files or not files[0].filename:
+        return jsonify({"error": "No files provided."}), 400
+
+    target_dir = project_path / folder_name
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    saved = []
+    for f in files:
+        safe_name = secure_filename(f.filename)
+        f.save(str(target_dir / safe_name))
+        saved.append(safe_name)
+
+    return jsonify({"saved": saved, "folder": folder_name}), 201
+
+
+@app.route("/dlc/project/file", methods=["DELETE"])
+def dlc_project_delete_file():
+    """Delete a file from a DLC pipeline folder. Body: { folder, filename }"""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+
+    body        = request.get_json(force=True) or {}
+    folder_name = body.get("folder",   "").strip()
+    filename    = body.get("filename", "").strip()
+
+    dlc_folder_names = [f for _, f in DLC_PIPELINE_FOLDERS]
+    if folder_name not in dlc_folder_names:
+        return jsonify({"error": f"Invalid folder: '{folder_name}'."}), 400
+
+    target = (project_path / folder_name / filename).resolve()
+    if not target.is_relative_to(project_path.resolve()):
+        return jsonify({"error": "Invalid path."}), 400
+    if not target.is_file():
+        return jsonify({"error": "File not found."}), 404
+
+    target.unlink()
+    return jsonify({"status": "deleted", "filename": filename})
+
+
+@app.route("/dlc/project/file", methods=["PATCH"])
+def dlc_project_rename_file():
+    """Rename a file in a DLC pipeline folder. Body: { folder, old_name, new_name }"""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+
+    body        = request.get_json(force=True) or {}
+    folder_name = body.get("folder",   "").strip()
+    old_name    = body.get("old_name", "").strip()
+    new_name    = body.get("new_name", "").strip()
+
+    dlc_folder_names = [f for _, f in DLC_PIPELINE_FOLDERS]
+    if folder_name not in dlc_folder_names:
+        return jsonify({"error": f"Invalid folder: '{folder_name}'."}), 400
+    if not old_name or not new_name:
+        return jsonify({"error": "old_name and new_name are required."}), 400
+
+    folder_path = project_path / folder_name
+    src = (folder_path / old_name).resolve()
+    dst = (folder_path / secure_filename(new_name)).resolve()
+
+    if not src.is_relative_to(project_path.resolve()) or \
+       not dst.is_relative_to(project_path.resolve()):
+        return jsonify({"error": "Invalid path."}), 400
+    if not src.is_file():
+        return jsonify({"error": "File not found."}), 404
+    if dst.exists():
+        return jsonify({"error": "A file with that name already exists."}), 409
+
+    src.rename(dst)
+    return jsonify({"status": "renamed", "old_name": old_name, "new_name": dst.name})
+
+
+@app.route("/dlc/project/download")
+def dlc_project_download():
+    """
+    Download a DLC pipeline folder (or the whole project) as a ZIP.
+    Query param: folder=<dlc_folder_name>  (optional; downloads all if omitted)
+    """
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    project_name = project_data.get("project_name", "dlc-project")
+
+    folder_name = request.args.get("folder", "").strip()
+    if folder_name:
+        dlc_folder_names = [f for _, f in DLC_PIPELINE_FOLDERS]
+        if folder_name not in dlc_folder_names:
+            return jsonify({"error": f"Invalid folder: '{folder_name}'."}), 400
+        download_path = project_path / folder_name
+        zip_name      = f"{project_name}_{folder_name}.zip"
+    else:
+        download_path = project_path
+        zip_name      = f"{project_name}.zip"
+
+    if not download_path.is_dir():
+        return jsonify({"error": "Directory not found."}), 404
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for item in sorted(download_path.rglob("*")):
+            if item.is_file() and not item.name.startswith("."):
+                zf.write(item, item.relative_to(download_path.parent))
+    buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name=zip_name,
+                     mimetype="application/zip")
 
 
 # ── Visualization helpers ─────────────────────────────────────────

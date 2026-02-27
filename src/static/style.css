@@ -1277,6 +1277,24 @@ button[type="submit"]:hover .btn-arrow {
 .dlc-config-status.ok  { color: var(--accent); }
 .dlc-config-status.err { color: var(--danger); }
 
+/* ── DLC color theme (overrides --accent within the DLC elements) ── */
+.dlc-theme {
+  --accent:     #818cf8;   /* indigo-400 */
+  --accent-dim: #4338ca;   /* indigo-700 */
+}
+
+/* DLC active-project dot color matches DLC accent */
+.dlc-theme .session-dot[data-state="ready"] { background: var(--dlc-accent, #818cf8); }
+
+/* DLC browse-info status badge */
+.dlc-browse-info {
+  font-family: var(--mono);
+  font-size: .73rem;
+  color: var(--text-dim);
+}
+.dlc-browse-info.ok  { color: #818cf8; }
+.dlc-browse-info.err { color: var(--danger); }
+
 /* ── "From server" session button ────────────────────────────── */
 .btn-server-pick {
   border-color: var(--accent-dim);
@@ -1285,6 +1303,12 @@ button[type="submit"]:hover .btn-arrow {
 
 .btn-server-pick:hover {
   background: rgba(110, 231, 183, .08);
+}
+
+/* Inside .dlc-theme the hover tint matches DLC indigo */
+.dlc-theme .btn-server-pick:hover,
+.dlc-theme .btn-sm.btn-create:hover {
+  background: rgba(129, 140, 248, .08);
 }
 
 /* ── Server-side config picker panel ─────────────────────────── */

@@ -35,47 +35,24 @@
   </header>
 
   <!-- ─── DLC session bar ─────────────────────────────────────── -->
-  <div class="session-bar" id="dlc-bar">
+  <div class="session-bar dlc-theme" id="dlc-bar">
     <div class="session-status">
       <span class="bar-label">DeepLabCut (DLC)</span>
       <span class="session-dot" id="dlc-dot" data-state="none"></span>
       <div class="session-text">
-        <span id="dlc-label">No active DLC session</span>
+        <span id="dlc-label">No active DLC project</span>
         <span class="session-meta" id="dlc-meta"></span>
       </div>
     </div>
     <div class="session-btns">
-      <label class="btn-sm btn-create" id="btn-dlc-load" for="dlc-config-input" title="Upload a config.yaml to load DLC config">
+      <button class="btn-sm btn-create" id="btn-manage-dlc" title="Open DeepLabCut project manager">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Create DLC Session
-      </label>
-      <input type="file" id="dlc-config-input" accept=".yaml,.yml" />
-      <button class="btn-sm btn-server-pick hidden" id="btn-dlc-from-server" title="Load config.yaml from server-side user data volume">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
-        From Server
+        Manage DLC Project
       </button>
-      <button class="btn-sm btn-danger hidden" id="btn-dlc-clear" title="Remove DLC config from session">
+      <button class="btn-sm btn-danger hidden" id="btn-dlc-clear" title="Clear the active DLC project session">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         Clear DLC Session
       </button>
-      <span id="dlc-config-status" class="dlc-config-status"></span>
-    </div>
-  </div>
-
-  <!-- ─── DLC server-side YAML picker ─────────────────────────── -->
-  <div id="dlc-server-picker" class="session-server-picker hidden">
-    <div class="picker-inner">
-      <div class="picker-header">
-        <span class="picker-title">Select config.yaml from user data</span>
-        <button class="picker-close-btn" id="dlc-picker-close-btn">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-      </div>
-      <div id="dlc-picker-breadcrumb" class="picker-breadcrumb"></div>
-      <div class="picker-items">
-        <div id="dlc-picker-subdirs" class="picker-subdirs"></div>
-        <div id="dlc-picker-configs" class="picker-configs"></div>
-      </div>
     </div>
   </div>
 
@@ -126,6 +103,61 @@
   <!-- ─── Main card ─────────────────────────────────────────── -->
   <main>
    <div class="main-stack">
+
+    <!-- ─── DLC Project Manager (shown when Manage DLC is clicked) ── -->
+    <section class="card dlc-theme hidden" id="dlc-project-card">
+      <h2>DeepLabCut Project Manager</h2>
+      <p class="subtitle">Navigate to a DLC project folder in your user data and manage its pipeline files.</p>
+
+      <!-- ── Folder browser ──────────────────────────────── -->
+      <div id="dlc-browser-section">
+        <div style="margin-bottom:.55rem">
+          <label>Project source</label>
+          <div class="source-btn-row" style="margin-top:.35rem">
+            <button class="btn-sm btn-server-pick" id="dlc-browse-btn" title="Browse user data volume to find a DLC project folder">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+              Browse User Data
+            </button>
+            <span id="dlc-browse-info" class="dlc-browse-info"></span>
+          </div>
+        </div>
+
+        <!-- Folder navigator (breadcrumb + subfolder chips) -->
+        <div id="dlc-folder-nav" class="userdata-nav hidden">
+          <div id="dlc-folder-breadcrumb" class="userdata-breadcrumb"></div>
+          <div id="dlc-folder-subfolders" class="userdata-subfolders"></div>
+          <div style="display:flex;align-items:center;gap:.5rem;margin-top:.55rem">
+            <button class="btn-sm btn-create" id="dlc-select-btn">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Use this folder
+            </button>
+            <span id="dlc-select-status" class="dlc-config-status"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Pipeline folder manager (shown when project has config.yaml) ── -->
+      <div id="dlc-pipeline-section" class="hidden" style="margin-top:1.4rem;padding-top:1.2rem;border-top:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:.55rem;margin-bottom:.8rem;flex-wrap:wrap">
+          <span class="config-path" id="dlc-active-path" style="flex:1;min-width:0"></span>
+          <button class="btn-sm" id="dlc-refresh-btn" title="Refresh pipeline file list">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh
+          </button>
+          <button class="btn-sm" id="dlc-download-project-btn" title="Download entire DLC project as ZIP">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="5 12 12 19 19 12"/></svg>
+            Download Project
+          </button>
+        </div>
+        <div id="dlc-pipeline-folders"></div>
+      </div>
+
+      <!-- ── No config.yaml message ────────────────────────── -->
+      <div id="dlc-no-config-msg" class="hidden" style="margin-top:1.1rem;padding:.65rem .85rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
+        <span style="font-size:.82rem;color:var(--text-dim)">No <code style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">config.yaml</code> found in this folder. A DeepLabCut project requires a <code style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">config.yaml</code> at its root.</span>
+      </div>
+    </section>
+
     <!-- ─── Project Explorer (shown when session ready) ───── -->
     <section class="card hidden" id="explorer-card">
       <h2>Project Explorer</h2>
@@ -346,22 +378,6 @@
           <pre id="log-output">Waiting for output…</pre>
         </div>
         <button id="new-job-btn" class="btn-secondary hidden">↩ New run</button>
-      </div>
-    </section>
-
-    <!-- ─── DLC config editor (shown when DLC config is loaded) ── -->
-    <section class="card hidden" id="dlc-config-card">
-      <div class="config-header">
-        <h2>DeepLabCut Config</h2>
-        <span class="config-path" id="dlc-config-path-display"></span>
-      </div>
-      <textarea id="dlc-config-editor" spellcheck="false" autocorrect="off" autocapitalize="off" placeholder="Config content will appear here once loaded…"></textarea>
-      <div class="config-footer">
-        <span id="dlc-config-save-status" class="config-save-status"></span>
-        <button id="save-dlc-config-btn" class="btn-sm btn-create">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-          Save Config
-        </button>
       </div>
     </section>
 

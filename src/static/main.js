@@ -66,7 +66,6 @@
     if (s === "ready") {
       _initConfig().then(() => loadProjects(_currentRoot));
       loadConfig();
-      loadDlcConfig();
     }
   }
 
@@ -144,9 +143,6 @@
       console.error("Clear session error:", err);
     }
     applySessionState({ status: "none" });
-    applyDlcState(null);
-    dlcConfigEditor.value = "";
-    dlcConfigPathDisplay.textContent = "";
   });
 
   // ── Flush Redis cache ─────────────────────────────────────────
@@ -188,8 +184,6 @@
         _userDataDir = cfgData.user_data_dir;
         sourceBtnUserData.disabled = false;
         sourceBtnUserData.title    = `User data volume: ${cfgData.user_data_dir}`;
-        btnDlcFromServer.classList.remove("hidden");
-        btnDlcFromServer.title     = `Load config.yaml from user data: ${cfgData.user_data_dir}`;
       }
     } catch (err) {
       console.error("Config pre-fetch error:", err);
@@ -204,8 +198,14 @@
       console.error("Session load error:", err);
     }
 
-    // Load DLC config regardless of session state (card is always visible)
-    loadDlcConfig();
+    // Restore DLC project state
+    try {
+      const dlcRes  = await fetch("/dlc/project");
+      const dlcData = await dlcRes.json();
+      if (dlcData.status !== "none") applyDlcProjectState(dlcData);
+    } catch (err) {
+      console.error("DLC project restore error:", err);
+    }
   })();
 
   // ── Server-side config picker ─────────────────────────────────
@@ -511,223 +511,405 @@
     }
   });
 
-  // ── DLC bar + config editor ──────────────────────────────────
+  // ── DLC Project Manager ──────────────────────────────────────
   const dlcDot              = document.getElementById("dlc-dot");
   const dlcLabel            = document.getElementById("dlc-label");
   const dlcMeta             = document.getElementById("dlc-meta");
-  const btnDlcLoad          = document.getElementById("btn-dlc-load");
-  const btnDlcFromServer    = document.getElementById("btn-dlc-from-server");
+  const btnManageDlc        = document.getElementById("btn-manage-dlc");
   const btnDlcClear         = document.getElementById("btn-dlc-clear");
-  const dlcConfigInput      = document.getElementById("dlc-config-input");
-  const dlcConfigStatus     = document.getElementById("dlc-config-status");
 
-  const dlcConfigCard    = document.getElementById("dlc-config-card");
-  const dlcConfigPathDisplay = document.getElementById("dlc-config-path-display");
-  const dlcConfigEditor      = document.getElementById("dlc-config-editor");
-  const saveDlcConfigBtn     = document.getElementById("save-dlc-config-btn");
-  const dlcConfigSaveStatus  = document.getElementById("dlc-config-save-status");
+  const dlcProjectCard      = document.getElementById("dlc-project-card");
+  const dlcFolderNav        = document.getElementById("dlc-folder-nav");
+  const dlcFolderBreadcrumb = document.getElementById("dlc-folder-breadcrumb");
+  const dlcFolderSubfolders = document.getElementById("dlc-folder-subfolders");
+  const dlcBrowseBtn        = document.getElementById("dlc-browse-btn");
+  const dlcBrowseInfo       = document.getElementById("dlc-browse-info");
+  const dlcSelectBtn        = document.getElementById("dlc-select-btn");
+  const dlcSelectStatus     = document.getElementById("dlc-select-status");
+  const dlcPipelineSection  = document.getElementById("dlc-pipeline-section");
+  const dlcNoConfigMsg      = document.getElementById("dlc-no-config-msg");
+  const dlcActivePath       = document.getElementById("dlc-active-path");
+  const dlcPipelineFolders  = document.getElementById("dlc-pipeline-folders");
+  const dlcRefreshBtn       = document.getElementById("dlc-refresh-btn");
+  const dlcDownloadProjectBtn = document.getElementById("dlc-download-project-btn");
 
-  function applyDlcState(configName) {
-    if (configName) {
-      dlcDot.dataset.state = "ready";
-      dlcLabel.textContent = "DLC session active";
-      dlcMeta.textContent  = configName;
-      btnDlcLoad.classList.add("hidden");
-      btnDlcFromServer.classList.add("hidden");
-      btnDlcClear.classList.remove("hidden");
-      dlcConfigCard.classList.remove("hidden");
-    } else {
+  let _dlcBrowsePath = null; // path currently browsed in the folder nav
+
+  // ── Apply DLC project state to bar + card ───────────────────
+  function applyDlcProjectState(data) {
+    if (!data || data.status === "none") {
       dlcDot.dataset.state = "none";
-      dlcLabel.textContent = "No active DLC session";
+      dlcLabel.textContent = "No active DLC project";
       dlcMeta.textContent  = "";
-      btnDlcLoad.classList.remove("hidden");
-      btnDlcFromServer.classList.toggle("hidden", _userDataDir === null);
+      btnManageDlc.classList.remove("hidden");
       btnDlcClear.classList.add("hidden");
-      dlcConfigCard.classList.add("hidden");
+      dlcPipelineSection.classList.add("hidden");
+      dlcNoConfigMsg.classList.add("hidden");
+    } else {
+      dlcDot.dataset.state = "ready";
+      dlcLabel.textContent = data.has_config ? "DLC project active" : "DLC project (no config.yaml)";
+      dlcMeta.textContent  = data.project_name || "";
+      btnManageDlc.classList.add("hidden");
+      btnDlcClear.classList.remove("hidden");
+
+      // Show or hide pipeline section based on config presence
+      if (data.has_config) {
+        dlcActivePath.textContent = data.project_path || "";
+        dlcPipelineSection.classList.remove("hidden");
+        dlcNoConfigMsg.classList.add("hidden");
+        _browseDlcPipeline();
+      } else {
+        dlcPipelineSection.classList.add("hidden");
+        dlcNoConfigMsg.classList.remove("hidden");
+      }
+
+      // Keep card open
+      dlcProjectCard.classList.remove("hidden");
     }
   }
 
-  async function loadDlcConfig() {
-    try {
-      const res  = await fetch("/session/dlc-config");
-      if (!res.ok) { applyDlcState(null); return; }
-      const data = await res.json();
-      dlcConfigPathDisplay.textContent = data.dlc_config_path || data.dlc_config_name || "";
-      if (data.content) dlcConfigEditor.value = data.content;
-      applyDlcState(data.dlc_config_name || "config.yaml");
-    } catch (err) {
-      console.error("loadDlcConfig error:", err);
-      applyDlcState(null);
-    }
-  }
-
-  dlcConfigInput.addEventListener("change", async () => {
-    const file = dlcConfigInput.files[0];
-    if (!file) return;
-
-    dlcConfigStatus.textContent = "Uploading…";
-    dlcConfigStatus.className   = "dlc-config-status";
-
-    const fd = new FormData();
-    fd.append("config", file);
-    dlcConfigInput.value = "";
-
-    try {
-      const res  = await fetch("/session/dlc-config", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) {
-        dlcConfigStatus.textContent = data.error || "Upload failed";
-        dlcConfigStatus.className   = "dlc-config-status err";
-      } else {
-        dlcConfigStatus.textContent = "✓ Loaded";
-        dlcConfigStatus.className   = "dlc-config-status ok";
-        setTimeout(() => { dlcConfigStatus.textContent = ""; dlcConfigStatus.className = "dlc-config-status"; }, 3000);
-        loadDlcConfig();
-      }
-    } catch (err) {
-      dlcConfigStatus.textContent = "Network error";
-      dlcConfigStatus.className   = "dlc-config-status err";
+  // ── Open/close project manager card ─────────────────────────
+  btnManageDlc.addEventListener("click", () => {
+    dlcProjectCard.classList.remove("hidden");
+    // Auto-open folder browser if user data is available
+    if (_userDataDir && dlcFolderNav.classList.contains("hidden")) {
+      dlcFolderNav.classList.remove("hidden");
+      _refreshDlcFolderNav(_userDataDir);
+    } else if (!_userDataDir) {
+      dlcBrowseInfo.textContent = "No user data volume mounted";
+      dlcBrowseInfo.className   = "dlc-browse-info err";
     }
   });
 
-  btnDlcClear.addEventListener("click", async () => {
-    if (!confirm("Remove DLC config from the active session?")) return;
-    try {
-      const res = await fetch("/session/dlc-config", { method: "DELETE" });
-      if (res.ok) {
-        dlcConfigEditor.value = "";
-        dlcConfigPathDisplay.textContent = "";
-        applyDlcState(null);
-      }
-    } catch (err) {
-      console.error("Clear DLC config error:", err);
+  // ── Browse user data button ──────────────────────────────────
+  dlcBrowseBtn.addEventListener("click", () => {
+    if (!_userDataDir) {
+      dlcBrowseInfo.textContent = "No user data volume mounted";
+      dlcBrowseInfo.className   = "dlc-browse-info err";
+      return;
     }
+    dlcFolderNav.classList.remove("hidden");
+    _refreshDlcFolderNav(_dlcBrowsePath || _userDataDir);
   });
 
-  saveDlcConfigBtn.addEventListener("click", async () => {
-    saveDlcConfigBtn.disabled       = true;
-    dlcConfigSaveStatus.textContent = "Saving…";
-    dlcConfigSaveStatus.className   = "config-save-status";
-    try {
-      const res  = await fetch("/session/dlc-config", {
-        method:  "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ content: dlcConfigEditor.value }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        dlcConfigSaveStatus.textContent = data.error || "Save failed";
-        dlcConfigSaveStatus.className   = "config-save-status err";
-      } else {
-        dlcConfigSaveStatus.textContent = "Saved";
-        dlcConfigSaveStatus.className   = "config-save-status ok";
-        setTimeout(() => {
-          dlcConfigSaveStatus.textContent = "";
-          dlcConfigSaveStatus.className   = "config-save-status";
-        }, 3000);
-      }
-    } catch (err) {
-      dlcConfigSaveStatus.textContent = "Network error";
-      dlcConfigSaveStatus.className   = "config-save-status err";
-    } finally {
-      saveDlcConfigBtn.disabled = false;
-    }
-  });
+  // ── Folder navigator ──────────────────────────────────────────
+  async function _refreshDlcFolderNav(path) {
+    _dlcBrowsePath = path;
 
-  // ── DLC server-side YAML picker ──────────────────────────────
-  const dlcServerPicker     = document.getElementById("dlc-server-picker");
-  const dlcPickerBreadcrumb = document.getElementById("dlc-picker-breadcrumb");
-  const dlcPickerSubdirs    = document.getElementById("dlc-picker-subdirs");
-  const dlcPickerConfigs    = document.getElementById("dlc-picker-configs");
-  const dlcPickerCloseBtn   = document.getElementById("dlc-picker-close-btn");
-
-  function _closeDlcPicker() { dlcServerPicker.classList.add("hidden"); }
-  function _openDlcPicker()  { dlcServerPicker.classList.remove("hidden"); _refreshDlcPickerNav(_userDataDir); }
-
-  async function _refreshDlcPickerNav(path) {
-    const baseName = _userDataDir.split("/").filter(Boolean).pop() || "user-data";
-    const rel = path.substring(_userDataDir.length).split("/").filter(Boolean);
-    let crumbHTML = `<button class="picker-bc-seg" data-path="${_userDataDir}">${baseName}</button>`;
-    let cumPath = _userDataDir;
+    // Breadcrumb
+    const baseName = (_userDataDir || path).split("/").filter(Boolean).pop() || "user-data";
+    const base     = _userDataDir || path;
+    const rel      = path.substring(base.length).split("/").filter(Boolean);
+    let crumbHTML  = `<button class="userdata-bc-seg" data-path="${base}">${baseName}</button>`;
+    let cumPath    = base;
     rel.forEach((part, i) => {
       cumPath += "/" + part;
-      crumbHTML += `<span class="picker-bc-sep">›</span>`;
-      crumbHTML += `<button class="picker-bc-seg${i === rel.length - 1 ? " active" : ""}" data-path="${cumPath}">${part}</button>`;
+      const isLast = (i === rel.length - 1);
+      crumbHTML += `<span class="userdata-bc-sep">›</span>`;
+      crumbHTML += `<button class="userdata-bc-seg${isLast ? " active" : ""}" data-path="${cumPath}">${part}</button>`;
     });
-    dlcPickerBreadcrumb.innerHTML = crumbHTML;
-    dlcPickerBreadcrumb.querySelectorAll(".picker-bc-seg").forEach(seg =>
-      seg.addEventListener("click", () => _refreshDlcPickerNav(seg.dataset.path)));
+    dlcFolderBreadcrumb.innerHTML = crumbHTML;
+    dlcFolderBreadcrumb.querySelectorAll(".userdata-bc-seg").forEach(seg =>
+      seg.addEventListener("click", () => _refreshDlcFolderNav(seg.dataset.path)));
 
-    dlcPickerSubdirs.innerHTML = '<span class="picker-loading">Loading…</span>';
-    dlcPickerConfigs.innerHTML = "";
+    dlcFolderSubfolders.innerHTML = '<span class="userdata-no-folders">Loading…</span>';
 
     try {
-      const res  = await fetch(`/fs/list-configs?path=${encodeURIComponent(path)}&ext=.yaml`);
+      const res  = await fetch(`/fs/list?path=${encodeURIComponent(path)}`);
       const data = await res.json();
 
-      dlcPickerSubdirs.innerHTML = "";
+      dlcFolderSubfolders.innerHTML = "";
+
+      // ".." chip
       if (path !== _userDataDir) {
         const upBtn = document.createElement("button");
-        upBtn.className = "picker-subfolder-chip up"; upBtn.textContent = ".."; upBtn.title = "Go up";
-        upBtn.addEventListener("click", () => _refreshDlcPickerNav(path.split("/").slice(0, -1).join("/") || "/"));
-        dlcPickerSubdirs.appendChild(upBtn);
-      }
-      const subs = res.ok ? (data.subdirs || []) : [];
-      if (subs.length === 0 && dlcPickerSubdirs.children.length === 0) {
-        const msg = document.createElement("span"); msg.className = "picker-no-items"; msg.textContent = "No subfolders"; dlcPickerSubdirs.appendChild(msg);
-      } else {
-        subs.forEach(name => {
-          const chip = document.createElement("button"); chip.className = "picker-subfolder-chip"; chip.textContent = name; chip.title = `Navigate into ${name}/`;
-          chip.addEventListener("click", () => _refreshDlcPickerNav(path + "/" + name));
-          dlcPickerSubdirs.appendChild(chip);
+        upBtn.className   = "userdata-subfolder-chip up";
+        upBtn.textContent = "..";
+        upBtn.title       = "Go up one level";
+        upBtn.addEventListener("click", () => {
+          const parent = path.split("/").slice(0, -1).join("/") || "/";
+          _refreshDlcFolderNav(parent);
         });
+        dlcFolderSubfolders.appendChild(upBtn);
       }
 
-      dlcPickerConfigs.innerHTML = "";
-      const configs = res.ok ? (data.configs || []) : [];
-      if (configs.length === 0) {
-        const msg = document.createElement("span"); msg.className = "picker-no-items"; msg.textContent = "No .yaml files here"; dlcPickerConfigs.appendChild(msg);
+      const subs = res.ok ? (data.projects || []) : [];
+      if (subs.length === 0 && dlcFolderSubfolders.children.length === 0) {
+        const msg = document.createElement("span");
+        msg.className   = "userdata-no-folders";
+        msg.textContent = "No subfolders";
+        dlcFolderSubfolders.appendChild(msg);
       } else {
-        configs.forEach(name => {
-          const chip = document.createElement("button"); chip.className = "picker-config-chip"; chip.textContent = name; chip.title = `Load ${name}`;
-          chip.addEventListener("click", () => _loadDlcConfigFromPath(path + "/" + name));
-          dlcPickerConfigs.appendChild(chip);
+        subs.forEach(name => {
+          const chip = document.createElement("button");
+          chip.className   = "userdata-subfolder-chip";
+          chip.textContent = name;
+          chip.title       = `Navigate into ${name}/`;
+          chip.addEventListener("click", () => _refreshDlcFolderNav(path + "/" + name));
+          dlcFolderSubfolders.appendChild(chip);
         });
       }
     } catch (err) {
-      console.error("DLC picker nav error:", err);
-      dlcPickerSubdirs.innerHTML = '<span class="picker-no-items">Failed to load</span>';
+      console.error("DLC folder nav error:", err);
+      dlcFolderSubfolders.innerHTML = '<span class="userdata-no-folders">Failed to load</span>';
     }
   }
 
-  async function _loadDlcConfigFromPath(configPath) {
-    _closeDlcPicker();
-    dlcConfigStatus.textContent = "Loading…";
-    dlcConfigStatus.className   = "dlc-config-status";
+  // ── Select current folder as DLC project ────────────────────
+  dlcSelectBtn.addEventListener("click", async () => {
+    if (!_dlcBrowsePath) return;
+
+    dlcSelectStatus.textContent = "Checking for config.yaml…";
+    dlcSelectStatus.className   = "dlc-config-status";
+
     try {
-      const res  = await fetch("/session/dlc-config/from-path", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config_path: configPath }),
+      const res  = await fetch("/dlc/project", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ path: _dlcBrowsePath }),
       });
       const data = await res.json();
       if (!res.ok) {
-        dlcConfigStatus.textContent = data.error || "Failed to load";
-        dlcConfigStatus.className   = "dlc-config-status err";
+        dlcSelectStatus.textContent = data.error || "Failed";
+        dlcSelectStatus.className   = "dlc-config-status err";
       } else {
-        dlcConfigStatus.textContent = "✓ Loaded";
-        dlcConfigStatus.className   = "dlc-config-status ok";
-        setTimeout(() => { dlcConfigStatus.textContent = ""; dlcConfigStatus.className = "dlc-config-status"; }, 3000);
-        loadDlcConfig();
+        dlcSelectStatus.textContent = data.has_config
+          ? "✓ config.yaml found — pipeline ready"
+          : "⚠ No config.yaml in this folder";
+        dlcSelectStatus.className = data.has_config
+          ? "dlc-config-status ok"
+          : "dlc-config-status err";
+        setTimeout(() => {
+          dlcSelectStatus.textContent = "";
+          dlcSelectStatus.className   = "dlc-config-status";
+        }, 4000);
+        applyDlcProjectState(data);
       }
     } catch (err) {
-      console.error("DLC config from-path error:", err);
-      dlcConfigStatus.textContent = "Network error";
-      dlcConfigStatus.className   = "dlc-config-status err";
+      console.error("DLC set project error:", err);
+      dlcSelectStatus.textContent = "Network error";
+      dlcSelectStatus.className   = "dlc-config-status err";
+    }
+  });
+
+  // ── Clear DLC project ────────────────────────────────────────
+  btnDlcClear.addEventListener("click", async () => {
+    if (!confirm("Clear the DLC project session? The files on disk are not affected.")) return;
+    try {
+      await fetch("/dlc/project", { method: "DELETE" });
+    } catch (err) {
+      console.error("Clear DLC project error:", err);
+    }
+    applyDlcProjectState(null);
+    dlcProjectCard.classList.add("hidden");
+    dlcFolderNav.classList.add("hidden");
+    _dlcBrowsePath = null;
+  });
+
+  // ── Browse DLC pipeline folders ──────────────────────────────
+  async function _browseDlcPipeline() {
+    dlcPipelineFolders.innerHTML = '<p class="explorer-empty" style="opacity:.5">Loading…</p>';
+    try {
+      const res  = await fetch("/dlc/project/browse");
+      const data = await res.json();
+      if (!res.ok) {
+        dlcPipelineFolders.innerHTML = `<p class="explorer-empty">${data.error || "Error loading project"}</p>`;
+        return;
+      }
+      const list = document.createElement("div");
+      list.className = "folder-list";
+      data.folders.forEach(entry => list.appendChild(_buildDlcFolderRow(entry)));
+      dlcPipelineFolders.innerHTML = "";
+      dlcPipelineFolders.appendChild(list);
+    } catch (err) {
+      console.error("browseDlcPipeline error:", err);
+      dlcPipelineFolders.innerHTML = '<p class="explorer-empty">Failed to load project.</p>';
     }
   }
 
-  btnDlcFromServer.addEventListener("click", _openDlcPicker);
-  dlcPickerCloseBtn.addEventListener("click", _closeDlcPicker);
+  // ── Build a DLC pipeline folder row (mirrors Anipose's _buildFolderRow) ──
+  function _buildDlcFolderRow(entry) {
+    const { key, folder, files, exists } = entry;
+    const count = files.length;
+
+    const row = document.createElement("div");
+    row.className = "folder-row";
+    row.dataset.folder = folder;
+
+    const header = document.createElement("div");
+    header.className = "folder-row-header";
+    header.innerHTML = `
+      <span class="folder-chevron">▶</span>
+      <span class="folder-icon">${_folderSvg("currentColor")}</span>
+      <span class="folder-key">${key}</span>
+      <span class="folder-name-chip">${folder}</span>
+      <span class="folder-badge ${count > 0 ? "has-files" : ""}">${count} file${count !== 1 ? "s" : ""}</span>
+      <span class="folder-upload-status"></span>
+      <label class="folder-upload-label" title="Upload files to ${folder}/">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+        Upload
+        <input type="file" multiple />
+      </label>
+      <button class="folder-download-btn" title="Download ${folder}/ as ZIP">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="5 12 12 19 19 12"/></svg>
+      </button>`;
+
+    const fileList = document.createElement("div");
+    fileList.className = "folder-files";
+    if (files.length === 0) {
+      fileList.innerHTML = `<p class="folder-empty-msg">${exists ? "Empty folder" : "Folder not yet created"}</p>`;
+    } else {
+      files.forEach(f => {
+        const item = document.createElement("div");
+        item.className = "file-item";
+        item.innerHTML = `${_fileSvg()}<span class="file-item-name">${f.name}</span><span class="file-size">${_fmtSize(f.size)}</span><button class="file-rename-btn" title="Rename ${f.name}">✎</button><button class="file-delete-btn" title="Delete ${f.name}">×</button>`;
+        item.querySelector(".file-rename-btn").addEventListener("click", e => {
+          e.stopPropagation();
+          _activateDlcRename(item, f.name, folder);
+        });
+        item.querySelector(".file-delete-btn").addEventListener("click", e => {
+          e.stopPropagation();
+          _deleteDlcFile(f.name, folder);
+        });
+        fileList.appendChild(item);
+      });
+    }
+
+    row.appendChild(header);
+    row.appendChild(fileList);
+
+    header.addEventListener("click", e => {
+      if (e.target.closest("label")) return;
+      if (e.target.closest(".folder-download-btn")) return;
+      row.classList.toggle("open");
+    });
+
+    header.querySelector(".folder-download-btn").addEventListener("click", e => {
+      e.stopPropagation();
+      window.location.href = `/dlc/project/download?folder=${encodeURIComponent(folder)}`;
+    });
+
+    row.addEventListener("dragover",  e => { e.preventDefault(); row.classList.add("dragover"); });
+    row.addEventListener("dragleave", ()  => row.classList.remove("dragover"));
+    row.addEventListener("drop", async e => {
+      e.preventDefault();
+      row.classList.remove("dragover");
+      const dropped = Array.from(e.dataTransfer.files);
+      if (dropped.length) await _uploadDlcFiles(dropped, folder, row);
+    });
+
+    const fileInput = header.querySelector("input[type='file']");
+    fileInput.addEventListener("change", async () => {
+      if (!fileInput.files.length) return;
+      await _uploadDlcFiles(Array.from(fileInput.files), folder, row);
+      fileInput.value = "";
+    });
+
+    return row;
+  }
+
+  async function _uploadDlcFiles(files, folder, row) {
+    const statusEl = row.querySelector(".folder-upload-status");
+    statusEl.textContent = "Uploading…";
+    statusEl.className   = "folder-upload-status";
+
+    const fd = new FormData();
+    fd.append("folder", folder);
+    files.forEach(f => fd.append("files[]", f));
+
+    try {
+      const res  = await fetch("/dlc/project/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        statusEl.textContent = data.error || "Upload failed";
+        statusEl.className   = "folder-upload-status err";
+      } else {
+        statusEl.textContent = `✓ ${data.saved.length} uploaded`;
+        statusEl.className   = "folder-upload-status ok";
+        setTimeout(() => { statusEl.textContent = ""; statusEl.className = "folder-upload-status"; }, 3000);
+        _browseDlcPipeline();
+      }
+    } catch (err) {
+      statusEl.textContent = "Network error";
+      statusEl.className   = "folder-upload-status err";
+    }
+  }
+
+  async function _deleteDlcFile(filename, folder) {
+    if (!confirm(`Delete "${filename}" from ${folder}/? This cannot be undone.`)) return;
+    try {
+      const res  = await fetch("/dlc/project/file", {
+        method:  "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ folder, filename }),
+      });
+      const data = await res.json();
+      if (!res.ok) alert(data.error || "Delete failed.");
+      else _browseDlcPipeline();
+    } catch (err) {
+      alert("Network error.");
+    }
+  }
+
+  function _activateDlcRename(item, oldName, folder) {
+    const nameSpan  = item.querySelector(".file-item-name");
+    const sizeSpan  = item.querySelector(".file-size");
+    const renameBtn = item.querySelector(".file-rename-btn");
+    const deleteBtn = item.querySelector(".file-delete-btn");
+
+    const input = document.createElement("input");
+    input.type      = "text";
+    input.className = "file-rename-input";
+    input.value     = oldName;
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.className   = "file-rename-confirm";
+    confirmBtn.title       = "Confirm rename";
+    confirmBtn.textContent = "✓";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className   = "file-rename-cancel";
+    cancelBtn.title       = "Cancel";
+    cancelBtn.textContent = "×";
+
+    nameSpan.replaceWith(input);
+    sizeSpan.style.display  = "none";
+    renameBtn.style.display = "none";
+    deleteBtn.style.display = "none";
+    item.appendChild(confirmBtn);
+    item.appendChild(cancelBtn);
+    input.focus();
+    input.select();
+
+    async function doRename() {
+      const newName = input.value.trim();
+      if (!newName || newName === oldName) { _browseDlcPipeline(); return; }
+      try {
+        const res  = await fetch("/dlc/project/file", {
+          method:  "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ folder, old_name: oldName, new_name: newName }),
+        });
+        const data = await res.json();
+        if (!res.ok) alert(data.error || "Rename failed.");
+      } catch (err) {
+        alert("Network error.");
+      }
+      _browseDlcPipeline();
+    }
+
+    confirmBtn.addEventListener("click", doRename);
+    cancelBtn.addEventListener("click",  _browseDlcPipeline);
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter")  doRename();
+      if (e.key === "Escape") _browseDlcPipeline();
+    });
+  }
+
+  dlcRefreshBtn.addEventListener("click", _browseDlcPipeline);
+  dlcDownloadProjectBtn.addEventListener("click", () => {
+    window.location.href = "/dlc/project/download";
+  });
 
   // ── Populate project folder dropdowns ───────────────────────
   const explorerFolderSelect = document.getElementById("explorer-folder-select");
@@ -867,8 +1049,6 @@
         _userDataDir = data.user_data_dir;
         sourceBtnUserData.disabled = false;
         sourceBtnUserData.title    = `User data volume: ${data.user_data_dir}`;
-        btnDlcFromServer.classList.remove("hidden");
-        btnDlcFromServer.title     = `Load config.yaml from user data: ${data.user_data_dir}`;
       }
     } catch (err) {
       console.error("Config fetch error:", err);
