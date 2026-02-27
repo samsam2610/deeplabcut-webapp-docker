@@ -1227,11 +1227,14 @@ def dlc_video_upload():
 @app.route("/dlc/project/save-frame", methods=["POST"])
 def dlc_save_frame():
     """
-    Save an extracted video frame PNG to labeled-data/<video_stem>/.
-    Body: { "video_name": "<str>", "frame_data": "<base64-encoded PNG>" }
+    Save an extracted video frame to labeled-data/<video_stem>/ as PNG.
+    Body: { "video_name": "<str>", "frame_data": "<base64-encoded JPEG>" }
+    The client sends JPEG (small payload); server converts to PNG via OpenCV.
     Returns the saved filename and running frame count.
     """
     import base64 as _base64
+    import cv2
+    import numpy as np
 
     raw = _redis_client.get(_DLC_PROJECT_KEY)
     if not raw:
@@ -1257,13 +1260,19 @@ def dlc_save_frame():
     except Exception:
         return jsonify({"error": "Invalid frame_data (expected base64)."}), 400
 
+    # Decode JPEG bytes → save losslessly as PNG (DLC expects PNG)
+    nparr = np.frombuffer(img_bytes, np.uint8)
+    img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return jsonify({"error": "Could not decode image data."}), 400
+
     video_stem  = Path(secure_filename(video_name)).stem
     labeled_dir = project_path / "labeled-data" / video_stem
     labeled_dir.mkdir(parents=True, exist_ok=True)
 
     existing_count = len([f for f in labeled_dir.iterdir() if f.suffix == ".png"])
     frame_filename = f"img{existing_count:04d}.png"
-    (labeled_dir / frame_filename).write_bytes(img_bytes)
+    cv2.imwrite(str(labeled_dir / frame_filename), img)
 
     return jsonify({
         "saved":       frame_filename,

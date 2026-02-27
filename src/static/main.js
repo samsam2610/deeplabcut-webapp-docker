@@ -1726,7 +1726,7 @@
       let dataUrl;
       try {
         feCanvas.getContext("2d").drawImage(feVideo, 0, 0);
-        dataUrl = feCanvas.toDataURL("image/png");
+        dataUrl = feCanvas.toDataURL("image/jpeg", 0.92);  // JPEG ~10x smaller than PNG for transfer
       } catch (secErr) {
         feExtractStatus.textContent = `Canvas error: ${secErr.message}`;
         feExtractStatus.className = "fe-extract-status err";
