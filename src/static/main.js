@@ -1723,33 +1723,41 @@
 
       feCanvas.width  = feVideo.videoWidth;
       feCanvas.height = feVideo.videoHeight;
-      feCanvas.getContext("2d").drawImage(feVideo, 0, 0);
+      let dataUrl;
+      try {
+        feCanvas.getContext("2d").drawImage(feVideo, 0, 0);
+        dataUrl = feCanvas.toDataURL("image/png");
+      } catch (secErr) {
+        feExtractStatus.textContent = `Canvas error: ${secErr.message}`;
+        feExtractStatus.className = "fe-extract-status err";
+        return;
+      }
+      const base64 = dataUrl.split(",")[1];
+      if (!base64) { feExtractStatus.textContent = "Could not capture frame."; feExtractStatus.className = "fe-extract-status err"; return; }
 
-      feCanvas.toBlob(async blob => {
-        if (!blob) { feExtractStatus.textContent = "Could not capture frame."; feExtractStatus.className = "fe-extract-status err"; return; }
-        const fd = new FormData();
-        fd.append("video_name", _feCurrentVideo);
-        fd.append("frame", blob, "frame.png");
-        try {
-          feBtnExtract.disabled = true;
-          const res  = await fetch("/dlc/project/save-frame", { method: "POST", body: fd });
-          const data = await res.json();
-          if (data.error) {
-            feExtractStatus.textContent = `Error: ${data.error}`;
-            feExtractStatus.className = "fe-extract-status err";
-          } else {
-            _feExtracted = data.frame_count;
-            feExtractCount.textContent = `${_feExtracted} frame${_feExtracted !== 1 ? "s" : ""} saved`;
-            feExtractStatus.textContent = `Saved ${data.saved} → ${data.folder}/`;
-            feExtractStatus.className = "fe-extract-status ok";
-          }
-        } catch (err) {
-          feExtractStatus.textContent = `Network error: ${err.message}`;
+      try {
+        feBtnExtract.disabled = true;
+        const res  = await fetch("/dlc/project/save-frame", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ video_name: _feCurrentVideo, frame_data: base64 }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          feExtractStatus.textContent = `Error: ${data.error}`;
           feExtractStatus.className = "fe-extract-status err";
-        } finally {
-          feBtnExtract.disabled = false;
+        } else {
+          _feExtracted = data.frame_count;
+          feExtractCount.textContent = `${_feExtracted} frame${_feExtracted !== 1 ? "s" : ""} saved`;
+          feExtractStatus.textContent = `Saved ${data.saved} → ${data.folder}/`;
+          feExtractStatus.className = "fe-extract-status ok";
         }
-      }, "image/png");
+      } catch (err) {
+        feExtractStatus.textContent = `Network error: ${err.message}`;
+        feExtractStatus.className = "fe-extract-status err";
+      } finally {
+        feBtnExtract.disabled = false;
+      }
     });
   })();
 

@@ -1228,9 +1228,11 @@ def dlc_video_upload():
 def dlc_save_frame():
     """
     Save an extracted video frame PNG to labeled-data/<video_stem>/.
-    Form fields: video_name (str), frame (PNG file).
+    Body: { "video_name": "<str>", "frame_data": "<base64-encoded PNG>" }
     Returns the saved filename and running frame count.
     """
+    import base64 as _base64
+
     raw = _redis_client.get(_DLC_PROJECT_KEY)
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
@@ -1242,12 +1244,18 @@ def dlc_save_frame():
     if not _dlc_project_security_check(project_path):
         return jsonify({"error": "Access denied."}), 403
 
-    video_name = request.form.get("video_name", "").strip()
-    frame_file = request.files.get("frame")
+    body       = request.get_json(force=True) or {}
+    video_name = body.get("video_name", "").strip()
+    frame_data = body.get("frame_data", "").strip()
     if not video_name:
         return jsonify({"error": "video_name is required."}), 400
-    if not frame_file:
-        return jsonify({"error": "frame image is required."}), 400
+    if not frame_data:
+        return jsonify({"error": "frame_data is required."}), 400
+
+    try:
+        img_bytes = _base64.b64decode(frame_data)
+    except Exception:
+        return jsonify({"error": "Invalid frame_data (expected base64)."}), 400
 
     video_stem  = Path(secure_filename(video_name)).stem
     labeled_dir = project_path / "labeled-data" / video_stem
@@ -1255,7 +1263,7 @@ def dlc_save_frame():
 
     existing_count = len([f for f in labeled_dir.iterdir() if f.suffix == ".png"])
     frame_filename = f"img{existing_count:04d}.png"
-    frame_file.save(str(labeled_dir / frame_filename))
+    (labeled_dir / frame_filename).write_bytes(img_bytes)
 
     return jsonify({
         "saved":       frame_filename,
