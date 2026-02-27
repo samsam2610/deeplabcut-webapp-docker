@@ -396,7 +396,11 @@ function updateSession(session, state_url) {
             state.trials = [];
 
             vidlist.innerHTML = '';
-            var ncams = data.folders[0].files[0].camnames.length; 
+            if (!data.folders || !data.folders.length || !data.folders[0].files || !data.folders[0].files.length) {
+                console.warn('No trials found for session:', session);
+                return;
+            }
+            var ncams = data.folders[0].files[0].camnames.length;
             for (var i = 0; i < ncams; i++) {
 
                 var container = document.createElement("div");

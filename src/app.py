@@ -1051,16 +1051,40 @@ def list_projects():
 
 @app.route("/get-sessions")
 def get_sessions():
-    """List project folders that contain a config.toml."""
-    root = request.args.get("root", "").strip()
-    base = Path(root) if root else DATA_DIR
-    if not base.is_dir():
-        return jsonify({"error": f"Directory not found: {base}"}), 404
-    sessions = sorted(
-        [d.name for d in base.iterdir() if d.is_dir() and (d / "config.toml").is_file()],
-        key=_natural_keys,
-    )
-    return jsonify({"sessions": sessions, "root": str(base)})
+    """List Anipose sessions (subdirs of the anipose root found via config['path']).
+
+    Searches DATA_DIR for any project whose config.toml has a 'path' field pointing
+    to an existing directory, then returns that directory's subdirectories as sessions.
+    Falls back to listing DLC project folders if no anipose root is found.
+    """
+    sessions: list = []
+    anipose_root_found: Path | None = None
+
+    if DATA_DIR.is_dir():
+        for project_dir in sorted(DATA_DIR.iterdir()):
+            if not project_dir.is_dir():
+                continue
+            config = _inspector_load_config(project_dir)
+            root = _get_anipose_root(project_dir, config)
+            if root != project_dir and root.is_dir():
+                anipose_root_found = root
+                break  # use the first project that has a valid 'path'
+
+    if anipose_root_found:
+        sessions = sorted(
+            [d.name for d in anipose_root_found.iterdir()
+             if d.is_dir() and not d.name.startswith(".")],
+            key=_natural_keys,
+        )
+    else:
+        # Fall back: list DLC projects that have a config.toml
+        sessions = sorted(
+            [d.name for d in DATA_DIR.iterdir()
+             if d.is_dir() and (d / "config.toml").is_file()],
+            key=_natural_keys,
+        )
+
+    return jsonify({"sessions": sessions})
 
 
 @app.route("/projects/<project_id>/metadata")
@@ -1380,14 +1404,6 @@ def inspector_page():
 _inspector_tokens: set = set()
 
 
-def _inspector_project_dir(session: str) -> Path:
-    """Resolve DATA_DIR/<session> safely."""
-    p = (DATA_DIR / session).resolve()
-    if not p.is_relative_to(DATA_DIR.resolve()):
-        raise ValueError("Invalid session path.")
-    return p
-
-
 def _inspector_split_subpath(subpath: str):
     """Split 'folderA|folderB/name' → (folder_parts, name).
 
@@ -1410,15 +1426,61 @@ def _inspector_load_config(project_dir: Path) -> dict:
     return _toml.load(str(cfg_path))
 
 
+def _get_anipose_root(project_dir: Path, config: dict) -> Path:
+    """Return the Anipose project root from config['path'], falling back to project_dir."""
+    p = config.get("path", "").strip()
+    if p:
+        candidate = Path(p)
+        if candidate.is_dir():
+            return candidate
+    return project_dir
+
+
+def _inspector_get_context(session: str):
+    """Return (config, anipose_root, session_dir) for a session name.
+
+    Searches DATA_DIR projects whose config['path'] (anipose_root) contains a
+    subdirectory named `session`.  Falls back to treating `session` as a DLC
+    project ID (for backwards compatibility).
+
+    Raises ValueError for invalid / path-traversal inputs.
+    """
+    # Safety: reject any path separators in session name
+    if "/" in session or "\\" in session or ".." in session:
+        raise ValueError("Invalid session name.")
+
+    # Search all DLC projects in DATA_DIR
+    if DATA_DIR.is_dir():
+        for project_dir in sorted(DATA_DIR.iterdir()):
+            if not project_dir.is_dir():
+                continue
+            config = _inspector_load_config(project_dir)
+            anipose_root = _get_anipose_root(project_dir, config)
+            if anipose_root == project_dir:
+                continue  # no 'path' field
+            session_dir = anipose_root / session
+            if session_dir.is_dir():
+                return config, anipose_root, session_dir
+
+    # Fall back: session is a DLC project ID
+    project_dir = (DATA_DIR / session).resolve()
+    if not project_dir.is_relative_to(DATA_DIR.resolve()):
+        raise ValueError("Invalid session path.")
+    if not project_dir.is_dir():
+        raise FileNotFoundError(f"Session not found: {session}")
+    config = _inspector_load_config(project_dir)
+    anipose_root = _get_anipose_root(project_dir, config)
+    return config, anipose_root, anipose_root
+
+
 @app.route("/metadata/<session>")
 def inspector_metadata(session: str):
     """Return labeling scheme in index form for behavior inspector script."""
     try:
-        project_dir = _inspector_project_dir(session)
-    except ValueError:
-        return jsonify({"error": "Invalid session."}), 400
+        config, _root, _sdir = _inspector_get_context(session)
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({"error": str(exc)}), 400
 
-    config = _inspector_load_config(project_dir)
     scheme = config.get("labeling", {}).get("scheme", [])
     video_speed = config.get("converted_video_speed", 1)
 
@@ -1440,21 +1502,17 @@ def inspector_get_trials(session: str):
     from collections import defaultdict as _dd
 
     try:
-        project_dir = _inspector_project_dir(session)
-    except ValueError:
-        return jsonify({"error": "Invalid session."}), 400
+        config, anipose_root, session_dir = _inspector_get_context(session)
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({"error": str(exc)}), 400
 
-    if not project_dir.is_dir():
-        return jsonify({"error": f"Session not found: {session}"}), 404
-
-    config = _inspector_load_config(project_dir)
     pipeline   = config.get("pipeline", {})
     videos_raw = pipeline.get("videos_raw_mp4", pipeline.get("videos_raw", "videos-raw-mp4"))
     vid_ext    = config.get("video_extension", "avi")
     vid_exts   = {f".{vid_ext.lstrip('.')}", ".mp4", ".avi", ".mov", ".mkv"}
 
-    # Load behaviors.json for session/trial behavior metadata
-    behaviors_path = project_dir / "behaviors.json"
+    # behaviors.json lives at the anipose root level
+    behaviors_path = anipose_root / "behaviors.json"
     behaviors: dict = {}
     if behaviors_path.is_file():
         try:
@@ -1467,7 +1525,7 @@ def inspector_get_trials(session: str):
     trial_behaviors: dict = {}
 
     folders_out = []
-    for root_str, dirs, _ in _os.walk(str(project_dir)):
+    for root_str, dirs, _ in _os.walk(str(session_dir)):
         dirs.sort()
         root_path  = Path(root_str)
         video_dir  = root_path / videos_raw
@@ -1482,7 +1540,7 @@ def inspector_get_trials(session: str):
         if not video_files:
             continue
 
-        rel = root_path.relative_to(project_dir)
+        rel = root_path.relative_to(session_dir)
         folder_key = "|".join(rel.parts) if str(rel) != "." else ""
 
         # Group by trial name
@@ -1500,12 +1558,13 @@ def inspector_get_trials(session: str):
                 "camnames": [c["cam"] for c in cams],
                 "files":    [c["file"] for c in cams],
             })
-            # Collect behavior info for this trial
-            rel_path = f"{session}/{folder_key}/{tname}"
-            folder_behaviors = behaviors.get(folder_key, {}).get(tname, {})
+            # behavior key uses session-relative folder path
+            full_key = f"{session}|{folder_key}" if folder_key else session
+            folder_behaviors = behaviors.get(full_key, {}).get(tname, {})
             if folder_behaviors:
                 bnames = {b["behavior"] for b in folder_behaviors.values() if b.get("behavior")}
                 session_behaviors_set.update(bnames)
+                rel_path = f"{session}/{folder_key}/{tname}"
                 trial_behaviors[rel_path] = {b: True for b in bnames}
 
         folders_out.append({"folder": folder_key, "files": files_out})
@@ -1527,12 +1586,15 @@ def inspector_pose3d(session: str, subpath: str):
     import pandas as _pd
 
     try:
-        project_dir = _inspector_project_dir(session)
-    except ValueError:
-        return jsonify({"error": "Invalid session."}), 400
+        config, _root, session_dir = _inspector_get_context(session)
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({"error": str(exc)}), 400
 
     folder_parts, vidname = _inspector_split_subpath(subpath)
-    csv_path = project_dir.joinpath(*folder_parts) / "pose-3d" / f"{vidname}.csv"
+    # Try filtered first, fall back to unfiltered
+    csv_path = session_dir.joinpath(*folder_parts) / "pose-3d-filtered" / f"{vidname}.csv"
+    if not csv_path.is_file():
+        csv_path = session_dir.joinpath(*folder_parts) / "pose-3d" / f"{vidname}.csv"
     if not csv_path.is_file():
         return jsonify([])
 
@@ -1541,7 +1603,6 @@ def inspector_pose3d(session: str, subpath: str):
     except Exception:
         return jsonify([])
 
-    config     = _inspector_load_config(project_dir)
     scheme     = config.get("labeling", {}).get("scheme", [])
     bodyparts  = []
     for bp_list in scheme:
@@ -1591,16 +1652,15 @@ def inspector_pose2dproj(_session: str, _subpath: str):
 def inspector_video(session: str, subpath: str):
     """Serve a raw video file for the behavior inspector."""
     try:
-        project_dir = _inspector_project_dir(session)
-    except ValueError:
-        return jsonify({"error": "Invalid session."}), 400
+        config, _root, session_dir = _inspector_get_context(session)
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({"error": str(exc)}), 400
 
     folder_parts, filename = _inspector_split_subpath(subpath)
-    config     = _inspector_load_config(project_dir)
     pipeline   = config.get("pipeline", {})
     videos_raw = pipeline.get("videos_raw_mp4", pipeline.get("videos_raw", "videos-raw-mp4"))
 
-    video_path = project_dir.joinpath(*folder_parts) / videos_raw / filename
+    video_path = session_dir.joinpath(*folder_parts) / videos_raw / filename
     if not video_path.is_file():
         return jsonify({"error": "Video not found."}), 404
 
@@ -1620,16 +1680,15 @@ def inspector_framerate(session: str, subpath: str):
     import cv2 as _cv2
 
     try:
-        project_dir = _inspector_project_dir(session)
-    except ValueError:
-        return jsonify({"error": "Invalid session."}), 400
+        config, _root, session_dir = _inspector_get_context(session)
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({"error": str(exc)}), 400
 
     folder_parts, filename = _inspector_split_subpath(subpath)
-    config     = _inspector_load_config(project_dir)
     pipeline   = config.get("pipeline", {})
     videos_raw = pipeline.get("videos_raw_mp4", pipeline.get("videos_raw", "videos-raw-mp4"))
 
-    video_path = project_dir.joinpath(*folder_parts) / videos_raw / filename
+    video_path = session_dir.joinpath(*folder_parts) / videos_raw / filename
     if not video_path.is_file():
         return jsonify({"error": "Video not found."}), 404
 
@@ -1643,14 +1702,14 @@ def inspector_framerate(session: str, subpath: str):
 def inspector_behavior(session: str, subpath: str):
     """Return behavior bouts for a specific trial from behaviors.json."""
     try:
-        project_dir = _inspector_project_dir(session)
-    except ValueError:
-        return jsonify({"error": "Invalid session."}), 400
+        _cfg, anipose_root, _sdir = _inspector_get_context(session)
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({"error": str(exc)}), 400
 
     folder_parts, vidname = _inspector_split_subpath(subpath)
-    folder_key = "|".join(folder_parts)
+    full_key = f"{session}|{'|'.join(folder_parts)}" if folder_parts else session
 
-    beh_path = project_dir / "behaviors.json"
+    beh_path = anipose_root / "behaviors.json"
     if not beh_path.is_file():
         return jsonify({})
 
@@ -1660,18 +1719,18 @@ def inspector_behavior(session: str, subpath: str):
     except (json.JSONDecodeError, OSError):
         return jsonify({})
 
-    return jsonify(behaviors.get(folder_key, {}).get(vidname, {}))
+    return jsonify(behaviors.get(full_key, {}).get(vidname, {}))
 
 
 @app.route("/download-behavior/<session>")
 def inspector_download_behavior(session: str):
     """Download the full behaviors.json for a session."""
     try:
-        project_dir = _inspector_project_dir(session)
-    except ValueError:
-        return jsonify({"error": "Invalid session."}), 400
+        _cfg, anipose_root, _sdir = _inspector_get_context(session)
+    except (ValueError, FileNotFoundError) as exc:
+        return jsonify({"error": str(exc)}), 400
 
-    beh_path = project_dir / "behaviors.json"
+    beh_path = anipose_root / "behaviors.json"
     if not beh_path.is_file():
         return jsonify({})
 
@@ -1722,11 +1781,11 @@ def inspector_update_behavior():
 
     for sess, changes in changes_by_session.items():
         try:
-            project_dir = _inspector_project_dir(sess)
-        except ValueError:
+            _cfg, anipose_root, _sdir = _inspector_get_context(sess)
+        except (ValueError, FileNotFoundError):
             continue
 
-        beh_path = project_dir / "behaviors.json"
+        beh_path = anipose_root / "behaviors.json"
         if beh_path.is_file():
             try:
                 with open(str(beh_path)) as _f:
