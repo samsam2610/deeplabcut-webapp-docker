@@ -1900,8 +1900,9 @@
     let _flSelectedBp  = null;
     let _flImg         = new Image();
     let _flImgLoaded   = false;
-    let _flMarkerRadius = 6;
-    let _flShowNames    = true;
+    let _flMarkerRadius   = 6;
+    let _flShowNames      = true;
+    let _flCursorInCanvas = false;
 
     function _flUpdateScorerFilename() {
       if (flScorerFilename) flScorerFilename.textContent = `CollectedData_${_flScorer}.csv`;
@@ -2036,6 +2037,10 @@
           `<span class="fl-bp-name">${bp}</span>` +
           `<svg class="fl-bp-check" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>`;
         chip.addEventListener("click", () => _flSelectBp(bp));
+        chip.addEventListener("dblclick", () => {
+          _flSelectBp(bp);
+          _flRemoveBpLabel(bp);
+        });
         flBodypartList.appendChild(chip);
       });
       // Default: select first
@@ -2149,14 +2154,20 @@
     flCanvas.addEventListener("contextmenu", e => {
       e.preventDefault();
       if (!_flSelectedBp || !_flVideoStem) return;
-      const fname = _flFrames[_flFrameIdx];
-      if (_flLabels[fname]) {
-        _flLabels[fname][_flSelectedBp] = null;
-          _flDraw();
-        _flUpdateBpChipStatus();
-        _flUpdateLabelCount();
-      }
+      _flRemoveBpLabel(_flSelectedBp);
     });
+
+    flCanvas.addEventListener("mouseenter", () => { _flCursorInCanvas = true; });
+    flCanvas.addEventListener("mouseleave", () => { _flCursorInCanvas = false; });
+
+    function _flRemoveBpLabel(bp) {
+      const fname = _flFrames[_flFrameIdx];
+      if (!fname || !_flLabels[fname]) return;
+      _flLabels[fname][bp] = null;
+      _flDraw();
+      _flUpdateBpChipStatus();
+      _flUpdateLabelCount();
+    }
 
     // Auto-advance to the next unlabeled body part (napari behavior)
     function _flAutoAdvanceBp() {
@@ -2197,6 +2208,10 @@
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
       if (e.key === "ArrowLeft")  { e.preventDefault(); _flShowFrame(_flFrameIdx - 1); }
       if (e.key === "ArrowRight") { e.preventDefault(); _flShowFrame(_flFrameIdx + 1); }
+      if ((e.key === "Delete" || e.key === "Backspace") && _flCursorInCanvas && _flSelectedBp && _flVideoStem) {
+        e.preventDefault();
+        _flRemoveBpLabel(_flSelectedBp);
+      }
     });
 
     // ── Save ─────────────────────────────────────────────────────
