@@ -799,7 +799,7 @@ button[type="submit"]:hover .btn-arrow {
   width: 10px;
 }
 
-.folder-row.open .folder-chevron { transform: rotate(90deg); }
+.folder-row.open > .folder-row-header > .folder-chevron { transform: rotate(90deg); }
 
 .folder-icon { color: var(--text-dim); flex-shrink: 0; }
 .folder-row.open .folder-icon { color: var(--accent); }
