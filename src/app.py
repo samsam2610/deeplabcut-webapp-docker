@@ -2528,6 +2528,140 @@ def inspector_update_behavior():
     return "behavior labels successfully updated"
 
 
+# ── DLC Create Training Dataset ───────────────────────────────────
+
+@app.route("/dlc/project/create-training-dataset", methods=["POST"])
+def dlc_create_training_dataset():
+    """Dispatch a Celery task to run deeplabcut.create_training_dataset()."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    config_path  = project_data.get("config_path", "")
+    if not config_path or not Path(config_path).is_file():
+        return jsonify({"error": "config.yaml not found in project."}), 404
+
+    body = request.get_json(force=True) or {}
+    try:
+        num_shuffles = int(body.get("num_shuffles", 1))
+    except (TypeError, ValueError):
+        num_shuffles = 1
+    if num_shuffles < 1:
+        num_shuffles = 1
+
+    task = celery.send_task(
+        "tasks.dlc_create_training_dataset",
+        kwargs={"config_path": config_path, "num_shuffles": num_shuffles},
+    )
+    return jsonify({"task_id": task.id, "operation": "create_training_dataset"}), 202
+
+
+@app.route("/dlc/project/pytorch-configs", methods=["GET"])
+def list_dlc_pytorch_configs():
+    """List all pytorch_config.yaml files found in the active DLC project."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not project_path.is_dir():
+        return jsonify({"error": "Project directory not found."}), 404
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    matches = sorted(
+        project_path.glob("dlc-models/**/train/pytorch_config.yaml"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    configs = [
+        {"rel_path": str(m.relative_to(project_path)), "config_path": str(m)}
+        for m in matches
+    ]
+    return jsonify({"configs": configs})
+
+
+@app.route("/dlc/project/pytorch-config", methods=["GET"])
+def get_dlc_pytorch_config():
+    """Return the content of a pytorch_config.yaml. Query param: rel_path (optional)."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not project_path.is_dir():
+        return jsonify({"error": "Project directory not found."}), 404
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    rel_path = request.args.get("rel_path", "").strip()
+    if rel_path:
+        target = (project_path / rel_path).resolve()
+        if not target.is_relative_to(project_path.resolve()):
+            return jsonify({"error": "Invalid path."}), 400
+        if not target.is_file():
+            return jsonify({"error": "File not found."}), 404
+    else:
+        matches = sorted(
+            project_path.glob("dlc-models/**/train/pytorch_config.yaml"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not matches:
+            return jsonify({"error": "pytorch_config.yaml not found. Run Create Training Dataset first."}), 404
+        target = matches[0]
+
+    return jsonify({
+        "content":     target.read_text(),
+        "config_path": str(target),
+        "rel_path":    str(target.relative_to(project_path)),
+    })
+
+
+@app.route("/dlc/project/pytorch-config", methods=["PATCH"])
+def save_dlc_pytorch_config():
+    """Save edited pytorch_config.yaml. Body: { content, rel_path (optional) }."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not project_path.is_dir():
+        return jsonify({"error": "Project directory not found."}), 404
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    body     = request.get_json(force=True) or {}
+    content  = body.get("content", "")
+    rel_path = body.get("rel_path", "").strip()
+
+    if not content.strip():
+        return jsonify({"error": "Content cannot be empty."}), 400
+
+    if rel_path:
+        target = (project_path / rel_path).resolve()
+        if not target.is_relative_to(project_path.resolve()):
+            return jsonify({"error": "Invalid path."}), 400
+        if not target.is_file():
+            return jsonify({"error": "File not found."}), 404
+    else:
+        matches = sorted(
+            project_path.glob("dlc-models/**/train/pytorch_config.yaml"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not matches:
+            return jsonify({"error": "pytorch_config.yaml not found."}), 404
+        target = matches[0]
+
+    target.write_text(content)
+    return jsonify({"status": "saved", "rel_path": str(target.relative_to(project_path))})
+
+
 # ── Entry point ───────────────────────────────────────────────────
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)

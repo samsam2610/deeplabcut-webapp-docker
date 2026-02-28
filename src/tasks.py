@@ -620,6 +620,54 @@ def init_anipose_session(self, config_path: str):
         raise RuntimeError(traceback.format_exc()[-3000:])
 
 
+# ── DLC Create Training Dataset ───────────────────────────────────
+@celery.task(bind=True, name="tasks.dlc_create_training_dataset")
+def dlc_create_training_dataset(self, config_path: str, num_shuffles: int = 1):
+    """Run deeplabcut.create_training_dataset() for the given DLC config.yaml."""
+    import io as _io
+    import sys as _sys
+
+    _log_buf  = _io.StringIO()
+    _real_out = _sys.stdout
+    _real_err = _sys.stderr
+    _sys.stdout = _log_buf
+    _sys.stderr = _log_buf
+
+    try:
+        self.update_state(
+            state="PROGRESS",
+            meta={"progress": 5, "stage": "Checking config…", "log": ""},
+        )
+
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
+
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "progress": 10,
+                "stage": "Running deeplabcut.create_training_dataset…",
+                "log": f"config_path: {config_path}\nnum_shuffles: {num_shuffles}\n",
+            },
+        )
+
+        dlc.create_training_dataset(config_path, num_shuffles=num_shuffles, userfeedback=False)
+
+        final_log = _log_buf.getvalue()[-5000:]
+        return {
+            "status":    "complete",
+            "operation": "create_training_dataset",
+            "log":       final_log or f"Training dataset created.\nconfig: {config_path}",
+        }
+
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+    finally:
+        _sys.stdout = _real_out
+        _sys.stderr = _real_err
+
+
 # ── Main Celery Task ──────────────────────────────────────────────
 @celery.task(bind=True, name="tasks.run_processing")
 def run_processing(self, project_id: str, task_type: str = "anipose"):

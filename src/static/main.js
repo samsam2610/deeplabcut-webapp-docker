@@ -2221,6 +2221,218 @@
     });
   })();
 
+  // ── Create Training Dataset ──────────────────────────────────
+  (function () {
+    const ctdCard          = document.getElementById("create-training-dataset-card");
+    const ctdOpenBtn       = document.getElementById("btn-open-create-training-dataset");
+    const ctdCloseBtn      = document.getElementById("btn-close-create-training-dataset");
+    const ctdNumShuffles   = document.getElementById("ctd-num-shuffles");
+    const ctdRunBtn        = document.getElementById("btn-run-create-training-dataset");
+    const ctdRunStatus     = document.getElementById("ctd-run-status");
+    const ctdProgress      = document.getElementById("ctd-progress");
+    const ctdTaskId        = document.getElementById("ctd-task-id");
+    const ctdProgressBar   = document.getElementById("ctd-progress-bar");
+    const ctdProgressStage = document.getElementById("ctd-progress-stage");
+    const ctdProgressPct   = document.getElementById("ctd-progress-pct");
+    const ctdLogOutput     = document.getElementById("ctd-log-output");
+    const ctdPytorchSec    = document.getElementById("ctd-pytorch-section");
+    const ctdPytorchSelect = document.getElementById("ctd-pytorch-config-select");
+    const ctdRefreshBtn    = document.getElementById("ctd-refresh-pytorch-btn");
+    const ctdPytorchPath   = document.getElementById("ctd-pytorch-path");
+    const ctdPytorchEditor = document.getElementById("ctd-pytorch-editor");
+    const ctdSaveBtn       = document.getElementById("ctd-save-pytorch-btn");
+    const ctdSaveStatus    = document.getElementById("ctd-save-status");
+
+    let _ctdPollTimer  = null;
+    let _ctdRelPath    = null;
+
+    // ── Open / close ────────────────────────────────────────────
+    if (ctdOpenBtn) {
+      ctdOpenBtn.addEventListener("click", () => {
+        ctdCard.classList.remove("hidden");
+        ctdCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        _ctdLoadPytorchConfigs();
+      });
+    }
+    ctdCloseBtn.addEventListener("click", () => {
+      ctdCard.classList.add("hidden");
+      if (_ctdPollTimer) { clearInterval(_ctdPollTimer); _ctdPollTimer = null; }
+    });
+
+    // ── Run create_training_dataset ──────────────────────────────
+    ctdRunBtn.addEventListener("click", async () => {
+      const numShuffles = parseInt(ctdNumShuffles.value, 10) || 1;
+      ctdRunBtn.disabled    = true;
+      ctdRunStatus.textContent = "";
+      ctdRunStatus.className   = "fe-extract-status";
+
+      try {
+        const res  = await fetch("/dlc/project/create-training-dataset", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ num_shuffles: numShuffles }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          ctdRunStatus.textContent = data.error || "Error dispatching task.";
+          ctdRunStatus.className   = "fe-extract-status err";
+          ctdRunBtn.disabled = false;
+          return;
+        }
+        _ctdStartPolling(data.task_id);
+      } catch (err) {
+        ctdRunStatus.textContent = `Network error: ${err.message}`;
+        ctdRunStatus.className   = "fe-extract-status err";
+        ctdRunBtn.disabled = false;
+      }
+    });
+
+    // ── Poll task status ─────────────────────────────────────────
+    function _ctdStartPolling(taskId) {
+      ctdProgress.classList.remove("hidden");
+      ctdProgress.classList.remove("state-success", "state-fail");
+      ctdTaskId.textContent      = taskId.slice(0, 12) + "…";
+      ctdProgressBar.style.width = "0%";
+      ctdProgressPct.textContent = "0 %";
+      ctdProgressStage.textContent = "Queued";
+      ctdLogOutput.textContent   = "Waiting for output…";
+
+      if (_ctdPollTimer) clearInterval(_ctdPollTimer);
+      _ctdPollTimer = setInterval(() => _ctdPoll(taskId), 2000);
+      _ctdPoll(taskId);
+    }
+
+    async function _ctdPoll(taskId) {
+      try {
+        const res  = await fetch(`/status/${taskId}`);
+        const data = await res.json();
+
+        const pct = Math.min(data.progress || 0, 100);
+        ctdProgressBar.style.width   = pct + "%";
+        ctdProgressPct.textContent   = pct + " %";
+        ctdProgressStage.textContent = data.stage || data.state;
+
+        if (data.log) {
+          ctdLogOutput.textContent = data.log;
+          ctdLogOutput.scrollTop   = ctdLogOutput.scrollHeight;
+        }
+
+        if (data.state === "SUCCESS") {
+          clearInterval(_ctdPollTimer); _ctdPollTimer = null;
+          ctdProgress.classList.add("state-success");
+          ctdProgressStage.textContent = "✓ Complete";
+          ctdProgressBar.style.width   = "100%";
+          ctdProgressPct.textContent   = "100 %";
+          if (data.result && data.result.log) ctdLogOutput.textContent = data.result.log;
+          ctdRunBtn.disabled = false;
+          ctdRunStatus.textContent = "Training dataset created.";
+          ctdRunStatus.className   = "fe-extract-status ok";
+          await _ctdLoadPytorchConfigs();
+        }
+
+        if (data.state === "FAILURE") {
+          clearInterval(_ctdPollTimer); _ctdPollTimer = null;
+          ctdProgress.classList.add("state-fail");
+          ctdProgressStage.textContent = "✗ " + (data.error || "Failed");
+          ctdLogOutput.textContent     = data.error || "An unknown error occurred.";
+          ctdRunBtn.disabled = false;
+        }
+      } catch (err) {
+        console.error("CTD poll error:", err);
+      }
+    }
+
+    // ── Load pytorch_config.yaml list ───────────────────────────
+    async function _ctdLoadPytorchConfigs() {
+      try {
+        const res  = await fetch("/dlc/project/pytorch-configs");
+        const data = await res.json();
+        if (data.error || !data.configs || !data.configs.length) {
+          ctdPytorchSec.classList.add("hidden");
+          return;
+        }
+        const configs = data.configs;
+        const prev    = ctdPytorchSelect.value;
+
+        ctdPytorchSelect.innerHTML = "";
+        configs.forEach(c => {
+          const opt     = document.createElement("option");
+          opt.value       = c.rel_path;
+          opt.textContent = c.rel_path;
+          ctdPytorchSelect.appendChild(opt);
+        });
+
+        // Restore previous selection or use first
+        if (prev && configs.find(c => c.rel_path === prev)) {
+          ctdPytorchSelect.value = prev;
+        } else {
+          ctdPytorchSelect.value = configs[0].rel_path;
+        }
+
+        ctdPytorchSec.classList.remove("hidden");
+        await _ctdLoadSelectedConfig();
+      } catch (err) {
+        console.error("CTD pytorch configs:", err);
+      }
+    }
+
+    ctdRefreshBtn.addEventListener("click", () => _ctdLoadPytorchConfigs());
+
+    ctdPytorchSelect.addEventListener("change", () => _ctdLoadSelectedConfig());
+
+    async function _ctdLoadSelectedConfig() {
+      const relPath = ctdPytorchSelect.value;
+      if (!relPath) return;
+      _ctdRelPath = relPath;
+      try {
+        const res  = await fetch(`/dlc/project/pytorch-config?rel_path=${encodeURIComponent(relPath)}`);
+        const data = await res.json();
+        if (data.error) {
+          ctdPytorchPath.textContent = data.error;
+          return;
+        }
+        ctdPytorchPath.textContent  = data.config_path || "";
+        ctdPytorchEditor.value      = data.content || "";
+        ctdSaveStatus.textContent   = "";
+        ctdSaveStatus.className     = "config-save-status";
+      } catch (err) {
+        ctdPytorchPath.textContent = `Error: ${err.message}`;
+      }
+    }
+
+    // ── Save pytorch_config.yaml ─────────────────────────────────
+    ctdSaveBtn.addEventListener("click", async () => {
+      const content = ctdPytorchEditor.value;
+      if (!content.trim()) return;
+      ctdSaveBtn.disabled      = true;
+      ctdSaveStatus.textContent = "Saving…";
+      ctdSaveStatus.className   = "config-save-status";
+      try {
+        const res  = await fetch("/dlc/project/pytorch-config", {
+          method:  "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ content, rel_path: _ctdRelPath }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          ctdSaveStatus.textContent = "Saved ✓";
+          ctdSaveStatus.className   = "config-save-status ok";
+        } else {
+          ctdSaveStatus.textContent = data.error || "Error saving.";
+          ctdSaveStatus.className   = "config-save-status err";
+        }
+      } catch (err) {
+        ctdSaveStatus.textContent = `Network error: ${err.message}`;
+        ctdSaveStatus.className   = "config-save-status err";
+      }
+      ctdSaveBtn.disabled = false;
+      setTimeout(() => {
+        ctdSaveStatus.textContent = "";
+        ctdSaveStatus.className   = "config-save-status";
+      }, 4000);
+    });
+  })();
+
   // ── Inspect Video ────────────────────────────────────────────
   document.getElementById("inspect-video-btn")?.addEventListener("click", () => {
     const projectId = folderSelect.value;
