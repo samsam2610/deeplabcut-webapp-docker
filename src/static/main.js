@@ -1881,9 +1881,10 @@
     const flCanvasLoading = document.getElementById("fl-canvas-loading");
     const flBodypartList = document.getElementById("fl-bodypart-list");
     const flBpHint       = document.getElementById("fl-bp-hint");
-    const flBtnSave      = document.getElementById("fl-btn-save");
-    const flSaveStatus   = document.getElementById("fl-save-status");
-    const flLabelCount   = document.getElementById("fl-label-count");
+    const flBtnSave        = document.getElementById("fl-btn-save");
+    const flSaveStatus     = document.getElementById("fl-save-status");
+    const flLabelCount     = document.getElementById("fl-label-count");
+    const flScorerFilename = document.getElementById("fl-scorer-filename");
 
     // ── State ───────────────────────────────────────────────────
     let _flBodyparts   = [];
@@ -1896,6 +1897,10 @@
     let _flSelectedBp  = null;
     let _flImg         = new Image();
     let _flImgLoaded   = false;
+
+    function _flUpdateScorerFilename() {
+      if (flScorerFilename) flScorerFilename.textContent = `CollectedData_${_flScorer}.csv`;
+    }
 
     // ── Napari-inspired color palette ────────────────────────────
     const FL_COLORS = [
@@ -1925,6 +1930,7 @@
         const data = await res.json();
         _flBodyparts = data.bodyparts || [];
         _flScorer    = data.scorer    || "User";
+        _flUpdateScorerFilename();
         _flRenderBodypartList();
       } catch (e) { console.error("FL bodyparts:", e); }
       await _flLoadStems();
@@ -1986,6 +1992,7 @@
         if (!data.error) {
           _flLabels = data.labels || {};
           _flScorer = data.scorer || _flScorer;
+          _flUpdateScorerFilename();
         }
       } catch (_) { _flLabels = {}; }
 

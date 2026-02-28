@@ -1452,7 +1452,12 @@ def dlc_get_labels(video_stem: str):
     csv_path     = stem_dir / f"CollectedData_{scorer}.csv"
 
     if not csv_path.is_file():
-        return jsonify({"labels": {}, "scorer": scorer})
+        # Fall back to any CollectedData_*.csv present (e.g. labelled with napari using a different scorer)
+        candidates = sorted(stem_dir.glob("CollectedData_*.csv"))
+        if not candidates:
+            return jsonify({"labels": {}, "scorer": scorer})
+        csv_path = candidates[0]
+        scorer = csv_path.stem[len("CollectedData_"):]
 
     try:
         with open(str(csv_path), newline="") as f:
@@ -1461,16 +1466,18 @@ def dlc_get_labels(video_stem: str):
         if len(rows) < 4:
             return jsonify({"labels": {}, "scorer": scorer})
 
-        bodyparts_row = rows[1][1:]
-        coords_row    = rows[2][1:]
+        # Napari/standard format: 3-column MultiIndex index (labeled-data | video_stem | img_name)
+        # Header data starts at column 3; data rows have img_name at column 2.
+        bodyparts_row = rows[1][3:]
+        coords_row    = rows[2][3:]
         col_pairs     = list(zip(bodyparts_row, coords_row))
 
         labels = {}
         for row in rows[3:]:
             if not row:
                 continue
-            img_name    = Path(row[0]).name
-            vals        = row[1:]
+            img_name = row[2]
+            vals     = row[3:]
             bp_data: dict = {}
             for (bp, coord), val in zip(col_pairs, vals):
                 bp_data.setdefault(bp, {})[coord] = val
@@ -1516,15 +1523,15 @@ def dlc_save_labels(video_stem: str):
 
     frame_names = sorted(labels.keys(), key=_natural_keys)
 
-    header_scorer    = ["scorer"]    + [scorer] * (len(bodyparts) * 2)
-    header_bodyparts = ["bodyparts"] + [bp for bp in bodyparts for _ in range(2)]
-    header_coords    = ["coords"]    + ["x", "y"] * len(bodyparts)
+    # Napari/standard MultiIndex format: 3-column index (labeled-data | video_stem | img_name)
+    header_scorer    = ["scorer",    "", ""] + [scorer] * (len(bodyparts) * 2)
+    header_bodyparts = ["bodyparts", "", ""] + [bp for bp in bodyparts for _ in range(2)]
+    header_coords    = ["coords",    "", ""] + ["x", "y"] * len(bodyparts)
 
     rows = [header_scorer, header_bodyparts, header_coords]
     for frame_name in frame_names:
-        row_path    = f"labeled-data/{safe_stem}/{frame_name}"
         frame_lbls  = labels.get(frame_name, {})
-        row         = [row_path]
+        row         = ["labeled-data", safe_stem, frame_name]
         for bp in bodyparts:
             pt = frame_lbls.get(bp)
             if pt and len(pt) == 2 and pt[0] is not None and pt[1] is not None:
