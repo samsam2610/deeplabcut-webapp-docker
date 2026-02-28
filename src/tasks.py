@@ -9,12 +9,12 @@ import subprocess
 import traceback
 from pathlib import Path
 import deeplabcut as dlc
-from .anipose_src.filter_2d_funcs import *
-from .anipose_src.filter_3d_funcs import *
-from .anipose_src.load_config_funcs import *
-from .anipose_src.preprocessing_funcs import *
-from .anipose_src.triangulate_funcs import *
-from .anipose_src.calibration_funcs import *
+from anipose_src.filter_2d_funcs import *
+from anipose_src.filter_3d_funcs import *
+from anipose_src.load_config_funcs import *
+from anipose_src.preprocessing_funcs import *
+from anipose_src.triangulate_funcs import *
+from anipose_src.calibration_funcs import *
 
 from celery import Celery, Task
 
