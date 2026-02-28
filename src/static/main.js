@@ -731,10 +731,64 @@
     }
   }
 
-  // ── Build a DLC pipeline folder row (mirrors Anipose's _buildFolderRow) ──
+  // ── Count all files (recursively) in a children array ───────────
+  function _countAllFiles(children) {
+    let n = 0;
+    for (const c of (children || [])) {
+      if (c.type === "file") n++;
+      else n += _countAllFiles(c.children);
+    }
+    return n;
+  }
+
+  // ── Build a tree node (file or subfolder) ─────────────────────
+  function _buildDlcTreeNode(node) {
+    if (node.type === "file") {
+      const item = document.createElement("div");
+      item.className = "file-item";
+      item.innerHTML = `${_fileSvg()}<span class="file-item-name" title="${node.rel_path}">${node.name}</span><span class="file-size">${_fmtSize(node.size)}</span><button class="file-rename-btn" title="Rename">✎</button><button class="file-delete-btn" title="Delete">×</button>`;
+      item.querySelector(".file-rename-btn").addEventListener("click", e => {
+        e.stopPropagation();
+        _activateDlcRename(item, node.name, node.rel_path);
+      });
+      item.querySelector(".file-delete-btn").addEventListener("click", e => {
+        e.stopPropagation();
+        _deleteDlcFile(node.name, node.rel_path);
+      });
+      return item;
+    }
+
+    // Directory node
+    const subRow = document.createElement("div");
+    subRow.className = "folder-row folder-subrow";
+
+    const fileCount = _countAllFiles(node.children);
+    const subHeader = document.createElement("div");
+    subHeader.className = "folder-row-header";
+    subHeader.innerHTML = `
+      <span class="folder-chevron">▶</span>
+      <span class="folder-icon">${_folderSvg("currentColor")}</span>
+      <span class="folder-key" style="font-weight:500;font-style:normal">${node.name}</span>
+      <span class="folder-badge ${fileCount > 0 ? "has-files" : ""}">${fileCount} file${fileCount !== 1 ? "s" : ""}</span>`;
+
+    const subFiles = document.createElement("div");
+    subFiles.className = "folder-files folder-subtree";
+    if (!node.children || node.children.length === 0) {
+      subFiles.innerHTML = '<p class="folder-empty-msg">Empty folder</p>';
+    } else {
+      node.children.forEach(child => subFiles.appendChild(_buildDlcTreeNode(child)));
+    }
+
+    subRow.appendChild(subHeader);
+    subRow.appendChild(subFiles);
+    subHeader.addEventListener("click", () => subRow.classList.toggle("open"));
+    return subRow;
+  }
+
+  // ── Build a DLC pipeline folder row ──────────────────────────
   function _buildDlcFolderRow(entry) {
-    const { key, folder, files, exists } = entry;
-    const count = files.length;
+    const { key, folder, children, exists } = entry;
+    const fileCount = _countAllFiles(children);
 
     const row = document.createElement("div");
     row.className = "folder-row";
@@ -747,7 +801,7 @@
       <span class="folder-icon">${_folderSvg("currentColor")}</span>
       <span class="folder-key">${key}</span>
       <span class="folder-name-chip">${folder}</span>
-      <span class="folder-badge ${count > 0 ? "has-files" : ""}">${count} file${count !== 1 ? "s" : ""}</span>
+      <span class="folder-badge ${fileCount > 0 ? "has-files" : ""}">${fileCount} file${fileCount !== 1 ? "s" : ""}</span>
       <span class="folder-upload-status"></span>
       <label class="folder-upload-label" title="Upload files to ${folder}/">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
@@ -760,23 +814,10 @@
 
     const fileList = document.createElement("div");
     fileList.className = "folder-files";
-    if (files.length === 0) {
+    if (!children || children.length === 0) {
       fileList.innerHTML = `<p class="folder-empty-msg">${exists ? "Empty folder" : "Folder not yet created"}</p>`;
     } else {
-      files.forEach(f => {
-        const item = document.createElement("div");
-        item.className = "file-item";
-        item.innerHTML = `${_fileSvg()}<span class="file-item-name">${f.name}</span><span class="file-size">${_fmtSize(f.size)}</span><button class="file-rename-btn" title="Rename ${f.name}">✎</button><button class="file-delete-btn" title="Delete ${f.name}">×</button>`;
-        item.querySelector(".file-rename-btn").addEventListener("click", e => {
-          e.stopPropagation();
-          _activateDlcRename(item, f.name, folder);
-        });
-        item.querySelector(".file-delete-btn").addEventListener("click", e => {
-          e.stopPropagation();
-          _deleteDlcFile(f.name, folder);
-        });
-        fileList.appendChild(item);
-      });
+      children.forEach(child => fileList.appendChild(_buildDlcTreeNode(child)));
     }
 
     row.appendChild(header);
@@ -839,13 +880,13 @@
     }
   }
 
-  async function _deleteDlcFile(filename, folder) {
-    if (!confirm(`Delete "${filename}" from ${folder}/? This cannot be undone.`)) return;
+  async function _deleteDlcFile(filename, relPath) {
+    if (!confirm(`Delete "${filename}"? This cannot be undone.`)) return;
     try {
       const res  = await fetch("/dlc/project/file", {
         method:  "DELETE",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ folder, filename }),
+        body:    JSON.stringify({ rel_path: relPath }),
       });
       const data = await res.json();
       if (!res.ok) alert(data.error || "Delete failed.");
@@ -855,7 +896,7 @@
     }
   }
 
-  function _activateDlcRename(item, oldName, folder) {
+  function _activateDlcRename(item, oldName, relPath) {
     const nameSpan  = item.querySelector(".file-item-name");
     const sizeSpan  = item.querySelector(".file-size");
     const renameBtn = item.querySelector(".file-rename-btn");
@@ -892,7 +933,7 @@
         const res  = await fetch("/dlc/project/file", {
           method:  "PATCH",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ folder, old_name: oldName, new_name: newName }),
+          body:    JSON.stringify({ rel_path: relPath, new_name: newName }),
         });
         const data = await res.json();
         if (!res.ok) alert(data.error || "Rename failed.");

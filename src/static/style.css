@@ -750,6 +750,29 @@ button[type="submit"]:hover .btn-arrow {
   transition: border-color .2s;
 }
 
+/* Subfolder rows inside the tree */
+.folder-subtree {
+  padding: .25rem 0 .25rem .6rem;
+}
+.folder-subrow {
+  border: none;
+  border-radius: 6px;
+  border-left: 2px solid var(--border);
+  margin: .15rem 0 .15rem .6rem;
+  overflow: hidden;
+}
+.folder-subrow > .folder-row-header {
+  background: transparent;
+  padding: .35rem .6rem;
+  font-size: .82rem;
+}
+.folder-subrow > .folder-row-header:hover { background: var(--surface-2); }
+.folder-subrow .folder-files { border-top: 1px solid var(--border); padding: .2rem 0; }
+/* deeper nesting */
+.folder-subrow .folder-subrow {
+  margin-left: .8rem;
+}
+
 .folder-row.dragover {
   border-color: var(--accent);
   background: rgba(110, 231, 183, .04);

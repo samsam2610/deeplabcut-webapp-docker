@@ -848,6 +848,29 @@ def _parse_pipeline_section(config_text: str) -> dict:
 
 # ── DLC Project Manager ───────────────────────────────────────────
 
+def _walk_dir(path: Path, project_path: Path, depth: int = 0, max_depth: int = 6) -> list:
+    """
+    Recursively list a directory relative to project_path.
+    Each item: { name, type, rel_path, size? (files), children? (dirs) }
+    Dirs are sorted before files; hidden entries are skipped.
+    """
+    items = []
+    try:
+        entries = sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
+        for item in entries:
+            if item.name.startswith("."):
+                continue
+            rel = str(item.relative_to(project_path))
+            if item.is_dir():
+                children = _walk_dir(item, project_path, depth + 1, max_depth) if depth < max_depth else []
+                items.append({"name": item.name, "type": "dir", "rel_path": rel, "children": children})
+            else:
+                items.append({"name": item.name, "type": "file", "size": item.stat().st_size, "rel_path": rel})
+    except PermissionError:
+        pass
+    return items
+
+
 def _dlc_project_security_check(p: Path) -> bool:
     """Return True if p is inside an allowed data root."""
     allowed_roots = [DATA_DIR.resolve(), USER_DATA_DIR.resolve()]
@@ -919,16 +942,13 @@ def browse_dlc_project():
     folders = []
     for key, folder_name in DLC_PIPELINE_FOLDERS:
         folder_path = project_path / folder_name
-        files = []
-        if folder_path.is_dir():
-            for item in sorted(folder_path.iterdir()):
-                if item.is_file() and not item.name.startswith("."):
-                    files.append({"name": item.name, "size": item.stat().st_size})
+        children = _walk_dir(folder_path, project_path) if folder_path.is_dir() else []
         folders.append({
-            "key":    key,
-            "folder": folder_name,
-            "files":  files,
-            "exists": folder_path.is_dir(),
+            "key":      key,
+            "folder":   folder_name,
+            "rel_path": folder_name,
+            "children": children,
+            "exists":   folder_path.is_dir(),
         })
 
     return jsonify({
@@ -1011,7 +1031,7 @@ def dlc_project_upload():
 
 @app.route("/dlc/project/file", methods=["DELETE"])
 def dlc_project_delete_file():
-    """Delete a file from a DLC pipeline folder. Body: { folder, filename }"""
+    """Delete a file anywhere inside the active DLC project. Body: { rel_path }"""
     raw = _redis_client.get(_DLC_PROJECT_KEY)
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
@@ -1019,27 +1039,30 @@ def dlc_project_delete_file():
     project_data = json.loads(raw)
     project_path = Path(project_data.get("project_path", ""))
 
-    body        = request.get_json(force=True) or {}
-    folder_name = body.get("folder",   "").strip()
-    filename    = body.get("filename", "").strip()
+    body     = request.get_json(force=True) or {}
+    rel_path = body.get("rel_path", "").strip()
+    if not rel_path:
+        return jsonify({"error": "rel_path is required."}), 400
 
+    # Must be inside a top-level pipeline folder
     dlc_folder_names = [f for _, f in DLC_PIPELINE_FOLDERS]
-    if folder_name not in dlc_folder_names:
-        return jsonify({"error": f"Invalid folder: '{folder_name}'."}), 400
+    top = Path(rel_path).parts[0] if Path(rel_path).parts else ""
+    if top not in dlc_folder_names:
+        return jsonify({"error": "Path must be inside a pipeline folder."}), 400
 
-    target = (project_path / folder_name / filename).resolve()
+    target = (project_path / rel_path).resolve()
     if not target.is_relative_to(project_path.resolve()):
         return jsonify({"error": "Invalid path."}), 400
     if not target.is_file():
         return jsonify({"error": "File not found."}), 404
 
     target.unlink()
-    return jsonify({"status": "deleted", "filename": filename})
+    return jsonify({"status": "deleted", "rel_path": rel_path})
 
 
 @app.route("/dlc/project/file", methods=["PATCH"])
 def dlc_project_rename_file():
-    """Rename a file in a DLC pipeline folder. Body: { folder, old_name, new_name }"""
+    """Rename a file anywhere inside the active DLC project. Body: { rel_path, new_name }"""
     raw = _redis_client.get(_DLC_PROJECT_KEY)
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
@@ -1047,20 +1070,20 @@ def dlc_project_rename_file():
     project_data = json.loads(raw)
     project_path = Path(project_data.get("project_path", ""))
 
-    body        = request.get_json(force=True) or {}
-    folder_name = body.get("folder",   "").strip()
-    old_name    = body.get("old_name", "").strip()
-    new_name    = body.get("new_name", "").strip()
+    body     = request.get_json(force=True) or {}
+    rel_path = body.get("rel_path", "").strip()
+    new_name = body.get("new_name", "").strip()
+
+    if not rel_path or not new_name:
+        return jsonify({"error": "rel_path and new_name are required."}), 400
 
     dlc_folder_names = [f for _, f in DLC_PIPELINE_FOLDERS]
-    if folder_name not in dlc_folder_names:
-        return jsonify({"error": f"Invalid folder: '{folder_name}'."}), 400
-    if not old_name or not new_name:
-        return jsonify({"error": "old_name and new_name are required."}), 400
+    top = Path(rel_path).parts[0] if Path(rel_path).parts else ""
+    if top not in dlc_folder_names:
+        return jsonify({"error": "Path must be inside a pipeline folder."}), 400
 
-    folder_path = project_path / folder_name
-    src = (folder_path / old_name).resolve()
-    dst = (folder_path / secure_filename(new_name)).resolve()
+    src = (project_path / rel_path).resolve()
+    dst = (src.parent / secure_filename(new_name)).resolve()
 
     if not src.is_relative_to(project_path.resolve()) or \
        not dst.is_relative_to(project_path.resolve()):
@@ -1071,7 +1094,7 @@ def dlc_project_rename_file():
         return jsonify({"error": "A file with that name already exists."}), 409
 
     src.rename(dst)
-    return jsonify({"status": "renamed", "old_name": old_name, "new_name": dst.name})
+    return jsonify({"status": "renamed", "rel_path": rel_path, "new_name": dst.name})
 
 
 @app.route("/dlc/project/download")
