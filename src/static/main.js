@@ -2221,6 +2221,76 @@
     });
   })();
 
+  // ── DLC config.yaml editor ───────────────────────────────────
+  (function () {
+    const card       = document.getElementById("dlc-project-config-card");
+    const openBtn    = document.getElementById("btn-open-dlc-config-editor");
+    const closeBtn   = document.getElementById("btn-close-dlc-config-editor");
+    const pathLabel  = document.getElementById("dlc-project-config-path");
+    const editor     = document.getElementById("dlc-config-editor");
+    const saveBtn    = document.getElementById("save-dlc-config-btn");
+    const saveStatus = document.getElementById("dlc-config-save-status");
+
+    async function _load() {
+      try {
+        const res  = await fetch("/dlc/project/config");
+        const data = await res.json();
+        if (!res.ok) {
+          pathLabel.textContent  = data.error || "Failed to load config.yaml";
+          editor.value           = "";
+          return;
+        }
+        pathLabel.textContent = data.config_path || "";
+        editor.value          = data.content     || "";
+        saveStatus.textContent = "";
+        saveStatus.className   = "config-save-status";
+      } catch (err) {
+        pathLabel.textContent = `Error: ${err.message}`;
+      }
+    }
+
+    if (openBtn) {
+      openBtn.addEventListener("click", () => {
+        card.classList.remove("hidden");
+        card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        _load();
+      });
+    }
+
+    closeBtn.addEventListener("click", () => card.classList.add("hidden"));
+
+    saveBtn.addEventListener("click", async () => {
+      const content = editor.value;
+      if (!content.trim()) return;
+      saveBtn.disabled       = true;
+      saveStatus.textContent = "Saving…";
+      saveStatus.className   = "config-save-status";
+      try {
+        const res  = await fetch("/dlc/project/config", {
+          method:  "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ content }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          saveStatus.textContent = "Saved ✓";
+          saveStatus.className   = "config-save-status ok";
+        } else {
+          saveStatus.textContent = data.error || "Save failed";
+          saveStatus.className   = "config-save-status err";
+        }
+      } catch (err) {
+        saveStatus.textContent = `Network error: ${err.message}`;
+        saveStatus.className   = "config-save-status err";
+      }
+      saveBtn.disabled = false;
+      setTimeout(() => {
+        saveStatus.textContent = "";
+        saveStatus.className   = "config-save-status";
+      }, 3000);
+    });
+  })();
+
   // ── Create Training Dataset ──────────────────────────────────
   (function () {
     const ctdCard          = document.getElementById("create-training-dataset-card");
