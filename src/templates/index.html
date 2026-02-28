@@ -157,8 +157,8 @@
         <span style="font-size:.82rem;color:var(--text-dim)">No <code style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">config.yaml</code> found in this folder. A DeepLabCut project requires a <code style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">config.yaml</code> at its root.</span>
       </div>
 
-      <!-- ── Frame Extractor launch button ─────────────────── -->
-      <div id="dlc-frame-extract-launch" class="hidden" style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+      <!-- ── Frame Extractor + Labeler launch buttons ──────── -->
+      <div id="dlc-frame-extract-launch" class="hidden" style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:.5rem">
         <button id="btn-open-frame-extractor" class="inspect-btn" style="width:100%;gap:.55rem">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="2" width="20" height="20" rx="3"/>
@@ -169,6 +169,20 @@
             <line x1="19" y1="12" x2="22" y2="12"/>
           </svg>
           <span>Extract Frames</span>
+        </button>
+        <button id="btn-open-frame-labeler" class="inspect-btn" style="width:100%;gap:.55rem">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <line x1="12" y1="2" x2="12" y2="6"/>
+            <line x1="12" y1="18" x2="12" y2="22"/>
+            <line x1="2" y1="12" x2="6" y2="12"/>
+            <line x1="18" y1="12" x2="22" y2="12"/>
+            <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/>
+            <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/>
+            <line x1="19.07" y1="4.93" x2="16.24" y2="7.76"/>
+            <line x1="7.76" y1="16.24" x2="4.93" y2="19.07"/>
+          </svg>
+          <span>Label Frames</span>
         </button>
       </div>
     </section>
@@ -250,24 +264,6 @@
           <span id="fe-extract-count" class="fe-extract-count">0 frames saved</span>
         </div>
         <span id="fe-extract-status" class="fe-extract-status"></span>
-
-        <!-- Label Frames button -->
-        <div style="margin-top:.65rem">
-          <button id="btn-open-frame-labeler" class="inspect-btn" style="width:100%;gap:.55rem">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="3"/>
-              <line x1="12" y1="2" x2="12" y2="6"/>
-              <line x1="12" y1="18" x2="12" y2="22"/>
-              <line x1="2" y1="12" x2="6" y2="12"/>
-              <line x1="18" y1="12" x2="22" y2="12"/>
-              <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/>
-              <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/>
-              <line x1="19.07" y1="4.93" x2="16.24" y2="7.76"/>
-              <line x1="7.76" y1="16.24" x2="4.93" y2="19.07"/>
-            </svg>
-            <span>Label Frames</span>
-          </button>
-        </div>
 
         <!-- Hidden canvas for frame capture -->
         <canvas id="fe-canvas" style="display:none"></canvas>
