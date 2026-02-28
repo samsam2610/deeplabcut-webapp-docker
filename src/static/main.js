@@ -1863,6 +1863,364 @@
     });
   })();
 
+  // ── Frame Labeler ─────────────────────────────────────────────
+  (function () {
+    const flCard         = document.getElementById("frame-labeler-card");
+    const flOpenBtn      = document.getElementById("btn-open-frame-labeler");
+    const flCloseBtn     = document.getElementById("btn-close-frame-labeler");
+    const flStemSelect   = document.getElementById("fl-stem-select");
+    const flRefreshBtn   = document.getElementById("fl-refresh-btn");
+    const flStemStatus   = document.getElementById("fl-stem-status");
+    const flPlayerSec    = document.getElementById("fl-player-section");
+    const flBtnPrev      = document.getElementById("fl-btn-prev");
+    const flBtnNext      = document.getElementById("fl-btn-next");
+    const flFrameInfo    = document.getElementById("fl-frame-info");
+    const flFrameName    = document.getElementById("fl-frame-name");
+    const flCanvas       = document.getElementById("fl-canvas");
+    const flCtx          = flCanvas.getContext("2d");
+    const flCanvasLoading = document.getElementById("fl-canvas-loading");
+    const flBodypartList = document.getElementById("fl-bodypart-list");
+    const flBpHint       = document.getElementById("fl-bp-hint");
+    const flBtnSave      = document.getElementById("fl-btn-save");
+    const flSaveStatus   = document.getElementById("fl-save-status");
+    const flLabelCount   = document.getElementById("fl-label-count");
+
+    // ── State ───────────────────────────────────────────────────
+    let _flBodyparts   = [];
+    let _flScorer      = "User";
+    let _flStemData    = [];      // [{video_stem, frames[]}]
+    let _flVideoStem   = null;
+    let _flFrames      = [];      // array of filenames
+    let _flFrameIdx    = 0;
+    let _flLabels      = {};      // {frame_name: {bp: [x, y] | null}}
+    let _flSelectedBp  = null;
+    let _flImg         = new Image();
+    let _flImgLoaded   = false;
+
+    // ── Napari-inspired color palette ────────────────────────────
+    const FL_COLORS = [
+      "#f87171","#fb923c","#fbbf24","#a3e635","#34d399",
+      "#22d3ee","#818cf8","#e879f9","#f43f5e","#10b981",
+      "#3b82f6","#ec4899","#f59e0b","#84cc16","#06b6d4",
+    ];
+    function _flColor(i) { return FL_COLORS[i % FL_COLORS.length]; }
+
+    // ── Open / close ────────────────────────────────────────────
+    if (flOpenBtn) {
+      flOpenBtn.addEventListener("click", () => {
+        flCard.classList.remove("hidden");
+        flCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        _flLoad();
+      });
+    }
+
+    flCloseBtn.addEventListener("click", () => {
+      flCard.classList.add("hidden");
+    });
+
+    // ── Load bodyparts + stems ───────────────────────────────────
+    async function _flLoad() {
+      try {
+        const res  = await fetch("/dlc/project/bodyparts");
+        const data = await res.json();
+        _flBodyparts = data.bodyparts || [];
+        _flScorer    = data.scorer    || "User";
+        _flRenderBodypartList();
+      } catch (e) { console.error("FL bodyparts:", e); }
+      await _flLoadStems();
+    }
+
+    async function _flLoadStems() {
+      flStemStatus.textContent = "";
+      flStemStatus.className   = "fe-extract-status";
+      try {
+        const res  = await fetch("/dlc/project/labeled-frames");
+        const data = await res.json();
+        if (data.error) {
+          flStemStatus.textContent = data.error;
+          flStemStatus.className   = "fe-extract-status err";
+          return;
+        }
+        _flStemData = data.video_stems || [];
+        const prev  = flStemSelect.value;
+        flStemSelect.innerHTML = '<option value="">— select video —</option>';
+        _flStemData.forEach(s => {
+          const opt = document.createElement("option");
+          opt.value       = s.video_stem;
+          opt.textContent = `${s.video_stem}  (${s.frames.length} frame${s.frames.length !== 1 ? "s" : ""})`;
+          flStemSelect.appendChild(opt);
+        });
+        // Restore selection or auto-select if only one
+        if (_flStemData.length === 1) {
+          flStemSelect.value = _flStemData[0].video_stem;
+          await _flSelectStem(_flStemData[0].video_stem, _flStemData[0].frames);
+        } else if (prev && _flStemData.find(s => s.video_stem === prev)) {
+          flStemSelect.value = prev;
+          const found = _flStemData.find(s => s.video_stem === prev);
+          if (found) await _flSelectStem(found.video_stem, found.frames);
+        }
+      } catch (e) {
+        flStemStatus.textContent = `Error: ${e.message}`;
+        flStemStatus.className   = "fe-extract-status err";
+      }
+    }
+
+    flRefreshBtn.addEventListener("click", () => _flLoadStems());
+
+    flStemSelect.addEventListener("change", async () => {
+      const stem = flStemSelect.value;
+      if (!stem) { flPlayerSec.classList.add("hidden"); return; }
+      const found = _flStemData.find(s => s.video_stem === stem);
+      if (found) await _flSelectStem(found.video_stem, found.frames);
+    });
+
+    async function _flSelectStem(stem, frames) {
+      _flVideoStem = stem;
+      _flFrames    = frames;
+      _flFrameIdx  = 0;
+
+      // Fetch existing labels
+      try {
+        const res  = await fetch(`/dlc/project/labels/${encodeURIComponent(stem)}`);
+        const data = await res.json();
+        if (!data.error) {
+          _flLabels = data.labels || {};
+          _flScorer = data.scorer || _flScorer;
+        }
+      } catch (_) { _flLabels = {}; }
+
+      flPlayerSec.classList.remove("hidden");
+      _flUpdateLabelCount();
+      _flShowFrame(0);
+    }
+
+    // ── Render body-part chip list ───────────────────────────────
+    function _flRenderBodypartList() {
+      flBodypartList.innerHTML = "";
+      if (!_flBodyparts.length) {
+        flBpHint.classList.remove("hidden");
+        return;
+      }
+      flBpHint.classList.add("hidden");
+      _flBodyparts.forEach((bp, i) => {
+        const chip = document.createElement("button");
+        chip.className = "fl-bp-chip";
+        chip.dataset.bp = bp;
+        chip.style.setProperty("--fl-color", _flColor(i));
+        chip.innerHTML =
+          `<span class="fl-bp-dot"></span>` +
+          `<span class="fl-bp-name">${bp}</span>` +
+          `<svg class="fl-bp-check" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+        chip.addEventListener("click", () => _flSelectBp(bp));
+        flBodypartList.appendChild(chip);
+      });
+      // Default: select first
+      if (_flBodyparts.length) _flSelectBp(_flBodyparts[0]);
+    }
+
+    function _flSelectBp(bp) {
+      _flSelectedBp = bp;
+      flCanvas.style.cursor = "crosshair";
+      flBodypartList.querySelectorAll(".fl-bp-chip").forEach(c => {
+        c.classList.toggle("active", c.dataset.bp === bp);
+      });
+    }
+
+    // ── Frame display ────────────────────────────────────────────
+    function _flShowFrame(idx) {
+      if (!_flFrames.length) return;
+      idx = Math.max(0, Math.min(idx, _flFrames.length - 1));
+      _flFrameIdx = idx;
+      const fname = _flFrames[idx];
+      flFrameInfo.textContent = `Frame ${idx + 1} / ${_flFrames.length}`;
+      flFrameName.textContent = fname;
+
+      _flUpdateBpChipStatus();
+      _flUpdateLabelCount();
+
+      // Load frame image
+      _flImgLoaded = false;
+      flCanvasLoading.classList.remove("hidden");
+      const img   = new Image();
+      img.onload  = () => {
+        _flImg       = img;
+        _flImgLoaded = true;
+        flCanvasLoading.classList.add("hidden");
+        _flFitCanvas();
+        _flDraw();
+      };
+      img.onerror = () => {
+        flCanvasLoading.textContent = "Failed to load frame.";
+        flCanvasLoading.classList.remove("hidden");
+      };
+      img.src = `/dlc/project/frame-image/${encodeURIComponent(_flVideoStem)}/${encodeURIComponent(fname)}`;
+    }
+
+    function _flFitCanvas() {
+      const w     = flCanvas.parentElement.clientWidth || 480;
+      const scale = w / _flImg.naturalWidth;
+      flCanvas.width  = w;
+      flCanvas.height = Math.round(_flImg.naturalHeight * scale);
+    }
+
+    function _flDraw() {
+      if (!_flImgLoaded) return;
+      flCtx.clearRect(0, 0, flCanvas.width, flCanvas.height);
+      flCtx.drawImage(_flImg, 0, 0, flCanvas.width, flCanvas.height);
+
+      const fname       = _flFrames[_flFrameIdx];
+      const frameLabels = _flLabels[fname] || {};
+      const scaleX      = flCanvas.width  / _flImg.naturalWidth;
+      const scaleY      = flCanvas.height / _flImg.naturalHeight;
+
+      _flBodyparts.forEach((bp, i) => {
+        const pt = frameLabels[bp];
+        if (!pt) return;
+        const cx    = pt[0] * scaleX;
+        const cy    = pt[1] * scaleY;
+        const color = _flColor(i);
+        const r     = 5;
+
+        // Outer ring
+        flCtx.beginPath();
+        flCtx.arc(cx, cy, r, 0, Math.PI * 2);
+        flCtx.strokeStyle = color;
+        flCtx.lineWidth   = 1.8;
+        flCtx.stroke();
+
+        // Crosshair lines
+        flCtx.beginPath();
+        flCtx.moveTo(cx - r - 5, cy);  flCtx.lineTo(cx + r + 5, cy);
+        flCtx.moveTo(cx, cy - r - 5);  flCtx.lineTo(cx, cy + r + 5);
+        flCtx.strokeStyle = color;
+        flCtx.lineWidth   = 1.2;
+        flCtx.stroke();
+
+        // Label with semi-transparent bg
+        const label = bp;
+        flCtx.font = "bold 11px 'JetBrains Mono', monospace";
+        const tw    = flCtx.measureText(label).width;
+        const tx    = cx + r + 5;
+        const ty    = cy - r - 2;
+        flCtx.fillStyle = "rgba(12,13,16,.65)";
+        flCtx.fillRect(tx - 2, ty - 11, tw + 6, 14);
+        flCtx.fillStyle = color;
+        flCtx.fillText(label, tx + 1, ty);
+      });
+    }
+
+    // ── Canvas interaction ───────────────────────────────────────
+    flCanvas.addEventListener("click", e => {
+      if (!_flSelectedBp || !_flImgLoaded || !_flVideoStem) return;
+      const rect   = flCanvas.getBoundingClientRect();
+      const scaleX = flCanvas.width  / _flImg.naturalWidth;
+      const scaleY = flCanvas.height / _flImg.naturalHeight;
+      const ix     = (e.clientX - rect.left)  / scaleX;
+      const iy     = (e.clientY - rect.top)   / scaleY;
+
+      const fname = _flFrames[_flFrameIdx];
+      if (!_flLabels[fname]) _flLabels[fname] = {};
+      _flLabels[fname][_flSelectedBp] = [ix, iy];
+      _flDraw();
+      _flUpdateBpChipStatus();
+      _flUpdateLabelCount();
+      _flAutoAdvanceBp();
+    });
+
+    // Right-click → remove current body-part point
+    flCanvas.addEventListener("contextmenu", e => {
+      e.preventDefault();
+      if (!_flSelectedBp || !_flVideoStem) return;
+      const fname = _flFrames[_flFrameIdx];
+      if (_flLabels[fname]) {
+        _flLabels[fname][_flSelectedBp] = null;
+          _flDraw();
+        _flUpdateBpChipStatus();
+        _flUpdateLabelCount();
+      }
+    });
+
+    // Auto-advance to the next unlabeled body part (napari behavior)
+    function _flAutoAdvanceBp() {
+      const fname       = _flFrames[_flFrameIdx];
+      const frameLabels = _flLabels[fname] || {};
+      const cur         = _flBodyparts.indexOf(_flSelectedBp);
+      for (let i = 1; i <= _flBodyparts.length; i++) {
+        const next = _flBodyparts[(cur + i) % _flBodyparts.length];
+        if (!frameLabels[next]) { _flSelectBp(next); return; }
+      }
+      // All body parts labeled on this frame → move to next frame
+      if (_flFrameIdx < _flFrames.length - 1) _flShowFrame(_flFrameIdx + 1);
+    }
+
+    // ── Chip status updates ──────────────────────────────────────
+    function _flUpdateBpChipStatus() {
+      const fname       = _flFrames[_flFrameIdx];
+      const frameLabels = _flLabels[fname] || {};
+      flBodypartList.querySelectorAll(".fl-bp-chip").forEach(c => {
+        const pt = frameLabels[c.dataset.bp];
+        c.classList.toggle("labeled", !!(pt && pt[0] !== null));
+      });
+    }
+
+    function _flUpdateLabelCount() {
+      const labeled = Object.values(_flLabels).filter(fl =>
+        _flBodyparts.some(bp => fl && fl[bp] && fl[bp][0] !== null)
+      ).length;
+      flLabelCount.textContent = `${labeled} / ${_flFrames.length} frame${_flFrames.length !== 1 ? "s" : ""} labeled`;
+    }
+
+    // ── Navigation ───────────────────────────────────────────────
+    flBtnPrev.addEventListener("click", () => _flShowFrame(_flFrameIdx - 1));
+    flBtnNext.addEventListener("click", () => _flShowFrame(_flFrameIdx + 1));
+
+    document.addEventListener("keydown", e => {
+      if (flCard.classList.contains("hidden")) return;
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+      if (e.key === "ArrowLeft")  { e.preventDefault(); _flShowFrame(_flFrameIdx - 1); }
+      if (e.key === "ArrowRight") { e.preventDefault(); _flShowFrame(_flFrameIdx + 1); }
+    });
+
+    // ── Save ─────────────────────────────────────────────────────
+    flBtnSave.addEventListener("click", async () => {
+      if (!_flVideoStem) return;
+      flBtnSave.disabled      = true;
+      flSaveStatus.textContent = "Saving…";
+      flSaveStatus.className   = "fl-save-status";
+      try {
+        const res  = await fetch(`/dlc/project/labels/${encodeURIComponent(_flVideoStem)}`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ labels: _flLabels }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          flSaveStatus.textContent = "Saved ✓";
+          flSaveStatus.className   = "fl-save-status ok";
+        } else {
+          flSaveStatus.textContent = data.error || "Error saving";
+          flSaveStatus.className   = "fl-save-status err";
+        }
+      } catch (err) {
+        flSaveStatus.textContent = `Network error: ${err.message}`;
+        flSaveStatus.className   = "fl-save-status err";
+      }
+      flBtnSave.disabled = false;
+      setTimeout(() => {
+        flSaveStatus.textContent = "";
+        flSaveStatus.className   = "fl-save-status";
+      }, 4000);
+    });
+
+    // ── Redraw on resize ─────────────────────────────────────────
+    window.addEventListener("resize", () => {
+      if (!flCard.classList.contains("hidden") && _flImgLoaded) {
+        _flFitCanvas();
+        _flDraw();
+      }
+    });
+  })();
+
   // ── Inspect Video ────────────────────────────────────────────
   document.getElementById("inspect-video-btn")?.addEventListener("click", () => {
     const projectId = folderSelect.value;

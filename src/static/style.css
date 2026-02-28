@@ -1679,3 +1679,123 @@ footer {
 }
 .fe-extract-status.ok  { color: var(--accent); }
 .fe-extract-status.err { color: var(--danger); }
+
+/* ── Frame Labeler ───────────────────────────────────────────── */
+
+.fl-canvas-wrap {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 40px;
+}
+
+#fl-canvas {
+  display: block;
+  width: 100%;
+  cursor: crosshair;
+  user-select: none;
+}
+
+.fl-canvas-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .8rem;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.fl-frame-nav {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  margin-bottom: .55rem;
+  flex-wrap: wrap;
+}
+
+/* Body-part chip list */
+.fl-bodypart-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+}
+
+.fl-bp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .32rem;
+  padding: .28rem .6rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: .75rem;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+  user-select: none;
+}
+
+.fl-bp-chip:hover {
+  border-color: var(--fl-color, var(--accent-dim));
+  color: var(--fl-color, var(--accent));
+  background: rgba(110,231,183,.05);
+}
+
+.fl-bp-chip.active {
+  border-color: var(--fl-color, var(--accent));
+  background: color-mix(in srgb, var(--fl-color, var(--accent)) 12%, transparent);
+  color: var(--fl-color, var(--accent));
+}
+
+.fl-bp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fl-color, var(--accent-dim));
+  flex-shrink: 0;
+  transition: background .15s;
+}
+
+.fl-bp-name {
+  line-height: 1;
+}
+
+/* Checkmark icon — hidden by default, shown when labeled */
+.fl-bp-check {
+  display: none;
+  flex-shrink: 0;
+  color: var(--fl-color, var(--accent));
+  opacity: .8;
+}
+.fl-bp-chip.labeled .fl-bp-check { display: block; }
+
+.fl-bp-hint {
+  font-size: .8rem;
+  color: var(--text-dim);
+  font-style: italic;
+  margin: .35rem 0 0;
+}
+
+.fl-save-status {
+  font-family: var(--mono);
+  font-size: .75rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.fl-save-status.ok  { color: var(--accent); }
+.fl-save-status.err { color: var(--danger); }
+
+.fl-label-count {
+  display: block;
+  font-family: var(--mono);
+  font-size: .74rem;
+  color: var(--text-dim);
+  margin-top: .4rem;
+  min-height: 1.1rem;
+}

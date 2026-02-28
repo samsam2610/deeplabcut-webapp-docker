@@ -251,8 +251,95 @@
         </div>
         <span id="fe-extract-status" class="fe-extract-status"></span>
 
+        <!-- Label Frames button -->
+        <div style="margin-top:.65rem">
+          <button id="btn-open-frame-labeler" class="inspect-btn" style="width:100%;gap:.55rem">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <line x1="12" y1="2" x2="12" y2="6"/>
+              <line x1="12" y1="18" x2="12" y2="22"/>
+              <line x1="2" y1="12" x2="6" y2="12"/>
+              <line x1="18" y1="12" x2="22" y2="12"/>
+              <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/>
+              <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/>
+              <line x1="19.07" y1="4.93" x2="16.24" y2="7.76"/>
+              <line x1="7.76" y1="16.24" x2="4.93" y2="19.07"/>
+            </svg>
+            <span>Label Frames</span>
+          </button>
+        </div>
+
         <!-- Hidden canvas for frame capture -->
         <canvas id="fe-canvas" style="display:none"></canvas>
+      </div>
+    </section>
+
+    <!-- ─── Frame Labeler card ────────────────────────────────── -->
+    <section class="card dlc-theme hidden" id="frame-labeler-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>Frame Labeler</h2>
+        <button class="btn-sm" id="btn-close-frame-labeler" title="Close frame labeler">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Click on the frame to place keypoints. Right-click a body part to remove it. Labels are saved as <code style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">CollectedData_&lt;scorer&gt;.csv</code>.</p>
+
+      <!-- ── Labeled-data folder selector ──────────────────────── -->
+      <div style="margin-bottom:.75rem">
+        <label style="display:block;font-size:.78rem;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.4rem">Labeled frames folder</label>
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <div class="select-wrap" style="flex:1">
+            <select id="fl-stem-select">
+              <option value="">— select video —</option>
+            </select>
+            <svg class="chevron" width="16" height="16" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+          </div>
+          <button class="btn-sm" id="fl-refresh-btn" title="Refresh labeled-data folder list">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh
+          </button>
+        </div>
+        <span id="fl-stem-status" class="fe-extract-status" style="margin-top:.3rem"></span>
+      </div>
+
+      <!-- ── Player section (shown when a stem is selected) ─────── -->
+      <div id="fl-player-section" class="hidden">
+
+        <!-- Frame navigation -->
+        <div class="fl-frame-nav">
+          <button class="btn-sm fe-ctrl-btn" id="fl-btn-prev" title="Previous frame (←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/><line x1="9" y1="6" x2="9" y2="18"/></svg>
+          </button>
+          <span class="fe-frame-counter" id="fl-frame-info">Frame 0 / 0</span>
+          <button class="btn-sm fe-ctrl-btn" id="fl-btn-next" title="Next frame (→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
+          </button>
+          <span class="fe-time-display" id="fl-frame-name" style="font-size:.72rem"></span>
+        </div>
+
+        <!-- Labeling canvas -->
+        <div class="fl-canvas-wrap">
+          <canvas id="fl-canvas"></canvas>
+          <p class="fl-canvas-empty hidden" id="fl-canvas-loading">Loading frame…</p>
+        </div>
+
+        <!-- Body-part selector (napari-style chip list) -->
+        <div style="margin-top:.75rem">
+          <label style="display:block;font-size:.75rem;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.4rem">Body parts — click to select, then click on the frame</label>
+          <div id="fl-bodypart-list" class="fl-bodypart-list"></div>
+          <p class="fl-bp-hint" id="fl-bp-hint">No body parts found. Make sure the DLC project has a valid config.yaml.</p>
+        </div>
+
+        <!-- Save row -->
+        <div style="display:flex;align-items:center;gap:.8rem;margin-top:1rem">
+          <button id="fl-btn-save" class="btn-sm btn-create" style="flex:1;justify-content:center;padding:.5rem 1rem">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Save Labels
+          </button>
+          <span id="fl-save-status" class="fl-save-status"></span>
+        </div>
+        <span id="fl-label-count" class="fl-label-count">0 / 0 frames labeled</span>
       </div>
     </section>
 
