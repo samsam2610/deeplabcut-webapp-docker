@@ -1739,15 +1739,6 @@
       feVideo.currentTime = Math.min(feVideo.duration || 0, feVideo.currentTime + 1 / _feFps);
     });
 
-    // Keyboard frame stepping when player is visible
-    document.addEventListener("keydown", e => {
-      if (fePlayerSec.classList.contains("hidden")) return;
-      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-      if (e.key === "ArrowLeft")  { e.preventDefault(); feBtnPrev.click(); }
-      if (e.key === "ArrowRight") { e.preventDefault(); feBtnNext.click(); }
-      if (e.key === " ")          { e.preventDefault(); feBtnPlay.click(); }
-    });
-
     // Seek slider
     feSeek.addEventListener("mousedown", () => { _feSeekDragging = true; });
     feSeek.addEventListener("touchstart", () => { _feSeekDragging = true; });
@@ -1757,40 +1748,60 @@
     });
     feSeek.addEventListener("change", () => { _feSeekDragging = false; });
 
-    // ── Extract frame ────────────────────────────────────────────
-    feBtnExtract.addEventListener("click", async () => {
-      if (!_feCurrentVideo) return;
-      if (feVideo.readyState < 2) { feExtractStatus.textContent = "Video not ready."; return; }
-
+    // ── Capture + save helpers ───────────────────────────────────
+    async function _feCaptureCurrent() {
       feCanvas.width  = feVideo.videoWidth;
       feCanvas.height = feVideo.videoHeight;
-      let dataUrl;
       try {
         feCanvas.getContext("2d").drawImage(feVideo, 0, 0);
-        dataUrl = feCanvas.toDataURL("image/jpeg", 0.92);  // JPEG ~10x smaller than PNG for transfer
+        const url = feCanvas.toDataURL("image/jpeg", 0.92);
+        return url.split(",")[1] || null;
       } catch (secErr) {
         feExtractStatus.textContent = `Canvas error: ${secErr.message}`;
         feExtractStatus.className = "fe-extract-status err";
-        return;
+        return null;
       }
-      const base64 = dataUrl.split(",")[1];
-      if (!base64) { feExtractStatus.textContent = "Could not capture frame."; feExtractStatus.className = "fe-extract-status err"; return; }
+    }
 
+    async function _feSaveFrames(count) {
+      if (!_feCurrentVideo) return;
+      if (feVideo.readyState < 2) { feExtractStatus.textContent = "Video not ready."; return; }
+
+      feBtnExtract.disabled = true;
+      feVideo.pause();
+      if (count > 1) {
+        feExtractStatus.textContent = `Saving ${count} frames…`;
+        feExtractStatus.className = "fe-extract-status";
+      }
+
+      let saved = 0, lastData = null;
       try {
-        feBtnExtract.disabled = true;
-        const res  = await fetch("/dlc/project/save-frame", {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ video_name: _feCurrentVideo, frame_data: base64 }),
-        });
-        const data = await res.json();
-        if (data.error) {
-          feExtractStatus.textContent = `Error: ${data.error}`;
-          feExtractStatus.className = "fe-extract-status err";
-        } else {
+        for (let i = 0; i < count; i++) {
+          if (i > 0) {
+            const next = Math.min(feVideo.duration || 0, feVideo.currentTime + 1 / _feFps);
+            feVideo.currentTime = next;
+            await new Promise(resolve => feVideo.addEventListener("seeked", resolve, { once: true }));
+          }
+          const base64 = await _feCaptureCurrent();
+          if (!base64) break;
+          const res  = await fetch("/dlc/project/save-frame", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ video_name: _feCurrentVideo, frame_data: base64 }),
+          });
+          const data = await res.json();
+          if (data.error) {
+            feExtractStatus.textContent = `Error on frame ${i + 1}: ${data.error}`;
+            feExtractStatus.className = "fe-extract-status err";
+            break;
+          }
+          saved++;
+          lastData = data;
           _feExtracted = data.frame_count;
           feExtractCount.textContent = `${_feExtracted} frame${_feExtracted !== 1 ? "s" : ""} saved`;
-          feExtractStatus.textContent = `Saved ${data.saved} → ${data.abs_path}`;
+        }
+        if (saved > 0) {
+          feExtractStatus.textContent = `Saved ${saved} frame${saved !== 1 ? "s" : ""} → ${lastData.abs_path}`;
           feExtractStatus.className = "fe-extract-status ok";
         }
       } catch (err) {
@@ -1798,6 +1809,50 @@
         feExtractStatus.className = "fe-extract-status err";
       } finally {
         feBtnExtract.disabled = false;
+        _feUpdateFrameDisplay();
+      }
+    }
+
+    feBtnExtract.addEventListener("click", () => _feSaveFrames(1));
+
+    // ── Keyboard shortcuts (active while mouse hovers over player) ──
+    let _feHover      = false;
+    let _fePending    = null;  // digit waiting for "s"
+    let _fePendingTmr = null;
+
+    fePlayerSec.addEventListener("mouseenter", () => { _feHover = true; });
+    fePlayerSec.addEventListener("mouseleave", () => { _feHover = false; _fePending = null; clearTimeout(_fePendingTmr); feExtractStatus.textContent = feExtractStatus.textContent.startsWith("Press") ? "" : feExtractStatus.textContent; });
+
+    document.addEventListener("keydown", e => {
+      if (!_feHover || fePlayerSec.classList.contains("hidden")) return;
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+
+      // Spacebar → play / pause
+      if (e.key === " ") { e.preventDefault(); feBtnPlay.click(); return; }
+
+      // Arrows → step one frame
+      if (e.key === "ArrowLeft")  { e.preventDefault(); feBtnPrev.click(); return; }
+      if (e.key === "ArrowRight") { e.preventDefault(); feBtnNext.click(); return; }
+
+      // Digit 1-9 → start combo
+      if (/^[1-9]$/.test(e.key)) {
+        e.preventDefault();
+        _fePending = parseInt(e.key);
+        clearTimeout(_fePendingTmr);
+        _fePendingTmr = setTimeout(() => { _fePending = null; }, 2000);
+        feExtractStatus.textContent = `Press S to save ${_fePending} frame${_fePending !== 1 ? "s" : ""}`;
+        feExtractStatus.className = "fe-extract-status";
+        return;
+      }
+
+      // "s" → save N frames (N from pending digit, else 1)
+      if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        const n = _fePending || 1;
+        _fePending = null;
+        clearTimeout(_fePendingTmr);
+        _feSaveFrames(n);
+        return;
       }
     });
   })();
