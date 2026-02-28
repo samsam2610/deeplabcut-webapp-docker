@@ -1774,7 +1774,7 @@
         feExtractStatus.className = "fe-extract-status";
       }
 
-      let saved = 0, lastData = null;
+      let saved = 0, skipped = 0, lastData = null;
       try {
         for (let i = 0; i < count; i++) {
           if (i > 0) {
@@ -1782,14 +1782,16 @@
             feVideo.currentTime = next;
             await new Promise(resolve => feVideo.addEventListener("seeked", resolve, { once: true }));
           }
+          const frameNumber = Math.round(feVideo.currentTime * _feFps);
           const base64 = await _feCaptureCurrent();
           if (!base64) break;
           const res  = await fetch("/dlc/project/save-frame", {
             method:  "POST",
             headers: { "Content-Type": "application/json" },
-            body:    JSON.stringify({ video_name: _feCurrentVideo, frame_data: base64 }),
+            body:    JSON.stringify({ video_name: _feCurrentVideo, frame_data: base64, frame_number: frameNumber }),
           });
           const data = await res.json();
+          if (data.skipped) { skipped++; continue; }
           if (data.error) {
             feExtractStatus.textContent = `Error on frame ${i + 1}: ${data.error}`;
             feExtractStatus.className = "fe-extract-status err";
@@ -1801,8 +1803,12 @@
           feExtractCount.textContent = `${_feExtracted} frame${_feExtracted !== 1 ? "s" : ""} saved`;
         }
         if (saved > 0) {
-          feExtractStatus.textContent = `Saved ${saved} frame${saved !== 1 ? "s" : ""} → ${lastData.abs_path}`;
+          const skipNote = skipped > 0 ? `, ${skipped} duplicate${skipped !== 1 ? "s" : ""} skipped` : "";
+          feExtractStatus.textContent = `Saved ${saved} frame${saved !== 1 ? "s" : ""}${skipNote} → ${lastData.abs_path}`;
           feExtractStatus.className = "fe-extract-status ok";
+        } else if (skipped > 0) {
+          feExtractStatus.textContent = `All ${skipped} frame${skipped !== 1 ? "s" : ""} already saved — skipped`;
+          feExtractStatus.className = "fe-extract-status";
         }
       } catch (err) {
         feExtractStatus.textContent = `Network error: ${err.message}`;

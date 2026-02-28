@@ -1270,9 +1270,15 @@ def dlc_save_frame():
     if not _dlc_project_security_check(project_path):
         return jsonify({"error": "Access denied."}), 403
 
-    body       = request.get_json(force=True) or {}
-    video_name = body.get("video_name", "").strip()
-    frame_data = body.get("frame_data", "").strip()
+    body         = request.get_json(force=True) or {}
+    video_name   = body.get("video_name",   "").strip()
+    frame_data   = body.get("frame_data",   "").strip()
+    frame_number = body.get("frame_number")          # int video frame index, may be None
+    if frame_number is not None:
+        try:
+            frame_number = int(frame_number)
+        except (TypeError, ValueError):
+            frame_number = None
     if not video_name:
         return jsonify({"error": "video_name is required."}), 400
     if not frame_data:
@@ -1298,15 +1304,28 @@ def dlc_save_frame():
     labeled_dir = project_path / "labeled-data" / video_stem
     labeled_dir.mkdir(parents=True, exist_ok=True)
 
-    existing_count = len([f for f in labeled_dir.iterdir() if f.suffix == ".png"])
-    frame_filename = f"img{existing_count:04d}.png"
+    existing_pngs = [f for f in labeled_dir.iterdir() if f.suffix == ".png"]
+
+    # Duplicate check: if frame_number already present as yyyyy in any img????-yyyyy.png, skip
+    if frame_number is not None:
+        dup_pat = re.compile(r"^img\d{4}-(\d+)\.png$")
+        for f in existing_pngs:
+            m = dup_pat.match(f.name)
+            if m and int(m.group(1)) == frame_number:
+                return jsonify({"skipped": True, "frame_number": frame_number}), 200
+
+    order = len(existing_pngs)
+    if frame_number is not None:
+        frame_filename = f"img{order:04d}-{frame_number:05d}.png"
+    else:
+        frame_filename = f"img{order:04d}.png"
     (labeled_dir / frame_filename).write_bytes(png_buf.tobytes())
 
     return jsonify({
-        "saved":       frame_filename,
-        "folder":      f"labeled-data/{video_stem}",
-        "abs_path":    str(labeled_dir / frame_filename),
-        "frame_count": existing_count + 1,
+        "saved":        frame_filename,
+        "folder":       f"labeled-data/{video_stem}",
+        "abs_path":     str(labeled_dir / frame_filename),
+        "frame_count":  order + 1,
     }), 201
 
 
