@@ -15,7 +15,7 @@ import cv2
 from anipose.common import make_process_fun, find_calibration_folder, \
     get_video_name, get_cam_name, natural_keys, load_pose_2d
 
-from aniposelib.cameras import CameraGroup
+from anipose_src.cameras import CameraGroup
 
 def proj(u, v):
     """Project u onto v"""

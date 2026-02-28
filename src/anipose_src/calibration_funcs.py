@@ -14,7 +14,7 @@ from anipose.common import \
 
 from anipose.triangulate import load_pose2d_fnames, load_offsets_dict
 
-from cameras import CameraGroup
+from anipose_src.cameras import CameraGroup
 
 def get_pose2d_fnames(config, session_path):
     if config['filter']['enabled']:
