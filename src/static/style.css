@@ -906,7 +906,7 @@ button[type="submit"]:hover .btn-arrow {
   display: none;
 }
 
-.folder-row.open .folder-files { display: block; }
+.folder-row.open > .folder-files { display: block; }
 
 .file-item {
   display: flex;
