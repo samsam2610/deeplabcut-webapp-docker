@@ -329,6 +329,19 @@
           <span class="fe-time-display" id="fl-frame-name" style="font-size:.72rem"></span>
         </div>
 
+        <!-- Marker display controls -->
+        <div style="display:flex;align-items:center;gap:1.2rem;margin-bottom:.5rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Marker size
+            <input type="range" id="fl-marker-size" min="2" max="24" value="6" style="width:80px;accent-color:var(--accent)">
+            <span id="fl-marker-size-val" style="min-width:1.4rem;text-align:right;color:var(--text)">6</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);cursor:pointer;user-select:none">
+            <input type="checkbox" id="fl-show-names" checked style="accent-color:var(--accent)">
+            Show names
+          </label>
+        </div>
+
         <!-- Labeling canvas -->
         <div class="fl-canvas-wrap">
           <canvas id="fl-canvas"></canvas>

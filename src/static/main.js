@@ -1885,6 +1885,9 @@
     const flSaveStatus     = document.getElementById("fl-save-status");
     const flLabelCount     = document.getElementById("fl-label-count");
     const flScorerFilename = document.getElementById("fl-scorer-filename");
+    const flMarkerSizeInput = document.getElementById("fl-marker-size");
+    const flMarkerSizeVal   = document.getElementById("fl-marker-size-val");
+    const flShowNamesInput  = document.getElementById("fl-show-names");
 
     // ── State ───────────────────────────────────────────────────
     let _flBodyparts   = [];
@@ -1897,6 +1900,8 @@
     let _flSelectedBp  = null;
     let _flImg         = new Image();
     let _flImgLoaded   = false;
+    let _flMarkerRadius = 6;
+    let _flShowNames    = true;
 
     function _flUpdateScorerFilename() {
       if (flScorerFilename) flScorerFilename.textContent = `CollectedData_${_flScorer}.csv`;
@@ -1921,6 +1926,18 @@
 
     flCloseBtn.addEventListener("click", () => {
       flCard.classList.add("hidden");
+    });
+
+    // ── Marker display controls ──────────────────────────────────
+    flMarkerSizeInput.addEventListener("input", () => {
+      _flMarkerRadius = parseInt(flMarkerSizeInput.value, 10);
+      flMarkerSizeVal.textContent = _flMarkerRadius;
+      _flDraw();
+    });
+
+    flShowNamesInput.addEventListener("change", () => {
+      _flShowNames = flShowNamesInput.checked;
+      _flDraw();
     });
 
     // ── Load bodyparts + stems ───────────────────────────────────
@@ -2079,6 +2096,7 @@
       const frameLabels = _flLabels[fname] || {};
       const scaleX      = flCanvas.width  / _flImg.naturalWidth;
       const scaleY      = flCanvas.height / _flImg.naturalHeight;
+      const r           = _flMarkerRadius;
 
       _flBodyparts.forEach((bp, i) => {
         const pt = frameLabels[bp];
@@ -2086,33 +2104,26 @@
         const cx    = pt[0] * scaleX;
         const cy    = pt[1] * scaleY;
         const color = _flColor(i);
-        const r     = 5;
 
-        // Outer ring
+        // Filled circle with a thin dark outline for contrast
         flCtx.beginPath();
         flCtx.arc(cx, cy, r, 0, Math.PI * 2);
-        flCtx.strokeStyle = color;
-        flCtx.lineWidth   = 1.8;
-        flCtx.stroke();
-
-        // Crosshair lines
-        flCtx.beginPath();
-        flCtx.moveTo(cx - r - 5, cy);  flCtx.lineTo(cx + r + 5, cy);
-        flCtx.moveTo(cx, cy - r - 5);  flCtx.lineTo(cx, cy + r + 5);
-        flCtx.strokeStyle = color;
+        flCtx.fillStyle = color;
+        flCtx.fill();
+        flCtx.strokeStyle = "rgba(0,0,0,0.55)";
         flCtx.lineWidth   = 1.2;
         flCtx.stroke();
 
-        // Label with semi-transparent bg
-        const label = bp;
-        flCtx.font = "bold 11px 'JetBrains Mono', monospace";
-        const tw    = flCtx.measureText(label).width;
-        const tx    = cx + r + 5;
-        const ty    = cy - r - 2;
-        flCtx.fillStyle = "rgba(12,13,16,.65)";
-        flCtx.fillRect(tx - 2, ty - 11, tw + 6, 14);
-        flCtx.fillStyle = color;
-        flCtx.fillText(label, tx + 1, ty);
+        if (_flShowNames) {
+          flCtx.font = "bold 11px 'JetBrains Mono', monospace";
+          const tw = flCtx.measureText(bp).width;
+          const tx = cx + r + 4;
+          const ty = cy + 4;
+          flCtx.fillStyle = "rgba(12,13,16,.65)";
+          flCtx.fillRect(tx - 2, ty - 11, tw + 6, 14);
+          flCtx.fillStyle = color;
+          flCtx.fillText(bp, tx + 1, ty);
+        }
       });
     }
 
