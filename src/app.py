@@ -858,7 +858,7 @@ def _walk_dir(path: Path, project_path: Path, depth: int = 0, max_depth: int = 6
     try:
         entries = sorted(path.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
         for item in entries:
-            if item.name.startswith("."):
+            if item.name.startswith(".") or item.name.startswith("@"):
                 continue
             rel = str(item.relative_to(project_path))
             if item.is_dir():
