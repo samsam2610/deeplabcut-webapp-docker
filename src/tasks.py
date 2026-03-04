@@ -671,8 +671,8 @@ def dlc_create_training_dataset(self, config_path: str, num_shuffles: int = 1, f
                     config_path,
                     num_shuffles=1,
                     Shuffles=[shuffle_idx],
-                    trainIndices=train_indices,
-                    testIndices=test_indices,
+                    trainIndices=[train_indices],
+                    testIndices=[test_indices],
                     userfeedback=False,
                 )
         else:
