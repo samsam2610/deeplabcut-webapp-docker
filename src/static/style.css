@@ -1804,6 +1804,13 @@ footer {
   text-align: center;
 }
 
+.fe-ignore-label {
+  margin-left: .4rem;
+  padding-left: .6rem;
+  border-left: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
 .fe-window-hint {
   color: var(--text-dim);
   font-size: .63rem;

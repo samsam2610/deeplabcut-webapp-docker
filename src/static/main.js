@@ -1586,6 +1586,7 @@
     const feFrameSpinner  = document.getElementById("fe-frame-spinner");
     const feStatusBefore   = document.getElementById("fe-status-before");
     const feStatusAfter    = document.getElementById("fe-status-after");
+    const feStatusIgnore   = document.getElementById("fe-status-ignore");
     const feStatusApply    = document.getElementById("fe-status-apply");
     const feStatusTags     = document.getElementById("fe-status-tags");
     const feStatusNav      = document.getElementById("fe-status-nav");
@@ -1594,6 +1595,7 @@
     const feStatusNavInfo  = document.getElementById("fe-status-nav-info");
     const feNoteBefore     = document.getElementById("fe-note-before");
     const feNoteAfter      = document.getElementById("fe-note-after");
+    const feNoteIgnore     = document.getElementById("fe-note-ignore");
     const feNoteApply      = document.getElementById("fe-note-apply");
     const feNoteTags       = document.getElementById("fe-note-tags");
     const feNoteNav        = document.getElementById("fe-note-nav");
@@ -1604,8 +1606,10 @@
     let _feFps          = 30;
     let _feCsvRows      = [];
     let _feFrameCount   = 0;
-    let _feStatusRuns     = [];
-    let _feNoteRuns       = [];
+    let _feStatusRuns          = [];
+    let _feNoteRuns            = [];
+    let _feStatusEffectiveRuns = [];
+    let _feNoteEffectiveRuns   = [];
     let _feStatusColorMap = {};
     let _feNoteColorMap   = {};
     let _feStatusActiveTag = null;
@@ -1649,6 +1653,7 @@
       _feFrameBusy    = false;
       _feCsvRows      = [];
       _feStatusRuns = []; _feNoteRuns = [];
+      _feStatusEffectiveRuns = []; _feNoteEffectiveRuns = [];
       _feStatusColorMap = {}; _feNoteColorMap = {};
       _feStatusActiveTag = null; _feNoteActiveTag = null;
       _feStatusSegIdx = 0; _feNoteSegIdx = 0;
@@ -1928,6 +1933,21 @@
       return { runs, colorMap };
     }
 
+    // Merge consecutive same-type runs whose gap is ≤ ignoreFrames into one run.
+    function _feMergeRuns(runs, ignoreFrames) {
+      if (!ignoreFrames) return runs;
+      const merged = [];
+      runs.forEach(run => {
+        const last = merged[merged.length - 1];
+        if (last && last.value === run.value && run.startFrame - last.endFrame <= ignoreFrames) {
+          last.endFrame = run.endFrame;
+        } else {
+          merged.push({ ...run });
+        }
+      });
+      return merged;
+    }
+
     function _feRenderCsvBar(container, runs, colorMap, beforeInput, afterInput, activeTag, onSegClick) {
       container.innerHTML = "";
       const total = Math.max(_feFrameCount, 1);
@@ -2011,21 +2031,23 @@
           const onStatusTag = val => {
             _feStatusActiveTag = (_feStatusActiveTag === val) ? null : val;
             _feStatusSegIdx = 0;
-            _feRenderCsvBar(feStatusBar, _feStatusRuns, _feStatusColorMap, feStatusBefore, feStatusAfter, _feStatusActiveTag, idx => {
+            _feStatusEffectiveRuns = _feMergeRuns(_feStatusRuns, parseInt(feStatusIgnore.value) || 0);
+            _feRenderCsvBar(feStatusBar, _feStatusEffectiveRuns, _feStatusColorMap, feStatusBefore, feStatusAfter, _feStatusActiveTag, idx => {
               _feStatusSegIdx = idx;
-              _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusRuns, _feStatusActiveTag, _feStatusSegIdx);
+              _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusEffectiveRuns, _feStatusActiveTag, _feStatusSegIdx);
             });
             _feRenderTagFilter(feStatusTags, _feStatusRuns, _feStatusColorMap, _feStatusActiveTag, onStatusTag);
-            _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusRuns, _feStatusActiveTag, _feStatusSegIdx);
-            if (_feStatusActiveTag) _feGoToSeg(_feStatusRuns, feStatusBefore, feStatusAfter, _feStatusActiveTag, 0);
+            _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusEffectiveRuns, _feStatusActiveTag, _feStatusSegIdx);
+            if (_feStatusActiveTag) _feGoToSeg(_feStatusEffectiveRuns, feStatusBefore, feStatusAfter, _feStatusActiveTag, 0);
           };
           _feReRenderStatus = () => {
-            _feRenderCsvBar(feStatusBar, _feStatusRuns, _feStatusColorMap, feStatusBefore, feStatusAfter, _feStatusActiveTag, idx => {
+            _feStatusEffectiveRuns = _feMergeRuns(_feStatusRuns, parseInt(feStatusIgnore.value) || 0);
+            _feRenderCsvBar(feStatusBar, _feStatusEffectiveRuns, _feStatusColorMap, feStatusBefore, feStatusAfter, _feStatusActiveTag, idx => {
               _feStatusSegIdx = idx;
-              _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusRuns, _feStatusActiveTag, _feStatusSegIdx);
+              _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusEffectiveRuns, _feStatusActiveTag, _feStatusSegIdx);
             });
             _feRenderTagFilter(feStatusTags, _feStatusRuns, _feStatusColorMap, _feStatusActiveTag, onStatusTag);
-            _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusRuns, _feStatusActiveTag, _feStatusSegIdx);
+            _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusEffectiveRuns, _feStatusActiveTag, _feStatusSegIdx);
           };
           _feReRenderStatus();
           feStatusBarWrap.classList.remove("hidden");
@@ -2035,21 +2057,23 @@
           const onNoteTag = val => {
             _feNoteActiveTag = (_feNoteActiveTag === val) ? null : val;
             _feNoteSegIdx = 0;
-            _feRenderCsvBar(feNoteBar, _feNoteRuns, _feNoteColorMap, feNoteBefore, feNoteAfter, _feNoteActiveTag, idx => {
+            _feNoteEffectiveRuns = _feMergeRuns(_feNoteRuns, parseInt(feNoteIgnore.value) || 0);
+            _feRenderCsvBar(feNoteBar, _feNoteEffectiveRuns, _feNoteColorMap, feNoteBefore, feNoteAfter, _feNoteActiveTag, idx => {
               _feNoteSegIdx = idx;
-              _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteRuns, _feNoteActiveTag, _feNoteSegIdx);
+              _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteEffectiveRuns, _feNoteActiveTag, _feNoteSegIdx);
             });
             _feRenderTagFilter(feNoteTags, _feNoteRuns, _feNoteColorMap, _feNoteActiveTag, onNoteTag);
-            _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteRuns, _feNoteActiveTag, _feNoteSegIdx);
-            if (_feNoteActiveTag) _feGoToSeg(_feNoteRuns, feNoteBefore, feNoteAfter, _feNoteActiveTag, 0);
+            _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteEffectiveRuns, _feNoteActiveTag, _feNoteSegIdx);
+            if (_feNoteActiveTag) _feGoToSeg(_feNoteEffectiveRuns, feNoteBefore, feNoteAfter, _feNoteActiveTag, 0);
           };
           _feReRenderNote = () => {
-            _feRenderCsvBar(feNoteBar, _feNoteRuns, _feNoteColorMap, feNoteBefore, feNoteAfter, _feNoteActiveTag, idx => {
+            _feNoteEffectiveRuns = _feMergeRuns(_feNoteRuns, parseInt(feNoteIgnore.value) || 0);
+            _feRenderCsvBar(feNoteBar, _feNoteEffectiveRuns, _feNoteColorMap, feNoteBefore, feNoteAfter, _feNoteActiveTag, idx => {
               _feNoteSegIdx = idx;
-              _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteRuns, _feNoteActiveTag, _feNoteSegIdx);
+              _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteEffectiveRuns, _feNoteActiveTag, _feNoteSegIdx);
             });
             _feRenderTagFilter(feNoteTags, _feNoteRuns, _feNoteColorMap, _feNoteActiveTag, onNoteTag);
-            _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteRuns, _feNoteActiveTag, _feNoteSegIdx);
+            _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteEffectiveRuns, _feNoteActiveTag, _feNoteSegIdx);
           };
           _feReRenderNote();
           feNoteBarWrap.classList.remove("hidden");
@@ -2064,32 +2088,32 @@
 
     feStatusPrevBtn.addEventListener("click", () => {
       if (!_feStatusActiveTag) return;
-      const n = _feStatusRuns.filter(r => r.value === _feStatusActiveTag).length;
+      const n = _feStatusEffectiveRuns.filter(r => r.value === _feStatusActiveTag).length;
       _feStatusSegIdx = (_feStatusSegIdx - 1 + n) % n;
-      _feGoToSeg(_feStatusRuns, feStatusBefore, feStatusAfter, _feStatusActiveTag, _feStatusSegIdx);
-      _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusRuns, _feStatusActiveTag, _feStatusSegIdx);
+      _feGoToSeg(_feStatusEffectiveRuns, feStatusBefore, feStatusAfter, _feStatusActiveTag, _feStatusSegIdx);
+      _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusEffectiveRuns, _feStatusActiveTag, _feStatusSegIdx);
     });
     feStatusNextBtn.addEventListener("click", () => {
       if (!_feStatusActiveTag) return;
-      const n = _feStatusRuns.filter(r => r.value === _feStatusActiveTag).length;
+      const n = _feStatusEffectiveRuns.filter(r => r.value === _feStatusActiveTag).length;
       _feStatusSegIdx = (_feStatusSegIdx + 1) % n;
-      _feGoToSeg(_feStatusRuns, feStatusBefore, feStatusAfter, _feStatusActiveTag, _feStatusSegIdx);
-      _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusRuns, _feStatusActiveTag, _feStatusSegIdx);
+      _feGoToSeg(_feStatusEffectiveRuns, feStatusBefore, feStatusAfter, _feStatusActiveTag, _feStatusSegIdx);
+      _feUpdateSegNav(feStatusNav, feStatusNavInfo, _feStatusEffectiveRuns, _feStatusActiveTag, _feStatusSegIdx);
     });
 
     feNotePrevBtn.addEventListener("click", () => {
       if (!_feNoteActiveTag) return;
-      const n = _feNoteRuns.filter(r => r.value === _feNoteActiveTag).length;
+      const n = _feNoteEffectiveRuns.filter(r => r.value === _feNoteActiveTag).length;
       _feNoteSegIdx = (_feNoteSegIdx - 1 + n) % n;
-      _feGoToSeg(_feNoteRuns, feNoteBefore, feNoteAfter, _feNoteActiveTag, _feNoteSegIdx);
-      _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteRuns, _feNoteActiveTag, _feNoteSegIdx);
+      _feGoToSeg(_feNoteEffectiveRuns, feNoteBefore, feNoteAfter, _feNoteActiveTag, _feNoteSegIdx);
+      _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteEffectiveRuns, _feNoteActiveTag, _feNoteSegIdx);
     });
     feNoteNextBtn.addEventListener("click", () => {
       if (!_feNoteActiveTag) return;
-      const n = _feNoteRuns.filter(r => r.value === _feNoteActiveTag).length;
+      const n = _feNoteEffectiveRuns.filter(r => r.value === _feNoteActiveTag).length;
       _feNoteSegIdx = (_feNoteSegIdx + 1) % n;
-      _feGoToSeg(_feNoteRuns, feNoteBefore, feNoteAfter, _feNoteActiveTag, _feNoteSegIdx);
-      _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteRuns, _feNoteActiveTag, _feNoteSegIdx);
+      _feGoToSeg(_feNoteEffectiveRuns, feNoteBefore, feNoteAfter, _feNoteActiveTag, _feNoteSegIdx);
+      _feUpdateSegNav(feNoteNav, feNoteNavInfo, _feNoteEffectiveRuns, _feNoteActiveTag, _feNoteSegIdx);
     });
 
     // ── Keyboard shortcuts (active while hovering over player) ────
