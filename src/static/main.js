@@ -2640,8 +2640,10 @@
     const ctdRefreshBtn    = document.getElementById("ctd-refresh-pytorch-btn");
     const ctdPytorchPath   = document.getElementById("ctd-pytorch-path");
     const ctdPytorchEditor = document.getElementById("ctd-pytorch-editor");
-    const ctdSaveBtn       = document.getElementById("ctd-save-pytorch-btn");
-    const ctdSaveStatus    = document.getElementById("ctd-save-status");
+    const ctdSaveBtn            = document.getElementById("ctd-save-pytorch-btn");
+    const ctdSaveStatus         = document.getElementById("ctd-save-status");
+    const ctdAddDatasetsBtn     = document.getElementById("btn-ctd-add-datasets");
+    const ctdAddDatasetsStatus  = document.getElementById("ctd-add-datasets-status");
 
     let _ctdPollTimer  = null;
     let _ctdRelPath    = null;
@@ -2800,6 +2802,29 @@
         ctdPytorchPath.textContent = `Error: ${err.message}`;
       }
     }
+
+    // ── Sync datasets & video list ───────────────────────────────
+    ctdAddDatasetsBtn.addEventListener("click", async () => {
+      if (!confirm("Run adddatasetstovideolistandviceversa?\n\nThis will update the project config.yaml to sync all labeled datasets and videos. Continue?")) return;
+      ctdAddDatasetsBtn.disabled       = true;
+      ctdAddDatasetsStatus.textContent = "Running…";
+      ctdAddDatasetsStatus.className   = "fe-extract-status";
+      try {
+        const res  = await fetch("/dlc/project/add-datasets-to-video-list", { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+          ctdAddDatasetsStatus.textContent = "Done ✓";
+          ctdAddDatasetsStatus.className   = "fe-extract-status ok";
+        } else {
+          ctdAddDatasetsStatus.textContent = data.error || "Error.";
+          ctdAddDatasetsStatus.className   = "fe-extract-status err";
+        }
+      } catch (err) {
+        ctdAddDatasetsStatus.textContent = `Network error: ${err.message}`;
+        ctdAddDatasetsStatus.className   = "fe-extract-status err";
+      }
+      ctdAddDatasetsBtn.disabled = false;
+    });
 
     // ── Save pytorch_config.yaml ─────────────────────────────────
     ctdSaveBtn.addEventListener("click", async () => {

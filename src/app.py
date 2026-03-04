@@ -2738,6 +2738,24 @@ def dlc_create_training_dataset():
     return jsonify({"task_id": task.id, "operation": "create_training_dataset"}), 202
 
 
+@app.route("/dlc/project/add-datasets-to-video-list", methods=["POST"])
+def dlc_add_datasets_to_video_list():
+    """Call deeplabcut.adddatasetstovideolistandviceversa() on the active project."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    config_path = json.loads(raw).get("config_path", "")
+    if not config_path or not Path(config_path).is_file():
+        return jsonify({"error": "config.yaml not found in project."}), 404
+
+    try:
+        dlc.adddatasetstovideolistandviceversa(config_path)
+        return jsonify({"status": "ok"}), 200
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/dlc/project/pytorch-configs", methods=["GET"])
 def list_dlc_pytorch_configs():
     """List all pytorch_config.yaml files found in the active DLC project."""
