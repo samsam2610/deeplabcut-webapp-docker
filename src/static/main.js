@@ -1571,6 +1571,7 @@
     const feBtnPrev       = document.getElementById("fe-btn-prev");
     const feBtnNext       = document.getElementById("fe-btn-next");
     const feFrameCounter  = document.getElementById("fe-frame-counter");
+    const feFrameJump     = document.getElementById("fe-frame-jump");
     const feTimeDisplay   = document.getElementById("fe-time-display");
     const feSeek          = document.getElementById("fe-seek");
     const feBtnExtract    = document.getElementById("fe-btn-extract");
@@ -1748,13 +1749,51 @@
     });
 
     // ── Frame display ─────────────────────────────────────────────
+    // Text node kept separate so the hidden <input> inside the span isn't clobbered.
+    // Remove any existing text nodes (the static "Frame 0 / 0" from HTML), then
+    // insert a managed text node before the jump input.
+    [...feFrameCounter.childNodes].forEach(n => { if (n.nodeType === Node.TEXT_NODE) n.remove(); });
+    const _feCounterTextNode = document.createTextNode("");
+    feFrameCounter.insertBefore(_feCounterTextNode, feFrameJump);
+
     function _feUpdateFrameDisplay() {
       const total = Math.max(_feFrameCount, 1);
-      feFrameCounter.textContent = `Frame ${_feCurrentFrame} / ${_feFrameCount}`;
+      _feCounterTextNode.nodeValue = `Frame ${_feCurrentFrame} / ${_feFrameCount}`;
       feTimeDisplay.textContent  = `${(_feCurrentFrame / _feFps).toFixed(3)} s`;
       if (!_feSeekDragging)
         feSeek.value = Math.round((_feCurrentFrame / Math.max(total - 1, 1)) * 1000);
     }
+
+    // Double-click on counter → inline frame-jump input
+    feFrameCounter.addEventListener("dblclick", () => {
+      feFrameCounter.classList.add("editing");
+      feFrameJump.classList.remove("hidden");
+      feFrameJump.max   = String(_feFrameCount - 1);
+      feFrameJump.value = String(_feCurrentFrame);
+      feFrameJump.select();
+    });
+
+    function _feCommitJump() {
+      const n = parseInt(feFrameJump.value);
+      feFrameJump.classList.add("hidden");
+      feFrameCounter.classList.remove("editing");
+      if (!isNaN(n)) _feLoadFrame(n);
+    }
+
+    let _feJumpEscaped = false;
+    feFrameJump.addEventListener("keydown", e => {
+      if (e.key === "Enter")  { e.preventDefault(); _feCommitJump(); }
+      if (e.key === "Escape") {
+        _feJumpEscaped = true;
+        feFrameJump.classList.add("hidden");
+        feFrameCounter.classList.remove("editing");
+        feFrameJump.blur();
+      }
+    });
+    feFrameJump.addEventListener("blur", () => {
+      if (_feJumpEscaped) { _feJumpEscaped = false; return; }
+      _feCommitJump();
+    });
 
     async function _feLoadFrame(n) {
       if (_feFrameBusy) return;

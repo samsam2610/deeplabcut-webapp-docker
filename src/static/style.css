@@ -1663,6 +1663,28 @@ footer {
   font-size: .75rem;
   color: var(--text-dim);
   margin-left: .25rem;
+  cursor: default;
+  position: relative;
+}
+.fe-frame-counter.editing {
+  color: transparent;
+  user-select: none;
+}
+.fe-frame-jump {
+  position: absolute;
+  left: 0; top: 50%;
+  transform: translateY(-50%);
+  width: 100%;
+  font-family: var(--mono);
+  font-size: .75rem;
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 0 .25rem;
+  text-align: center;
+  outline: none;
+  box-sizing: border-box;
 }
 
 .fe-time-display {
