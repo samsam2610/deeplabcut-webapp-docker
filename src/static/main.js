@@ -2888,6 +2888,7 @@
     const tnTfParams      = document.getElementById("tn-tf-params");
     const tnPtParams      = document.getElementById("tn-pt-params");
     const tnRunBtn        = document.getElementById("btn-run-train-network");
+    const tnStopBtn       = document.getElementById("btn-stop-train-network");
     const tnRunStatus     = document.getElementById("tn-run-status");
     const tnProgress      = document.getElementById("tn-progress");
     const tnTaskId        = document.getElementById("tn-task-id");
@@ -2896,8 +2897,9 @@
     const tnProgressPct   = document.getElementById("tn-progress-pct");
     const tnLogOutput     = document.getElementById("tn-log-output");
 
-    let _tnPollTimer = null;
-    let _tnEngine    = "pytorch";
+    let _tnPollTimer  = null;
+    let _tnActiveTask = null;
+    let _tnEngine     = "pytorch";
 
     // ── Engine display (reads module-level _dlcEngine set when project loads) ──
     function _tnDetectEngine() {
@@ -2951,6 +2953,7 @@
         engine:           _tnEngine,
         shuffle:          intVal("tn-shuffle") || 1,
         trainingsetindex: intVal("tn-trainingsetindex") ?? 0,
+        gputouse:         intVal("tn-gputouse"),
       };
 
       if (_tnEngine === "tensorflow") {
@@ -2958,7 +2961,6 @@
           maxiters:    intVal("tn-maxiters"),
           displayiters: intVal("tn-displayiters"),
           saveiters:   intVal("tn-saveiters"),
-          gputouse:    intVal("tn-gputouse"),
         });
       } else {
         Object.assign(body, {
@@ -2984,6 +2986,7 @@
           tnRunBtn.disabled = false;
           return;
         }
+        _tnActiveTask = data.task_id;
         _tnStartPolling(data.task_id);
       } catch (err) {
         tnRunStatus.textContent = `Network error: ${err.message}`;
@@ -2992,15 +2995,46 @@
       }
     });
 
+    // ── Stop training ─────────────────────────────────────────────
+    tnStopBtn.addEventListener("click", async () => {
+      if (!_tnActiveTask) return;
+      tnStopBtn.disabled = true;
+      try {
+        await fetch("/dlc/project/train-network/stop", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ task_id: _tnActiveTask }),
+        });
+        tnRunStatus.textContent = "Stop signal sent — training will terminate shortly.";
+        tnRunStatus.className   = "fe-extract-status";
+      } catch (err) {
+        tnRunStatus.textContent = `Stop error: ${err.message}`;
+        tnRunStatus.className   = "fe-extract-status err";
+        tnStopBtn.disabled = false;
+      }
+    });
+
     // ── Poll task status ─────────────────────────────────────────
+    function _tnSetRunning(running) {
+      tnRunBtn.disabled = running;
+      if (running) {
+        tnStopBtn.classList.remove("hidden");
+        tnStopBtn.disabled = false;
+      } else {
+        tnStopBtn.classList.add("hidden");
+        _tnActiveTask = null;
+      }
+    }
+
     function _tnStartPolling(taskId) {
       tnProgress.classList.remove("hidden");
       tnProgress.classList.remove("state-success", "state-fail");
-      tnTaskId.textContent       = taskId.slice(0, 12) + "…";
-      tnProgressBar.style.width  = "0%";
-      tnProgressPct.textContent  = "0 %";
+      tnTaskId.textContent        = taskId.slice(0, 12) + "…";
+      tnProgressBar.style.width   = "0%";
+      tnProgressPct.textContent   = "0 %";
       tnProgressStage.textContent = "Queued";
-      tnLogOutput.textContent    = "Waiting for output…";
+      tnLogOutput.textContent     = "Waiting for output…";
+      _tnSetRunning(true);
 
       if (_tnPollTimer) clearInterval(_tnPollTimer);
       _tnPollTimer = setInterval(() => _tnPoll(taskId), 2000);
@@ -3029,17 +3063,19 @@
           tnProgressBar.style.width   = "100%";
           tnProgressPct.textContent   = "100 %";
           if (data.result && data.result.log) tnLogOutput.textContent = data.result.log;
-          tnRunBtn.disabled = false;
+          _tnSetRunning(false);
           tnRunStatus.textContent = "Training finished successfully.";
           tnRunStatus.className   = "fe-extract-status ok";
         }
 
-        if (data.state === "FAILURE") {
+        if (data.state === "FAILURE" || data.state === "REVOKED") {
           clearInterval(_tnPollTimer); _tnPollTimer = null;
           tnProgress.classList.add("state-fail");
-          tnProgressStage.textContent = "✗ " + (data.error || "Failed");
-          tnLogOutput.textContent     = data.error || "An unknown error occurred.";
-          tnRunBtn.disabled = false;
+          tnProgressStage.textContent = data.state === "REVOKED"
+            ? "✗ Stopped by user"
+            : "✗ " + (data.error || "Failed");
+          if (data.state === "FAILURE") tnLogOutput.textContent = data.error || "An unknown error occurred.";
+          _tnSetRunning(false);
         }
       } catch (err) {
         console.error("Train network poll error:", err);

@@ -2910,11 +2910,11 @@ def dlc_train_network():
       engine        : "pytorch" | "tensorflow"  (informational, also forwarded)
       shuffle       : int  (default 1)
       trainingsetindex : int  (default 0)
+      gputouse      : int | null  (common: GPU index)
       --- TensorFlow only ---
       maxiters      : int
       displayiters  : int
       saveiters     : int
-      gputouse      : int | null
       --- PyTorch only ---
       epochs        : int | null
       save_epochs   : int | null
@@ -2955,9 +2955,12 @@ def dlc_train_network():
         "shuffle":          _int_or_none("shuffle") or 1,
         "trainingsetindex": _int_or_none("trainingsetindex") or 0,
     }
+    gputouse = _int_or_none("gputouse")
+    if gputouse is not None:
+        params["gputouse"] = gputouse
 
     if engine == "tensorflow":
-        for key in ("maxiters", "displayiters", "saveiters", "gputouse"):
+        for key in ("maxiters", "displayiters", "saveiters"):
             v = _int_or_none(key)
             if v is not None:
                 params[key] = v
@@ -2975,6 +2978,21 @@ def dlc_train_network():
         kwargs={"config_path": config_path, "engine": engine, "params": params},
     )
     return jsonify({"task_id": task.id, "operation": "train_network", "engine": engine}), 202
+
+
+@app.route("/dlc/project/train-network/stop", methods=["POST"])
+def dlc_train_network_stop():
+    """
+    Revoke and terminate a running train_network Celery task.
+    Body (JSON): { "task_id": "<celery task id>" }
+    """
+    body    = request.get_json(force=True) or {}
+    task_id = (body.get("task_id") or "").strip()
+    if not task_id:
+        return jsonify({"error": "task_id is required."}), 400
+
+    celery.control.revoke(task_id, terminate=True, signal="SIGTERM")
+    return jsonify({"status": "revoked", "task_id": task_id}), 200
 
 
 # ── Entry point ───────────────────────────────────────────────────

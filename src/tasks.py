@@ -714,6 +714,7 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
     """
     import io as _io
     import sys as _sys
+    import threading as _threading
 
     if params is None:
         params = {}
@@ -723,6 +724,26 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
     _real_err = _sys.stderr
     _sys.stdout = _log_buf
     _sys.stderr = _log_buf
+
+    _stop_event = _threading.Event()
+
+    def _emit_loop():
+        """Background thread: stream log buffer to Celery state every 3 s."""
+        _progress = 12
+        while not _stop_event.wait(3):
+            _current_log = _log_buf.getvalue()[-8000:]
+            try:
+                self.update_state(
+                    state="PROGRESS",
+                    meta={
+                        "progress": min(_progress, 90),
+                        "stage":    f"Training ({engine})…",
+                        "log":      _current_log,
+                    },
+                )
+            except Exception:
+                pass
+            _progress = min(_progress + 1, 90)
 
     try:
         self.update_state(
@@ -746,25 +767,35 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
                 "Please run 'Create Training Dataset' before training the network."
             )
 
+        init_log = (
+            f"config_path : {config_path}\n"
+            f"engine      : {engine}\n"
+            f"params      : {params}\n\n"
+        )
+        _log_buf.write(init_log)
+
         self.update_state(
             state="PROGRESS",
             meta={
                 "progress": 10,
-                "stage": f"Starting training ({engine})…",
-                "log": (
-                    f"config_path : {config_path}\n"
-                    f"engine      : {engine}\n"
-                    f"params      : {params}\n"
-                ),
+                "stage":    f"Starting training ({engine})…",
+                "log":      init_log,
             },
         )
+
+        # Start background thread to stream log to Celery state in real time
+        _emitter = _threading.Thread(target=_emit_loop, daemon=True)
+        _emitter.start()
 
         # Build kwargs – only pass recognised non-None values
         kwargs = {k: v for k, v in params.items() if v is not None}
 
         dlc.train_network(config_path, **kwargs)
 
-        final_log = _log_buf.getvalue()[-5000:]
+        _stop_event.set()
+        _emitter.join(timeout=5)
+
+        final_log = _log_buf.getvalue()[-8000:]
         return {
             "status":    "complete",
             "operation": "train_network",
@@ -773,6 +804,7 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         }
 
     except Exception:
+        _stop_event.set()
         raise RuntimeError(traceback.format_exc()[-3000:])
 
     finally:
