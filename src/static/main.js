@@ -1933,17 +1933,22 @@
       return { runs, colorMap };
     }
 
-    // Merge consecutive same-type runs whose gap is ≤ ignoreFrames into one run.
+    // Drop signals of the same type that fall within ignoreFrames of the
+    // preceding signal of that type (chained: each signal checks against the one
+    // immediately before it, not the group anchor).  The kept signal's window
+    // (before/after) stays anchored to its own startFrame; absorbed ones are
+    // simply dropped.
     function _feMergeRuns(runs, ignoreFrames) {
       if (!ignoreFrames) return runs;
       const merged = [];
+      const lastSeenStart = {}; // value → startFrame of most recently encountered run
       runs.forEach(run => {
-        const last = merged[merged.length - 1];
-        if (last && last.value === run.value && run.startFrame - last.endFrame <= ignoreFrames) {
-          last.endFrame = run.endFrame;
-        } else {
-          merged.push({ ...run });
+        const prev = lastSeenStart[run.value];
+        lastSeenStart[run.value] = run.startFrame; // always advance the cursor
+        if (prev !== undefined && run.startFrame - prev <= ignoreFrames) {
+          return; // within ignore period of the previous signal — drop
         }
+        merged.push({ ...run });
       });
       return merged;
     }
