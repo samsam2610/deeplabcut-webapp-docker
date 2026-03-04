@@ -1553,38 +1553,74 @@
 
   // ── Frame Extractor ──────────────────────────────────────────
   (function () {
-    const feCard        = document.getElementById("frame-extractor-card");
-    const feOpenBtn     = document.getElementById("btn-open-frame-extractor");
-    const feCloseBtn    = document.getElementById("btn-close-frame-extractor");
-    const feBtnProject  = document.getElementById("fe-btn-from-project");
-    const feBtnUpload   = document.getElementById("fe-btn-upload");
-    const feProjectVids = document.getElementById("fe-project-videos");
-    const feVideoList   = document.getElementById("fe-video-list");
-    const feUploadSec   = document.getElementById("fe-upload-section");
-    const feFileInput   = document.getElementById("fe-video-file-input");
-    const feUploadStatus= document.getElementById("fe-upload-status");
-    const fePlayerSec   = document.getElementById("fe-player-section");
-    const feVideo       = document.getElementById("fe-video");
-    const feCanvas      = document.getElementById("fe-canvas");
-    const feBtnPlay     = document.getElementById("fe-btn-play");
-    const fePlayIcon    = document.getElementById("fe-play-icon");
-    const fePauseIcon   = document.getElementById("fe-pause-icon");
-    const feBtnPrev     = document.getElementById("fe-btn-prev");
-    const feBtnNext     = document.getElementById("fe-btn-next");
-    const feFrameCounter= document.getElementById("fe-frame-counter");
-    const feTimeDisplay = document.getElementById("fe-time-display");
-    const feSeek        = document.getElementById("fe-seek");
-    const feBtnExtract  = document.getElementById("fe-btn-extract");
-    const feExtractCount= document.getElementById("fe-extract-count");
+    const feCard          = document.getElementById("frame-extractor-card");
+    const feOpenBtn       = document.getElementById("btn-open-frame-extractor");
+    const feCloseBtn      = document.getElementById("btn-close-frame-extractor");
+    const feBtnProject    = document.getElementById("fe-btn-from-project");
+    const feBtnUpload     = document.getElementById("fe-btn-upload");
+    const feProjectVids   = document.getElementById("fe-project-videos");
+    const feVideoList     = document.getElementById("fe-video-list");
+    const feUploadSec     = document.getElementById("fe-upload-section");
+    const feFileInput     = document.getElementById("fe-video-file-input");
+    const feUploadStatus  = document.getElementById("fe-upload-status");
+    const fePlayerSec     = document.getElementById("fe-player-section");
+    const feCanvas        = document.getElementById("fe-canvas");
+    const feBtnPlay       = document.getElementById("fe-btn-play");
+    const fePlayIcon      = document.getElementById("fe-play-icon");
+    const fePauseIcon     = document.getElementById("fe-pause-icon");
+    const feBtnPrev       = document.getElementById("fe-btn-prev");
+    const feBtnNext       = document.getElementById("fe-btn-next");
+    const feFrameCounter  = document.getElementById("fe-frame-counter");
+    const feTimeDisplay   = document.getElementById("fe-time-display");
+    const feSeek          = document.getElementById("fe-seek");
+    const feBtnExtract    = document.getElementById("fe-btn-extract");
+    const feExtractCount  = document.getElementById("fe-extract-count");
     const feExtractStatus = document.getElementById("fe-extract-status");
+    const feCsvBars       = document.getElementById("fe-csv-bars");
+    const feStatusBarWrap = document.getElementById("fe-status-bar-wrap");
+    const feNoteBarWrap   = document.getElementById("fe-note-bar-wrap");
+    const feStatusBar     = document.getElementById("fe-status-bar");
+    const feNoteBar       = document.getElementById("fe-note-bar");
+    const feFrameImg      = document.getElementById("fe-frame-img");
+    const feFrameSpinner  = document.getElementById("fe-frame-spinner");
+    const feStatusBefore  = document.getElementById("fe-status-before");
+    const feStatusAfter   = document.getElementById("fe-status-after");
+    const feStatusApply   = document.getElementById("fe-status-apply");
+    const feStatusTags    = document.getElementById("fe-status-tags");
+    const feNoteBefore    = document.getElementById("fe-note-before");
+    const feNoteAfter     = document.getElementById("fe-note-after");
+    const feNoteApply     = document.getElementById("fe-note-apply");
+    const feNoteTags      = document.getElementById("fe-note-tags");
 
-    let _feFps         = 30;
-    let _feFrameCount  = 0;
-    let _feCurrentVideo= null; // filename string
-    let _feExtracted   = 0;
-    let _feSeekDragging= false;
+    let _feFps          = 30;
+    let _feCsvRows      = [];
+    let _feFrameCount   = 0;
+    let _feStatusRuns     = [];
+    let _feNoteRuns       = [];
+    let _feStatusColorMap = {};
+    let _feNoteColorMap   = {};
+    let _feStatusActiveTag = null;
+    let _feNoteActiveTag   = null;
+    let _feReRenderStatus = null;
+    let _feReRenderNote   = null;
+    let _feCurrentVideo = null;
+    let _feExtracted    = 0;
+    let _feSeekDragging = false;
+    let _feCurrentFrame = 0;
+    let _feFrameBusy    = false;
+    let _fePlayTimer    = null;
 
-    // ── Open / close ────────────────────────────────────────────
+    function _feFrameUrl(n) {
+      return `/dlc/project/video-frame/${encodeURIComponent(_feCurrentVideo)}/${n}`;
+    }
+
+    function _fePrefetch(frames) {
+      frames.forEach(n => {
+        if (n >= 0 && n < _feFrameCount) new Image().src = _feFrameUrl(n);
+      });
+    }
+
+    // ── Open / close ─────────────────────────────────────────────
     feOpenBtn.addEventListener("click", () => {
       feCard.classList.remove("hidden");
       feCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -1593,29 +1629,44 @@
 
     feCloseBtn.addEventListener("click", () => {
       feCard.classList.add("hidden");
-      feVideo.pause();
-      feVideo.src = "";
-      fePlayerSec.classList.add("hidden");
-      _feCurrentVideo = null;
+      _feReset();
     });
 
-    // ── Source toggle ────────────────────────────────────────────
+    function _feReset() {
+      _feCurrentVideo = null;
+      _feCurrentFrame = 0;
+      _feFrameBusy    = false;
+      _feCsvRows      = [];
+      _feStatusRuns = []; _feNoteRuns = [];
+      _feStatusColorMap = {}; _feNoteColorMap = {};
+      _feStatusActiveTag = null; _feNoteActiveTag = null;
+      _feReRenderStatus = null; _feReRenderNote = null;
+      if (_fePlayTimer) { clearInterval(_fePlayTimer); _fePlayTimer = null; }
+      fePlayIcon.classList.remove("hidden"); fePauseIcon.classList.add("hidden");
+      feFrameImg.onload  = null;
+      feFrameImg.onerror = null;
+      if (feFrameImg.src.startsWith("blob:")) URL.revokeObjectURL(feFrameImg.src);
+      feFrameImg.removeAttribute("src");
+      feFrameSpinner.classList.add("hidden");
+      fePlayerSec.classList.add("hidden");
+      feCsvBars.classList.add("hidden");
+      feStatusBarWrap.classList.add("hidden");
+      feNoteBarWrap.classList.add("hidden");
+    }
+
+    // ── Source toggle ─────────────────────────────────────────────
     feBtnProject.addEventListener("click", () => {
-      feBtnProject.classList.add("active");
-      feBtnUpload.classList.remove("active");
-      feProjectVids.classList.remove("hidden");
-      feUploadSec.classList.add("hidden");
+      feBtnProject.classList.add("active"); feBtnUpload.classList.remove("active");
+      feProjectVids.classList.remove("hidden"); feUploadSec.classList.add("hidden");
       _feLoadProjectVideos();
     });
 
     feBtnUpload.addEventListener("click", () => {
-      feBtnUpload.classList.add("active");
-      feBtnProject.classList.remove("active");
-      feUploadSec.classList.remove("hidden");
-      feProjectVids.classList.add("hidden");
+      feBtnUpload.classList.add("active"); feBtnProject.classList.remove("active");
+      feUploadSec.classList.remove("hidden"); feProjectVids.classList.add("hidden");
     });
 
-    // ── List project videos ──────────────────────────────────────
+    // ── List project videos ───────────────────────────────────────
     async function _feLoadProjectVideos() {
       feVideoList.innerHTML = '<p class="explorer-empty">Loading…</p>';
       try {
@@ -1623,7 +1674,6 @@
         const data = await res.json();
         if (data.error) { feVideoList.innerHTML = `<p class="explorer-empty">${data.error}</p>`; return; }
         if (!data.videos.length) { feVideoList.innerHTML = '<p class="explorer-empty">No videos in project videos/ folder.</p>'; return; }
-
         feVideoList.innerHTML = "";
         data.videos.forEach(v => {
           const item = document.createElement("div");
@@ -1642,34 +1692,30 @@
       }
     }
 
-    async function _feSelectProjectVideo(filename, itemEl) {
-      // Update active state
-      feVideoList.querySelectorAll(".fe-video-item").forEach(el => el.classList.remove("active"));
-      itemEl.classList.add("active");
-
+    async function _feSelectVideo(filename) {
+      _feReset();
       _feCurrentVideo = filename;
-      _feExtracted = 0;
       feExtractCount.textContent = "0 frames saved";
       feExtractStatus.textContent = "";
       feExtractStatus.className = "fe-extract-status";
-
-      // Fetch video metadata (fps, frame count)
       try {
         const res  = await fetch(`/dlc/project/video-info/${encodeURIComponent(filename)}`);
         const info = await res.json();
         _feFps        = info.fps || 30;
         _feFrameCount = info.frame_count || 0;
-      } catch (_) {
-        _feFps = 30; _feFrameCount = 0;
-      }
-
-      feVideo.src = `/dlc/project/video-stream/${encodeURIComponent(filename)}`;
-      feVideo.load();
+      } catch (_) { _feFps = 30; _feFrameCount = 0; }
       fePlayerSec.classList.remove("hidden");
-      _feUpdateFrameDisplay();
+      _feLoadCsvData(filename);
+      _feLoadFrame(0);
     }
 
-    // ── File upload ──────────────────────────────────────────────
+    async function _feSelectProjectVideo(filename, itemEl) {
+      feVideoList.querySelectorAll(".fe-video-item").forEach(el => el.classList.remove("active"));
+      itemEl.classList.add("active");
+      await _feSelectVideo(filename);
+    }
+
+    // ── File upload ───────────────────────────────────────────────
     feFileInput.addEventListener("change", async () => {
       const file = feFileInput.files[0];
       if (!file) return;
@@ -1681,79 +1727,89 @@
         const data = await res.json();
         if (data.error) { feUploadStatus.textContent = `Error: ${data.error}`; return; }
         feUploadStatus.textContent = `Saved as ${data.saved}`;
-        _feCurrentVideo = data.saved;
-        _feExtracted = 0;
-        feExtractCount.textContent = "0 frames saved";
-        feExtractStatus.textContent = "";
-        feExtractStatus.className = "fe-extract-status";
-
-        try {
-          const res2  = await fetch(`/dlc/project/video-info/${encodeURIComponent(data.saved)}`);
-          const info  = await res2.json();
-          _feFps        = info.fps || 30;
-          _feFrameCount = info.frame_count || 0;
-        } catch (_) { _feFps = 30; _feFrameCount = 0; }
-
-        feVideo.src = `/dlc/project/video-stream/${encodeURIComponent(data.saved)}`;
-        feVideo.load();
-        fePlayerSec.classList.remove("hidden");
-        _feUpdateFrameDisplay();
+        await _feSelectVideo(data.saved);
       } catch (err) {
         feUploadStatus.textContent = `Upload failed: ${err.message}`;
       }
       feFileInput.value = "";
     });
 
-    // ── Video event listeners ────────────────────────────────────
-    feVideo.addEventListener("timeupdate", () => {
-      if (!_feSeekDragging) _feUpdateFrameDisplay();
-    });
-
-    feVideo.addEventListener("play",  () => { fePlayIcon.classList.add("hidden"); fePauseIcon.classList.remove("hidden"); });
-    feVideo.addEventListener("pause", () => { fePlayIcon.classList.remove("hidden"); fePauseIcon.classList.add("hidden"); });
-    feVideo.addEventListener("ended", () => { fePlayIcon.classList.remove("hidden"); fePauseIcon.classList.add("hidden"); });
-
+    // ── Frame display ─────────────────────────────────────────────
     function _feUpdateFrameDisplay() {
-      const t     = feVideo.currentTime;
-      const frame = Math.round(t * _feFps);
-      const total = _feFrameCount || Math.round((feVideo.duration || 0) * _feFps);
-      feFrameCounter.textContent = `Frame ${frame} / ${total}`;
-      feTimeDisplay.textContent  = `${t.toFixed(3)} s`;
-      if (feVideo.duration > 0 && !_feSeekDragging) {
-        feSeek.value = Math.round((t / feVideo.duration) * 1000);
+      const total = Math.max(_feFrameCount, 1);
+      feFrameCounter.textContent = `Frame ${_feCurrentFrame} / ${_feFrameCount}`;
+      feTimeDisplay.textContent  = `${(_feCurrentFrame / _feFps).toFixed(3)} s`;
+      if (!_feSeekDragging)
+        feSeek.value = Math.round((_feCurrentFrame / Math.max(total - 1, 1)) * 1000);
+    }
+
+    async function _feLoadFrame(n) {
+      if (_feFrameBusy) return;
+      _feFrameBusy = true;
+      n = Math.max(0, Math.min(n, Math.max(_feFrameCount - 1, 0)));
+      _feCurrentFrame = n;
+      feFrameSpinner.classList.remove("hidden");
+      try {
+        const resp = await fetch(_feFrameUrl(n));
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.error || `HTTP ${resp.status}`);
+        }
+        const blob    = await resp.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        await new Promise((resolve, reject) => {
+          feFrameImg.onload  = resolve;
+          feFrameImg.onerror = reject;
+          const prev = feFrameImg.src;
+          feFrameImg.src = blobUrl;
+          if (prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+        });
+        _feUpdateFrameDisplay();
+        _fePrefetch([n + 1, n + 2]);
+      } catch (err) {
+        feExtractStatus.textContent = `Failed to load frame: ${err.message}`;
+        feExtractStatus.className = "fe-extract-status err";
+      } finally {
+        _feFrameBusy = false;
+        feFrameSpinner.classList.add("hidden");
       }
     }
 
-    // ── Controls ─────────────────────────────────────────────────
+    // ── Controls ──────────────────────────────────────────────────
     feBtnPlay.addEventListener("click", () => {
-      if (feVideo.paused) feVideo.play(); else feVideo.pause();
+      if (_fePlayTimer) {
+        clearInterval(_fePlayTimer); _fePlayTimer = null;
+        fePlayIcon.classList.remove("hidden"); fePauseIcon.classList.add("hidden");
+      } else {
+        fePlayIcon.classList.add("hidden"); fePauseIcon.classList.remove("hidden");
+        _fePlayTimer = setInterval(async () => {
+          if (_feCurrentFrame >= _feFrameCount - 1) {
+            clearInterval(_fePlayTimer); _fePlayTimer = null;
+            fePlayIcon.classList.remove("hidden"); fePauseIcon.classList.add("hidden");
+            return;
+          }
+          await _feLoadFrame(_feCurrentFrame + 1);
+        }, 1000 / _feFps);
+      }
     });
 
-    feBtnPrev.addEventListener("click", () => {
-      feVideo.pause();
-      feVideo.currentTime = Math.max(0, feVideo.currentTime - 1 / _feFps);
-    });
+    feBtnPrev.addEventListener("click", () => _feLoadFrame(_feCurrentFrame - 1));
+    feBtnNext.addEventListener("click", () => _feLoadFrame(_feCurrentFrame + 1));
 
-    feBtnNext.addEventListener("click", () => {
-      feVideo.pause();
-      feVideo.currentTime = Math.min(feVideo.duration || 0, feVideo.currentTime + 1 / _feFps);
-    });
-
-    // Seek slider
-    feSeek.addEventListener("mousedown", () => { _feSeekDragging = true; });
+    feSeek.addEventListener("mousedown",  () => { _feSeekDragging = true; });
     feSeek.addEventListener("touchstart", () => { _feSeekDragging = true; });
     feSeek.addEventListener("input", () => {
-      if (feVideo.duration) feVideo.currentTime = (feSeek.value / 1000) * feVideo.duration;
+      _feCurrentFrame = Math.round((feSeek.value / 1000) * Math.max(_feFrameCount - 1, 0));
       _feUpdateFrameDisplay();
     });
-    feSeek.addEventListener("change", () => { _feSeekDragging = false; });
+    feSeek.addEventListener("change", () => { _feSeekDragging = false; _feLoadFrame(_feCurrentFrame); });
 
-    // ── Capture + save helpers ───────────────────────────────────
+    // ── Capture + save helpers ────────────────────────────────────
     async function _feCaptureCurrent() {
-      feCanvas.width  = feVideo.videoWidth;
-      feCanvas.height = feVideo.videoHeight;
+      feCanvas.width  = feFrameImg.naturalWidth;
+      feCanvas.height = feFrameImg.naturalHeight;
       try {
-        feCanvas.getContext("2d").drawImage(feVideo, 0, 0);
+        feCanvas.getContext("2d").drawImage(feFrameImg, 0, 0);
         const url = feCanvas.toDataURL("image/jpeg", 0.92);
         return url.split(",")[1] || null;
       } catch (secErr) {
@@ -1765,40 +1821,23 @@
 
     async function _feSaveFrames(count) {
       if (!_feCurrentVideo) return;
-      if (feVideo.readyState < 2) { feExtractStatus.textContent = "Video not ready."; return; }
-
       feBtnExtract.disabled = true;
-      feVideo.pause();
-      if (count > 1) {
-        feExtractStatus.textContent = `Saving ${count} frames…`;
-        feExtractStatus.className = "fe-extract-status";
-      }
-
+      if (_fePlayTimer) { clearInterval(_fePlayTimer); _fePlayTimer = null; fePlayIcon.classList.remove("hidden"); fePauseIcon.classList.add("hidden"); }
+      if (count > 1) { feExtractStatus.textContent = `Saving ${count} frames…`; feExtractStatus.className = "fe-extract-status"; }
       let saved = 0, skipped = 0, lastData = null;
       try {
         for (let i = 0; i < count; i++) {
-          if (i > 0) {
-            const next = Math.min(feVideo.duration || 0, feVideo.currentTime + 1 / _feFps);
-            feVideo.currentTime = next;
-            await new Promise(resolve => feVideo.addEventListener("seeked", resolve, { once: true }));
-          }
-          const frameNumber = Math.round(feVideo.currentTime * _feFps);
+          if (i > 0) await _feLoadFrame(_feCurrentFrame + 1);
           const base64 = await _feCaptureCurrent();
           if (!base64) break;
           const res  = await fetch("/dlc/project/save-frame", {
-            method:  "POST",
-            headers: { "Content-Type": "application/json" },
-            body:    JSON.stringify({ video_name: _feCurrentVideo, frame_data: base64, frame_number: frameNumber }),
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ video_name: _feCurrentVideo, frame_data: base64, frame_number: _feCurrentFrame }),
           });
           const data = await res.json();
           if (data.skipped) { skipped++; continue; }
-          if (data.error) {
-            feExtractStatus.textContent = `Error on frame ${i + 1}: ${data.error}`;
-            feExtractStatus.className = "fe-extract-status err";
-            break;
-          }
-          saved++;
-          lastData = data;
+          if (data.error) { feExtractStatus.textContent = `Error on frame ${i + 1}: ${data.error}`; feExtractStatus.className = "fe-extract-status err"; break; }
+          saved++; lastData = data;
           _feExtracted = data.frame_count;
           feExtractCount.textContent = `${_feExtracted} frame${_feExtracted !== 1 ? "s" : ""} saved`;
         }
@@ -1819,11 +1858,123 @@
       }
     }
 
+    // ── CSV annotation bars ───────────────────────────────────────
+    const _feCsvPalette = ["#6ee7b7","#60a5fa","#f472b6","#fbbf24","#a78bfa","#34d399","#fb923c","#e879f9"];
+
+    function _feComputeRuns(rows, field) {
+      const vals = [...new Set(rows.map(r => r[field]).filter(v => v))];
+      const colorMap = {};
+      vals.forEach((v, i) => { colorMap[v] = _feCsvPalette[i % _feCsvPalette.length]; });
+      const runs = [];
+      rows.forEach(row => {
+        const val = row[field];
+        if (!val) return;
+        const last = runs[runs.length - 1];
+        if (last && last.value === val) { last.endFrame = row.frame_number; }
+        else { runs.push({ value: val, startFrame: row.frame_number, endFrame: row.frame_number }); }
+      });
+      return { runs, colorMap };
+    }
+
+    function _feRenderCsvBar(container, runs, colorMap, beforeInput, afterInput, activeTag) {
+      container.innerHTML = "";
+      const total = Math.max(_feFrameCount, 1);
+      const bef = parseInt(beforeInput.value) || 0;
+      const aft = parseInt(afterInput.value)  || 0;
+      runs.forEach(run => {
+        if (activeTag !== null && run.value !== activeTag) return;
+        const visStart = Math.max(0, run.startFrame - bef);
+        const visEnd   = Math.min(_feFrameCount - 1, run.startFrame + aft);
+        const startPct = (visStart / total) * 100;
+        const widthPct = Math.max(((visEnd + 1) / total) * 100 - startPct, 0.3);
+        const color    = colorMap[run.value];
+        const seg = document.createElement("div");
+        seg.className = "fe-timeline-seg";
+        seg.style.cssText = `left:${startPct}%;width:${widthPct}%;background:${color}40;border-color:${color};color:${color}`;
+        seg.textContent = run.value;
+        seg.title = `${run.value}  (signal frames ${run.startFrame}–${run.endFrame})\nWindow: ${visStart}–${visEnd}  (${visEnd - visStart + 1} frames)\nClick → frame ${visStart}  |  Shift+click → extract window`;
+        seg.addEventListener("click", async (e) => {
+          const b = parseInt(beforeInput.value) || 0;
+          const a = parseInt(afterInput.value)  || 0;
+          const nav    = Math.max(0, run.startFrame - b);
+          const winEnd = Math.min(_feFrameCount - 1, run.startFrame + a);
+          await _feLoadFrame(nav);
+          if (e.shiftKey) _feSaveFrames(winEnd - nav + 1);
+        });
+        container.appendChild(seg);
+      });
+    }
+
+    function _feRenderTagFilter(tagContainer, runs, colorMap, activeTag, onTagClick) {
+      tagContainer.innerHTML = "";
+      const vals = [...new Set(runs.map(r => r.value))];
+      if (vals.length < 2) return;
+      vals.forEach(val => {
+        const chip = document.createElement("span");
+        chip.className = "fe-tag-chip" + (activeTag === val ? " active" : "");
+        chip.style.setProperty("--chip-color", colorMap[val]);
+        chip.textContent = val;
+        chip.addEventListener("click", () => onTagClick(val));
+        tagContainer.appendChild(chip);
+      });
+    }
+
+    async function _feLoadCsvData(filename) {
+      _feCsvRows = [];
+      _feStatusRuns = []; _feNoteRuns = [];
+      _feStatusColorMap = {}; _feNoteColorMap = {};
+      _feStatusActiveTag = null; _feNoteActiveTag = null;
+      feCsvBars.classList.add("hidden");
+      feStatusBarWrap.classList.add("hidden");
+      feNoteBarWrap.classList.add("hidden");
+      try {
+        const res  = await fetch(`/dlc/project/video-csv/${encodeURIComponent(filename)}`);
+        const data = await res.json();
+        _feCsvRows = data.rows || [];
+        if (!_feCsvRows.length) return;
+        const hasStatus = _feCsvRows.some(r => r.frame_line_status);
+        const hasNote   = _feCsvRows.some(r => r.note);
+        if (!hasStatus && !hasNote) return;
+        feCsvBars.classList.remove("hidden");
+        if (hasStatus) {
+          ({ runs: _feStatusRuns, colorMap: _feStatusColorMap } = _feComputeRuns(_feCsvRows, "frame_line_status"));
+          const onStatusTag = val => {
+            _feStatusActiveTag = (_feStatusActiveTag === val) ? null : val;
+            _feRenderCsvBar(feStatusBar, _feStatusRuns, _feStatusColorMap, feStatusBefore, feStatusAfter, _feStatusActiveTag);
+            _feRenderTagFilter(feStatusTags, _feStatusRuns, _feStatusColorMap, _feStatusActiveTag, onStatusTag);
+          };
+          _feReRenderStatus = () => {
+            _feRenderCsvBar(feStatusBar, _feStatusRuns, _feStatusColorMap, feStatusBefore, feStatusAfter, _feStatusActiveTag);
+            _feRenderTagFilter(feStatusTags, _feStatusRuns, _feStatusColorMap, _feStatusActiveTag, onStatusTag);
+          };
+          _feReRenderStatus();
+          feStatusBarWrap.classList.remove("hidden");
+        }
+        if (hasNote) {
+          ({ runs: _feNoteRuns, colorMap: _feNoteColorMap } = _feComputeRuns(_feCsvRows, "note"));
+          const onNoteTag = val => {
+            _feNoteActiveTag = (_feNoteActiveTag === val) ? null : val;
+            _feRenderCsvBar(feNoteBar, _feNoteRuns, _feNoteColorMap, feNoteBefore, feNoteAfter, _feNoteActiveTag);
+            _feRenderTagFilter(feNoteTags, _feNoteRuns, _feNoteColorMap, _feNoteActiveTag, onNoteTag);
+          };
+          _feReRenderNote = () => {
+            _feRenderCsvBar(feNoteBar, _feNoteRuns, _feNoteColorMap, feNoteBefore, feNoteAfter, _feNoteActiveTag);
+            _feRenderTagFilter(feNoteTags, _feNoteRuns, _feNoteColorMap, _feNoteActiveTag, onNoteTag);
+          };
+          _feReRenderNote();
+          feNoteBarWrap.classList.remove("hidden");
+        }
+      } catch (_) { /* no CSV – bars stay hidden */ }
+    }
+
     feBtnExtract.addEventListener("click", () => _feSaveFrames(1));
 
-    // ── Keyboard shortcuts (active while mouse hovers over player) ──
+    feStatusApply.addEventListener("click", () => { if (_feReRenderStatus) _feReRenderStatus(); });
+    feNoteApply.addEventListener("click",   () => { if (_feReRenderNote)   _feReRenderNote();   });
+
+    // ── Keyboard shortcuts (active while hovering over player) ────
     let _feHover      = false;
-    let _fePending    = null;  // digit waiting for "s"
+    let _fePending    = null;
     let _fePendingTmr = null;
 
     fePlayerSec.addEventListener("mouseenter", () => { _feHover = true; });
@@ -1833,14 +1984,10 @@
       if (!_feHover || fePlayerSec.classList.contains("hidden")) return;
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
 
-      // Spacebar → play / pause
       if (e.key === " ") { e.preventDefault(); feBtnPlay.click(); return; }
-
-      // Arrows → step one frame
       if (e.key === "ArrowLeft")  { e.preventDefault(); feBtnPrev.click(); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); feBtnNext.click(); return; }
 
-      // Digit 1-9 → start combo
       if (/^[1-9]$/.test(e.key)) {
         e.preventDefault();
         _fePending = parseInt(e.key);

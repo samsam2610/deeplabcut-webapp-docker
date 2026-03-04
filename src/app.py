@@ -20,7 +20,7 @@ except ImportError:
     _yaml = None
 
 import redis as _redis
-from flask import Flask, request, jsonify, render_template, send_from_directory, send_file
+from flask import Flask, request, jsonify, render_template, send_from_directory, send_file, Response
 from celery import Celery
 from celery.result import AsyncResult
 from werkzeug.utils import secure_filename
@@ -47,6 +47,13 @@ _REDIS_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
 _redis_client = _redis.Redis.from_url(_REDIS_URL, decode_responses=True)
 _SESSION_KEY     = "webapp:session"
 _DLC_PROJECT_KEY = "webapp:dlc_project"
+
+# Persistent VideoCapture cache for the frame-server endpoint
+import threading as _threading
+_fe_vcap_lock = _threading.Lock()
+_fe_vcap      = None   # cv2.VideoCapture kept open between requests
+_fe_vcap_path = None   # absolute path string of the currently-open capture
+_fe_vcap_pos  = -1     # frame index that was just read (for sequential-read optimisation)
 
 # Standard DLC project pipeline folders
 DLC_PIPELINE_FOLDERS = [
@@ -1200,6 +1207,57 @@ def dlc_video_info(filename: str):
     return jsonify({"fps": fps, "frame_count": frame_count, "width": width, "height": height})
 
 
+@app.route("/dlc/project/video-csv/<path:filename>")
+def dlc_video_csv(filename: str):
+    """Return CSV annotation rows for a video (same stem, .csv extension in videos/ folder)."""
+    import csv as csv_module
+
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    videos_dir = (project_path / "videos").resolve()
+    csv_path = (videos_dir / (Path(filename).stem + ".csv")).resolve()
+    if not csv_path.is_relative_to(videos_dir):
+        return jsonify({"error": "Invalid path."}), 400
+    if not csv_path.is_file():
+        return jsonify({"rows": []})
+
+    rows = []
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv_module.DictReader(f, skipinitialspace=True)
+            # Normalise field names in case header has extra whitespace
+            if reader.fieldnames:
+                reader.fieldnames = [n.strip() for n in reader.fieldnames]
+            for row in reader:
+                # Also strip any None-keyed remainder
+                row = {k.strip() if k else k: v for k, v in row.items()}
+                status = (row.get("frame_line_status") or "").strip()
+                note   = (row.get("note") or "").strip()
+                if status or note:
+                    try:
+                        fn = int(float(row.get("frame_number", 0)))
+                    except (ValueError, TypeError):
+                        fn = 0
+                    rows.append({
+                        "timestamp":         (row.get("timestamp") or "").strip(),
+                        "frame_number":      fn,
+                        "frame_line_status": status,
+                        "note":              note,
+                    })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    rows.sort(key=lambda r: r["frame_number"])
+    return jsonify({"rows": rows})
+
+
 @app.route("/dlc/project/video-stream/<path:filename>")
 def dlc_video_stream(filename: str):
     """Stream a video file from the active DLC project's videos folder."""
@@ -1221,7 +1279,122 @@ def dlc_video_stream(filename: str):
     if video_path.suffix.lower() not in ALLOWED_VIDEO_EXT:
         return jsonify({"error": "Unsupported video format."}), 400
 
-    return send_file(str(video_path), conditional=True)
+    # Manual byte-range streaming – works reliably for multi-GB files
+    file_size = video_path.stat().st_size
+    range_header = request.headers.get("Range")
+    ext = video_path.suffix.lower()
+    mime_map = {".mp4": "video/mp4", ".mov": "video/quicktime", ".mkv": "video/x-matroska",
+                ".avi": "video/x-msvideo", ".mpg": "video/mpeg", ".mpeg": "video/mpeg"}
+    mime = mime_map.get(ext, "video/mp4")
+
+    chunk = 2 * 1024 * 1024  # 2 MB chunks
+
+    if range_header:
+        try:
+            rng = range_header.strip().replace("bytes=", "")
+            start_s, end_s = rng.split("-")
+            start = int(start_s)
+            end   = int(end_s) if end_s else min(start + chunk - 1, file_size - 1)
+        except (ValueError, AttributeError):
+            start, end = 0, min(chunk - 1, file_size - 1)
+        end = min(end, file_size - 1)
+        length = end - start + 1
+
+        def _stream_range(path, s, l):
+            with open(path, "rb") as fh:
+                fh.seek(s)
+                remaining = l
+                while remaining > 0:
+                    data = fh.read(min(65536, remaining))
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        resp = Response(
+            _stream_range(video_path, start, length),
+            status=206,
+            mimetype=mime,
+            direct_passthrough=True,
+        )
+        resp.headers["Content-Range"]  = f"bytes {start}-{end}/{file_size}"
+        resp.headers["Content-Length"] = str(length)
+        resp.headers["Accept-Ranges"]  = "bytes"
+        return resp
+
+    # No Range header – stream full file
+    def _stream_full(path):
+        with open(path, "rb") as fh:
+            while True:
+                data = fh.read(65536)
+                if not data:
+                    break
+                yield data
+
+    resp = Response(_stream_full(video_path), status=200, mimetype=mime, direct_passthrough=True)
+    resp.headers["Content-Length"] = str(file_size)
+    resp.headers["Accept-Ranges"]  = "bytes"
+    return resp
+
+
+@app.route("/dlc/project/video-frame/<path:filename>/<int:frame_number>")
+def dlc_video_frame(filename: str, frame_number: int):
+    """Decode and return a single frame as JPEG using OpenCV (for AVI / fallback mode)."""
+    import cv2
+
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    videos_dir = (project_path / "videos").resolve()
+    video_path = (videos_dir / filename).resolve()
+    if not video_path.is_relative_to(videos_dir):
+        return jsonify({"error": "Invalid path."}), 400
+    if not video_path.is_file():
+        return jsonify({"error": "Video not found."}), 404
+
+    global _fe_vcap, _fe_vcap_path, _fe_vcap_pos
+
+    vpath = str(video_path)
+    with _fe_vcap_lock:
+        # Re-open only when the video file changes
+        if _fe_vcap is None or _fe_vcap_path != vpath or not _fe_vcap.isOpened():
+            if _fe_vcap is not None:
+                _fe_vcap.release()
+            _fe_vcap = cv2.VideoCapture(vpath)
+            _fe_vcap_path = vpath
+            _fe_vcap_pos  = -1
+            if not _fe_vcap.isOpened():
+                return jsonify({"error": "Could not open video."}), 400
+
+        # Sequential read: if this is exactly the next frame, skip the seek
+        if frame_number != _fe_vcap_pos + 1:
+            _fe_vcap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+
+        ret, frame = _fe_vcap.read()
+        _fe_vcap_pos = frame_number if ret else -1
+
+    if not ret:
+        return jsonify({"error": "Could not read frame."}), 404
+
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    if not ok:
+        return jsonify({"error": "Encoding failed."}), 500
+
+    # Frames are immutable – let the browser cache them for the session
+    etag = f"{vpath}-{frame_number}"
+    if request.headers.get("If-None-Match") == etag:
+        return Response(status=304)
+
+    resp = Response(buf.tobytes(), mimetype="image/jpeg")
+    resp.headers["ETag"]          = etag
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
 
 
 @app.route("/dlc/project/video-upload", methods=["POST"])
