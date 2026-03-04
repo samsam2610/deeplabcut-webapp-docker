@@ -1831,6 +1831,33 @@ footer {
   font-weight: 600;
 }
 
+.fe-seg-nav {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  margin-top: .2rem;
+}
+
+.fe-seg-nav-btn {
+  padding: .1rem .5rem;
+  font-size: .68rem;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1.6;
+}
+.fe-seg-nav-btn:hover { background: var(--surface); border-color: var(--accent); color: var(--accent); }
+
+.fe-seg-nav-info {
+  font-size: .68rem;
+  font-family: var(--mono);
+  color: var(--text-dim);
+  min-width: 3rem;
+  text-align: center;
+}
+
 /* ── Frame Labeler ───────────────────────────────────────────── */
 
 .fl-canvas-wrap {
