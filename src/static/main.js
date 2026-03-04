@@ -2626,6 +2626,7 @@
     const ctdOpenBtn       = document.getElementById("btn-open-create-training-dataset");
     const ctdCloseBtn      = document.getElementById("btn-close-create-training-dataset");
     const ctdNumShuffles   = document.getElementById("ctd-num-shuffles");
+    const ctdFreezeSplit   = document.getElementById("ctd-freeze-split");
     const ctdRunBtn        = document.getElementById("btn-run-create-training-dataset");
     const ctdRunStatus     = document.getElementById("ctd-run-status");
     const ctdProgress      = document.getElementById("ctd-progress");
@@ -2661,6 +2662,7 @@
     // ── Run create_training_dataset ──────────────────────────────
     ctdRunBtn.addEventListener("click", async () => {
       const numShuffles = parseInt(ctdNumShuffles.value, 10) || 1;
+      const freezeSplit = ctdFreezeSplit ? ctdFreezeSplit.checked : true;
       ctdRunBtn.disabled    = true;
       ctdRunStatus.textContent = "";
       ctdRunStatus.className   = "fe-extract-status";
@@ -2669,7 +2671,7 @@
         const res  = await fetch("/dlc/project/create-training-dataset", {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ num_shuffles: numShuffles }),
+          body:    JSON.stringify({ num_shuffles: numShuffles, freeze_split: freezeSplit }),
         });
         const data = await res.json();
         if (!res.ok) {

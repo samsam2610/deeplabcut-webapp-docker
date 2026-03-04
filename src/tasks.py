@@ -622,7 +622,7 @@ def init_anipose_session(self, config_path: str):
 
 # ── DLC Create Training Dataset ───────────────────────────────────
 @celery.task(bind=True, name="tasks.dlc_create_training_dataset")
-def dlc_create_training_dataset(self, config_path: str, num_shuffles: int = 1):
+def dlc_create_training_dataset(self, config_path: str, num_shuffles: int = 1, freeze_split: bool = True):
     """Run deeplabcut.create_training_dataset() for the given DLC config.yaml."""
     import io as _io
     import sys as _sys
@@ -642,16 +642,41 @@ def dlc_create_training_dataset(self, config_path: str, num_shuffles: int = 1):
         if not os.path.isfile(config_path):
             raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
 
+        train_indices = None
+        test_indices  = None
+
+        if freeze_split:
+            self.update_state(
+                state="PROGRESS",
+                meta={
+                    "progress": 8,
+                    "stage": "Computing frozen train/test split via mergeandsplit…",
+                    "log": f"config_path: {config_path}\nnum_shuffles: {num_shuffles}\nfreeze_split: True\n",
+                },
+            )
+            train_indices, test_indices = dlc.mergeandsplit(config_path, trainindex=0, uniform=True)
+
         self.update_state(
             state="PROGRESS",
             meta={
                 "progress": 10,
                 "stage": "Running deeplabcut.create_training_dataset…",
-                "log": f"config_path: {config_path}\nnum_shuffles: {num_shuffles}\n",
+                "log": f"config_path: {config_path}\nnum_shuffles: {num_shuffles}\nfreeze_split: {freeze_split}\n",
             },
         )
 
-        dlc.create_training_dataset(config_path, num_shuffles=num_shuffles, userfeedback=False)
+        if freeze_split:
+            for shuffle_idx in range(1, num_shuffles + 1):
+                dlc.create_training_dataset(
+                    config_path,
+                    num_shuffles=1,
+                    Shuffles=[shuffle_idx],
+                    trainIndices=train_indices,
+                    testIndices=test_indices,
+                    userfeedback=False,
+                )
+        else:
+            dlc.create_training_dataset(config_path, num_shuffles=num_shuffles, userfeedback=False)
 
         final_log = _log_buf.getvalue()[-5000:]
         return {

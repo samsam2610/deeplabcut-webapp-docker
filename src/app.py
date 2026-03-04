@@ -2729,10 +2729,11 @@ def dlc_create_training_dataset():
         num_shuffles = 1
     if num_shuffles < 1:
         num_shuffles = 1
+    freeze_split = bool(body.get("freeze_split", True))
 
     task = celery.send_task(
         "tasks.dlc_create_training_dataset",
-        kwargs={"config_path": config_path, "num_shuffles": num_shuffles},
+        kwargs={"config_path": config_path, "num_shuffles": num_shuffles, "freeze_split": freeze_split},
     )
     return jsonify({"task_id": task.id, "operation": "create_training_dataset"}), 202
 
