@@ -733,6 +733,19 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         if not os.path.isfile(config_path):
             raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
 
+        # Verify a training dataset exists before calling train_network.
+        # DLC reads shuffle metadata from training-datasets/; if that directory
+        # is absent or empty it falls back to an incomplete internal config and
+        # raises an IndexError on TrainingFraction[].
+        _project_dir = Path(config_path).parent
+        _td_dir      = _project_dir / "training-datasets"
+        if not _td_dir.is_dir() or not any(_td_dir.iterdir()):
+            raise RuntimeError(
+                "No training dataset found in:\n"
+                f"  {_td_dir}\n\n"
+                "Please run 'Create Training Dataset' before training the network."
+            )
+
         self.update_state(
             state="PROGRESS",
             meta={
