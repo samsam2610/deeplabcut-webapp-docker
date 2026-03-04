@@ -535,6 +535,7 @@
   const dlcDownloadProjectBtn = document.getElementById("dlc-download-project-btn");
 
   let _dlcBrowsePath = null; // path currently browsed in the folder nav
+  let _dlcEngine     = "pytorch"; // engine read from config.yaml when project is loaded
 
   // ── Apply DLC project state to bar + card ───────────────────
   function applyDlcProjectState(data) {
@@ -551,6 +552,7 @@
       dlcDot.dataset.state = "ready";
       dlcLabel.textContent = data.has_config ? "DLC project active" : "DLC project (no config.yaml)";
       dlcMeta.textContent  = data.project_name || "";
+      _dlcEngine = (data.engine || "pytorch").toLowerCase();
       btnManageDlc.classList.add("hidden");
       btnDlcClear.classList.remove("hidden");
 
@@ -2897,25 +2899,12 @@
     let _tnPollTimer = null;
     let _tnEngine    = "pytorch";
 
-    // ── Engine detection ─────────────────────────────────────────
-    async function _tnDetectEngine() {
-      tnEngineBadge.textContent = "detecting…";
-      tnEngineBadge.style.color = "";
-      try {
-        const res  = await fetch("/dlc/project/engine");
-        const data = await res.json();
-        if (data.error) {
-          tnEngineBadge.textContent = "unknown";
-          return;
-        }
-        _tnEngine = data.engine || "pytorch";
-        tnEngineBadge.textContent = _tnEngine;
-        tnEngineBadge.style.color = _tnEngine === "pytorch" ? "var(--accent)" : "var(--text)";
-        _tnShowEngineParams(_tnEngine);
-      } catch (err) {
-        tnEngineBadge.textContent = "error";
-        console.error("Engine detection failed:", err);
-      }
+    // ── Engine display (reads module-level _dlcEngine set when project loads) ──
+    function _tnDetectEngine() {
+      _tnEngine = _dlcEngine;
+      tnEngineBadge.textContent = _tnEngine;
+      tnEngineBadge.style.color = _tnEngine === "pytorch" ? "var(--accent)" : "var(--text)";
+      _tnShowEngineParams(_tnEngine);
     }
 
     function _tnShowEngineParams(engine) {
@@ -2933,7 +2922,7 @@
       tnOpenBtn.addEventListener("click", () => {
         tnCard.classList.remove("hidden");
         tnCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
-        _tnDetectEngine();
+        _tnDetectEngine(); // sync — reads _dlcEngine set when project was loaded
       });
     }
     if (tnCloseBtn) {

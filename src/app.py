@@ -921,11 +921,22 @@ def set_dlc_project():
     has_config  = (p / "config.yaml").is_file()
     config_path = str(p / "config.yaml") if has_config else None
 
+    # Read engine from config.yaml (default pytorch)
+    engine = "pytorch"
+    if has_config and _yaml is not None:
+        try:
+            with open(p / "config.yaml") as f:
+                cfg = _yaml.safe_load(f)
+            engine = (cfg.get("engine") or "pytorch").lower()
+        except Exception:
+            pass
+
     project_data = {
         "project_path": str(p),
         "project_name": p.name,
         "has_config":   has_config,
         "config_path":  config_path,
+        "engine":       engine,
     }
     _redis_client.set(_DLC_PROJECT_KEY, json.dumps(project_data))
     return jsonify(project_data), 200
