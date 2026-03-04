@@ -693,6 +693,17 @@ def dlc_create_training_dataset(self, config_path: str, num_shuffles: int = 1, f
         _sys.stderr = _real_err
 
 
+# ── DLC Add Datasets to Video List ───────────────────────────────
+@celery.task(bind=True, name="tasks.dlc_add_datasets_to_video_list")
+def dlc_add_datasets_to_video_list(self, config_path: str):
+    """Run deeplabcut.adddatasetstovideolistandviceversa() for the given config."""
+    try:
+        dlc.adddatasetstovideolistandviceversa(config_path)
+        return {"status": "complete", "operation": "add_datasets_to_video_list"}
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+
 # ── Main Celery Task ──────────────────────────────────────────────
 @celery.task(bind=True, name="tasks.run_processing")
 def run_processing(self, project_id: str, task_type: str = "anipose"):

@@ -2812,18 +2812,36 @@
       try {
         const res  = await fetch("/dlc/project/add-datasets-to-video-list", { method: "POST" });
         const data = await res.json();
-        if (res.ok) {
-          ctdAddDatasetsStatus.textContent = "Done ✓";
-          ctdAddDatasetsStatus.className   = "fe-extract-status ok";
-        } else {
+        if (!res.ok) {
           ctdAddDatasetsStatus.textContent = data.error || "Error.";
           ctdAddDatasetsStatus.className   = "fe-extract-status err";
+          ctdAddDatasetsBtn.disabled = false;
+          return;
         }
+        // Poll until the task completes
+        const taskId = data.task_id;
+        const timer = setInterval(async () => {
+          try {
+            const sr   = await fetch(`/status/${taskId}`);
+            const sd   = await sr.json();
+            if (sd.state === "SUCCESS") {
+              clearInterval(timer);
+              ctdAddDatasetsStatus.textContent = "Done ✓";
+              ctdAddDatasetsStatus.className   = "fe-extract-status ok";
+              ctdAddDatasetsBtn.disabled = false;
+            } else if (sd.state === "FAILURE") {
+              clearInterval(timer);
+              ctdAddDatasetsStatus.textContent = sd.error || "Failed.";
+              ctdAddDatasetsStatus.className   = "fe-extract-status err";
+              ctdAddDatasetsBtn.disabled = false;
+            }
+          } catch { clearInterval(timer); ctdAddDatasetsBtn.disabled = false; }
+        }, 1500);
       } catch (err) {
         ctdAddDatasetsStatus.textContent = `Network error: ${err.message}`;
         ctdAddDatasetsStatus.className   = "fe-extract-status err";
+        ctdAddDatasetsBtn.disabled = false;
       }
-      ctdAddDatasetsBtn.disabled = false;
     });
 
     // ── Save pytorch_config.yaml ─────────────────────────────────

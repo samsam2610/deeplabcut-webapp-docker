@@ -2749,11 +2749,11 @@ def dlc_add_datasets_to_video_list():
     if not config_path or not Path(config_path).is_file():
         return jsonify({"error": "config.yaml not found in project."}), 404
 
-    try:
-        dlc.adddatasetstovideolistandviceversa(config_path)
-        return jsonify({"status": "ok"}), 200
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+    task = celery.send_task(
+        "tasks.dlc_add_datasets_to_video_list",
+        kwargs={"config_path": config_path},
+    )
+    return jsonify({"task_id": task.id, "status": "dispatched"}), 202
 
 
 @app.route("/dlc/project/pytorch-configs", methods=["GET"])
