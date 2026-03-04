@@ -2861,6 +2861,111 @@ def save_dlc_pytorch_config():
     return jsonify({"status": "saved", "rel_path": str(target.relative_to(project_path))})
 
 
+# ── DLC Train Network ─────────────────────────────────────────────
+
+@app.route("/dlc/project/engine", methods=["GET"])
+def get_dlc_project_engine():
+    """
+    Read the 'engine' field from the active DLC project's config.yaml.
+    Returns { "engine": "pytorch" | "tensorflow" }.
+    Defaults to "pytorch" when the field is absent.
+    """
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    config_path  = project_data.get("config_path", "")
+    if not config_path or not Path(config_path).is_file():
+        return jsonify({"error": "config.yaml not found in project."}), 404
+
+    try:
+        if _yaml is None:
+            return jsonify({"error": "PyYAML not installed."}), 500
+        with open(config_path) as f:
+            cfg = _yaml.safe_load(f)
+        engine = (cfg.get("engine") or "pytorch").lower()
+    except Exception as exc:
+        return jsonify({"error": f"Failed to parse config.yaml: {exc}"}), 500
+
+    return jsonify({"engine": engine})
+
+
+@app.route("/dlc/project/train-network", methods=["POST"])
+def dlc_train_network():
+    """
+    Dispatch a Celery task to run deeplabcut.train_network().
+    Body (JSON) fields:
+      engine        : "pytorch" | "tensorflow"  (informational, also forwarded)
+      shuffle       : int  (default 1)
+      trainingsetindex : int  (default 0)
+      --- TensorFlow only ---
+      maxiters      : int
+      displayiters  : int
+      saveiters     : int
+      gputouse      : int | null
+      --- PyTorch only ---
+      epochs        : int | null
+      save_epochs   : int | null
+      batch_size    : int | null
+      device        : str | null   e.g. "cuda", "cpu", "mps"
+      detector_epochs      : int | null
+      detector_batch_size  : int | null
+    """
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    config_path  = project_data.get("config_path", "")
+    if not config_path or not Path(config_path).is_file():
+        return jsonify({"error": "config.yaml not found in project."}), 404
+
+    body   = request.get_json(force=True) or {}
+    engine = (body.get("engine") or "pytorch").lower()
+
+    def _int_or_none(key):
+        v = body.get(key)
+        if v is None or str(v).strip() == "":
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _str_or_none(key):
+        v = body.get(key)
+        if v is None or str(v).strip() == "":
+            return None
+        return str(v).strip()
+
+    # Common params
+    params = {
+        "shuffle":          _int_or_none("shuffle") or 1,
+        "trainingsetindex": _int_or_none("trainingsetindex") or 0,
+    }
+
+    if engine == "tensorflow":
+        for key in ("maxiters", "displayiters", "saveiters", "gputouse"):
+            v = _int_or_none(key)
+            if v is not None:
+                params[key] = v
+    else:
+        for key in ("epochs", "save_epochs", "batch_size", "detector_epochs", "detector_batch_size"):
+            v = _int_or_none(key)
+            if v is not None:
+                params[key] = v
+        device = _str_or_none("device")
+        if device:
+            params["device"] = device
+
+    task = celery.send_task(
+        "tasks.dlc_train_network",
+        kwargs={"config_path": config_path, "engine": engine, "params": params},
+    )
+    return jsonify({"task_id": task.id, "operation": "train_network", "engine": engine}), 202
+
+
 # ── Entry point ───────────────────────────────────────────────────
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)

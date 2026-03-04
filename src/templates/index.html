@@ -199,6 +199,12 @@
           </svg>
           <span>Create Training Dataset</span>
         </button>
+        <button id="btn-open-train-network" class="inspect-btn" style="width:100%;gap:.55rem">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          <span>Train Network</span>
+        </button>
       </div>
     </section>
 
@@ -498,6 +504,113 @@
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             Save pytorch_config.yaml
           </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Train Network card ──────────────────────────────── -->
+    <section class="card dlc-theme hidden" id="train-network-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>Train Network</h2>
+        <button class="btn-sm" id="btn-close-train-network" title="Close">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Run <code style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">deeplabcut.train_network()</code> with the parameters below. Engine is read from the project's <code style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">config.yaml</code>.</p>
+
+      <!-- Engine indicator -->
+      <div class="scorer-row" style="margin-bottom:1rem">
+        <label>Engine</label>
+        <span id="tn-engine-badge" style="font-family:var(--mono);font-size:.78rem;padding:.15rem .55rem;border-radius:4px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-dim)">detecting…</span>
+      </div>
+
+      <!-- Common params -->
+      <div class="scorer-row" style="margin-bottom:.7rem">
+        <label for="tn-shuffle">Shuffle</label>
+        <input type="number" id="tn-shuffle" value="1" min="1" max="20" style="width:5rem" />
+      </div>
+      <div class="scorer-row" style="margin-bottom:.9rem">
+        <label for="tn-trainingsetindex">Training set index</label>
+        <input type="number" id="tn-trainingsetindex" value="0" min="0" style="width:5rem" />
+      </div>
+
+      <!-- TensorFlow params -->
+      <div id="tn-tf-params" class="hidden" style="padding:.8rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px;margin-bottom:.9rem;display:flex;flex-direction:column;gap:.6rem">
+        <span style="font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim)">TensorFlow parameters</span>
+        <div class="scorer-row">
+          <label for="tn-maxiters">Max iterations</label>
+          <input type="number" id="tn-maxiters" value="30000" min="1" style="width:7rem" />
+        </div>
+        <div class="scorer-row">
+          <label for="tn-displayiters">Display every (iters)</label>
+          <input type="number" id="tn-displayiters" value="500" min="1" style="width:7rem" />
+        </div>
+        <div class="scorer-row">
+          <label for="tn-saveiters">Save every (iters)</label>
+          <input type="number" id="tn-saveiters" value="15000" min="1" style="width:7rem" />
+        </div>
+        <div class="scorer-row">
+          <label for="tn-gputouse">GPU to use</label>
+          <input type="number" id="tn-gputouse" placeholder="auto" min="0" style="width:5rem" />
+        </div>
+      </div>
+
+      <!-- PyTorch params -->
+      <div id="tn-pt-params" class="hidden" style="padding:.8rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px;margin-bottom:.9rem;display:flex;flex-direction:column;gap:.6rem">
+        <span style="font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim)">PyTorch parameters</span>
+        <div class="scorer-row">
+          <label for="tn-epochs">Epochs</label>
+          <input type="number" id="tn-epochs" placeholder="from pytorch_config" min="1" style="width:10rem" />
+        </div>
+        <div class="scorer-row">
+          <label for="tn-save-epochs">Save every (epochs)</label>
+          <input type="number" id="tn-save-epochs" placeholder="from pytorch_config" min="1" style="width:10rem" />
+        </div>
+        <div class="scorer-row">
+          <label for="tn-batch-size">Batch size</label>
+          <input type="number" id="tn-batch-size" placeholder="from pytorch_config" min="1" style="width:10rem" />
+        </div>
+        <div class="scorer-row">
+          <label for="tn-device">Device</label>
+          <input type="text" id="tn-device" placeholder="auto (cuda / cpu)" style="width:12rem" />
+        </div>
+        <div class="scorer-row">
+          <label for="tn-detector-epochs">Detector epochs</label>
+          <input type="number" id="tn-detector-epochs" placeholder="from pytorch_config" min="1" style="width:10rem" />
+        </div>
+        <div class="scorer-row">
+          <label for="tn-detector-batch-size">Detector batch size</label>
+          <input type="number" id="tn-detector-batch-size" placeholder="from pytorch_config" min="1" style="width:10rem" />
+        </div>
+      </div>
+
+      <!-- Run button -->
+      <button id="btn-run-train-network" class="btn-sm btn-create" style="width:100%;justify-content:center;padding:.5rem 1rem">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Start Training
+      </button>
+      <span id="tn-run-status" class="fe-extract-status" style="display:block;margin-top:.35rem"></span>
+
+      <!-- Progress (shown while task runs) -->
+      <div id="tn-progress" class="hidden" style="margin-top:1.2rem">
+        <div class="progress-header">
+          <span style="font-size:.9rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em">Training</span>
+          <span id="tn-task-id" class="task-id-badge"></span>
+        </div>
+        <div class="progress-track" style="margin-top:.8rem">
+          <div id="tn-progress-bar" class="progress-fill"></div>
+        </div>
+        <div class="progress-meta">
+          <span id="tn-progress-stage">Queued</span>
+          <span id="tn-progress-pct">0 %</span>
+        </div>
+        <div class="log-panel">
+          <div class="log-title">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            Log
+          </div>
+          <pre id="tn-log-output">Waiting for output…</pre>
         </div>
       </div>
     </section>

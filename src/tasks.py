@@ -704,6 +704,69 @@ def dlc_add_datasets_to_video_list(self, config_path: str):
         raise RuntimeError(traceback.format_exc()[-3000:])
 
 
+# ── DLC Train Network ─────────────────────────────────────────────
+@celery.task(bind=True, name="tasks.dlc_train_network")
+def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: dict = None):
+    """
+    Run deeplabcut.train_network() for the given DLC config.yaml.
+    engine: 'pytorch' | 'tensorflow'
+    params: engine-specific keyword arguments forwarded to train_network().
+    """
+    import io as _io
+    import sys as _sys
+
+    if params is None:
+        params = {}
+
+    _log_buf  = _io.StringIO()
+    _real_out = _sys.stdout
+    _real_err = _sys.stderr
+    _sys.stdout = _log_buf
+    _sys.stderr = _log_buf
+
+    try:
+        self.update_state(
+            state="PROGRESS",
+            meta={"progress": 5, "stage": "Checking config…", "log": ""},
+        )
+
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
+
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "progress": 10,
+                "stage": f"Starting training ({engine})…",
+                "log": (
+                    f"config_path : {config_path}\n"
+                    f"engine      : {engine}\n"
+                    f"params      : {params}\n"
+                ),
+            },
+        )
+
+        # Build kwargs – only pass recognised non-None values
+        kwargs = {k: v for k, v in params.items() if v is not None}
+
+        dlc.train_network(config_path, **kwargs)
+
+        final_log = _log_buf.getvalue()[-5000:]
+        return {
+            "status":    "complete",
+            "operation": "train_network",
+            "engine":    engine,
+            "log":       final_log or f"Training complete.\nconfig: {config_path}",
+        }
+
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+    finally:
+        _sys.stdout = _real_out
+        _sys.stderr = _real_err
+
+
 # ── Main Celery Task ──────────────────────────────────────────────
 @celery.task(bind=True, name="tasks.run_processing")
 def run_processing(self, project_id: str, task_type: str = "anipose"):

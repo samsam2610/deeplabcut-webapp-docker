@@ -2877,6 +2877,187 @@
     });
   })();
 
+  // ── Train Network ────────────────────────────────────────────
+  (function () {
+    const tnCard          = document.getElementById("train-network-card");
+    const tnOpenBtn       = document.getElementById("btn-open-train-network");
+    const tnCloseBtn      = document.getElementById("btn-close-train-network");
+    const tnEngineBadge   = document.getElementById("tn-engine-badge");
+    const tnTfParams      = document.getElementById("tn-tf-params");
+    const tnPtParams      = document.getElementById("tn-pt-params");
+    const tnRunBtn        = document.getElementById("btn-run-train-network");
+    const tnRunStatus     = document.getElementById("tn-run-status");
+    const tnProgress      = document.getElementById("tn-progress");
+    const tnTaskId        = document.getElementById("tn-task-id");
+    const tnProgressBar   = document.getElementById("tn-progress-bar");
+    const tnProgressStage = document.getElementById("tn-progress-stage");
+    const tnProgressPct   = document.getElementById("tn-progress-pct");
+    const tnLogOutput     = document.getElementById("tn-log-output");
+
+    let _tnPollTimer = null;
+    let _tnEngine    = "pytorch";
+
+    // ── Engine detection ─────────────────────────────────────────
+    async function _tnDetectEngine() {
+      tnEngineBadge.textContent = "detecting…";
+      tnEngineBadge.style.color = "";
+      try {
+        const res  = await fetch("/dlc/project/engine");
+        const data = await res.json();
+        if (data.error) {
+          tnEngineBadge.textContent = "unknown";
+          return;
+        }
+        _tnEngine = data.engine || "pytorch";
+        tnEngineBadge.textContent = _tnEngine;
+        tnEngineBadge.style.color = _tnEngine === "pytorch" ? "var(--accent)" : "var(--text)";
+        _tnShowEngineParams(_tnEngine);
+      } catch (err) {
+        tnEngineBadge.textContent = "error";
+        console.error("Engine detection failed:", err);
+      }
+    }
+
+    function _tnShowEngineParams(engine) {
+      if (engine === "tensorflow") {
+        tnTfParams.classList.remove("hidden");
+        tnPtParams.classList.add("hidden");
+      } else {
+        tnPtParams.classList.remove("hidden");
+        tnTfParams.classList.add("hidden");
+      }
+    }
+
+    // ── Open / close ─────────────────────────────────────────────
+    if (tnOpenBtn) {
+      tnOpenBtn.addEventListener("click", () => {
+        tnCard.classList.remove("hidden");
+        tnCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        _tnDetectEngine();
+      });
+    }
+    if (tnCloseBtn) {
+      tnCloseBtn.addEventListener("click", () => {
+        tnCard.classList.add("hidden");
+        if (_tnPollTimer) { clearInterval(_tnPollTimer); _tnPollTimer = null; }
+      });
+    }
+
+    // ── Run train_network ────────────────────────────────────────
+    tnRunBtn.addEventListener("click", async () => {
+      tnRunBtn.disabled        = true;
+      tnRunStatus.textContent  = "";
+      tnRunStatus.className    = "fe-extract-status";
+
+      const intVal = (id) => {
+        const v = document.getElementById(id)?.value;
+        return (v && v.trim() !== "") ? parseInt(v, 10) : null;
+      };
+      const strVal = (id) => {
+        const v = document.getElementById(id)?.value;
+        return (v && v.trim() !== "") ? v.trim() : null;
+      };
+
+      const body = {
+        engine:           _tnEngine,
+        shuffle:          intVal("tn-shuffle") || 1,
+        trainingsetindex: intVal("tn-trainingsetindex") ?? 0,
+      };
+
+      if (_tnEngine === "tensorflow") {
+        Object.assign(body, {
+          maxiters:    intVal("tn-maxiters"),
+          displayiters: intVal("tn-displayiters"),
+          saveiters:   intVal("tn-saveiters"),
+          gputouse:    intVal("tn-gputouse"),
+        });
+      } else {
+        Object.assign(body, {
+          epochs:              intVal("tn-epochs"),
+          save_epochs:         intVal("tn-save-epochs"),
+          batch_size:          intVal("tn-batch-size"),
+          device:              strVal("tn-device"),
+          detector_epochs:     intVal("tn-detector-epochs"),
+          detector_batch_size: intVal("tn-detector-batch-size"),
+        });
+      }
+
+      try {
+        const res  = await fetch("/dlc/project/train-network", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          tnRunStatus.textContent = data.error || "Error dispatching task.";
+          tnRunStatus.className   = "fe-extract-status err";
+          tnRunBtn.disabled = false;
+          return;
+        }
+        _tnStartPolling(data.task_id);
+      } catch (err) {
+        tnRunStatus.textContent = `Network error: ${err.message}`;
+        tnRunStatus.className   = "fe-extract-status err";
+        tnRunBtn.disabled = false;
+      }
+    });
+
+    // ── Poll task status ─────────────────────────────────────────
+    function _tnStartPolling(taskId) {
+      tnProgress.classList.remove("hidden");
+      tnProgress.classList.remove("state-success", "state-fail");
+      tnTaskId.textContent       = taskId.slice(0, 12) + "…";
+      tnProgressBar.style.width  = "0%";
+      tnProgressPct.textContent  = "0 %";
+      tnProgressStage.textContent = "Queued";
+      tnLogOutput.textContent    = "Waiting for output…";
+
+      if (_tnPollTimer) clearInterval(_tnPollTimer);
+      _tnPollTimer = setInterval(() => _tnPoll(taskId), 2000);
+      _tnPoll(taskId);
+    }
+
+    async function _tnPoll(taskId) {
+      try {
+        const res  = await fetch(`/status/${taskId}`);
+        const data = await res.json();
+
+        const pct = Math.min(data.progress || 0, 100);
+        tnProgressBar.style.width    = pct + "%";
+        tnProgressPct.textContent    = pct + " %";
+        tnProgressStage.textContent  = data.stage || data.state;
+
+        if (data.log) {
+          tnLogOutput.textContent = data.log;
+          tnLogOutput.scrollTop   = tnLogOutput.scrollHeight;
+        }
+
+        if (data.state === "SUCCESS") {
+          clearInterval(_tnPollTimer); _tnPollTimer = null;
+          tnProgress.classList.add("state-success");
+          tnProgressStage.textContent = "✓ Training complete";
+          tnProgressBar.style.width   = "100%";
+          tnProgressPct.textContent   = "100 %";
+          if (data.result && data.result.log) tnLogOutput.textContent = data.result.log;
+          tnRunBtn.disabled = false;
+          tnRunStatus.textContent = "Training finished successfully.";
+          tnRunStatus.className   = "fe-extract-status ok";
+        }
+
+        if (data.state === "FAILURE") {
+          clearInterval(_tnPollTimer); _tnPollTimer = null;
+          tnProgress.classList.add("state-fail");
+          tnProgressStage.textContent = "✗ " + (data.error || "Failed");
+          tnLogOutput.textContent     = data.error || "An unknown error occurred.";
+          tnRunBtn.disabled = false;
+        }
+      } catch (err) {
+        console.error("Train network poll error:", err);
+      }
+    }
+  })();
+
   // ── Inspect Video ────────────────────────────────────────────
   document.getElementById("inspect-video-btn")?.addEventListener("click", () => {
     const projectId = folderSelect.value;
