@@ -3070,11 +3070,15 @@
 
         if (data.state === "FAILURE" || data.state === "REVOKED") {
           clearInterval(_tnPollTimer); _tnPollTimer = null;
+          const userStopped = data.state === "REVOKED" ||
+            (data.error || "").includes("__USER_STOPPED__");
           tnProgress.classList.add("state-fail");
-          tnProgressStage.textContent = data.state === "REVOKED"
+          tnProgressStage.textContent = userStopped
             ? "✗ Stopped by user"
-            : "✗ " + (data.error || "Failed");
-          if (data.state === "FAILURE") tnLogOutput.textContent = data.error || "An unknown error occurred.";
+            : "✗ " + (data.error || "Failed").split("\n")[0];
+          if (!userStopped) tnLogOutput.textContent = data.error || "An unknown error occurred.";
+          tnRunStatus.textContent = userStopped ? "Training stopped." : "";
+          tnRunStatus.className   = "fe-extract-status";
           _tnSetRunning(false);
         }
       } catch (err) {

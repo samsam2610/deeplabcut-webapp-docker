@@ -2983,7 +2983,9 @@ def dlc_train_network():
 @app.route("/dlc/project/train-network/stop", methods=["POST"])
 def dlc_train_network_stop():
     """
-    Revoke and terminate a running train_network Celery task.
+    Request a stop of a running train_network task.
+    Sets a Redis flag that the Celery worker polls; the worker kills its own
+    child process (SIGKILL) from inside the worker container.
     Body (JSON): { "task_id": "<celery task id>" }
     """
     body    = request.get_json(force=True) or {}
@@ -2991,8 +2993,10 @@ def dlc_train_network_stop():
     if not task_id:
         return jsonify({"error": "task_id is required."}), 400
 
-    celery.control.revoke(task_id, terminate=True, signal="SIGTERM")
-    return jsonify({"status": "revoked", "task_id": task_id}), 200
+    # Worker background thread polls this key every 3 s and kills the child
+    _redis_client.setex("dlc_train_stop:" + task_id, 120, "1")
+
+    return jsonify({"status": "stop_requested", "task_id": task_id}), 200
 
 
 # ── Entry point ───────────────────────────────────────────────────

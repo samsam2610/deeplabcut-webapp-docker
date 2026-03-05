@@ -705,45 +705,61 @@ def dlc_add_datasets_to_video_list(self, config_path: str):
 
 
 # ── DLC Train Network ─────────────────────────────────────────────
+
+# Redis key prefix used to share the training child-process PID between
+# the Celery task and the Flask stop endpoint.
+_TRAIN_PID_PREFIX = "dlc_train_pid:"
+
+def _dlc_train_subprocess(config_path: str, kwargs: dict, log_path: str) -> None:
+    """
+    Runs inside a child process spawned by dlc_train_network.
+    Redirects stdout/stderr to log_path so the parent can tail it.
+    Writes a sentinel line on completion or exception.
+    """
+    import sys, deeplabcut as _dlc
+    with open(log_path, "a", buffering=1) as _f:
+        sys.stdout = _f
+        sys.stderr = _f
+        try:
+            _dlc.train_network(config_path, **kwargs)
+            _f.write("\n__TRAIN_COMPLETE__\n")
+        except Exception:
+            import traceback as _tb
+            _f.write("\n__TRAIN_ERROR__\n")
+            _f.write(_tb.format_exc())
+
+
 @celery.task(bind=True, name="tasks.dlc_train_network")
 def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: dict = None):
     """
-    Run deeplabcut.train_network() for the given DLC config.yaml.
+    Run deeplabcut.train_network() in a child process so it can be killed
+    cleanly without taking down the Celery worker.
     engine: 'pytorch' | 'tensorflow'
     params: engine-specific keyword arguments forwarded to train_network().
     """
-    import io as _io
-    import sys as _sys
+    import multiprocessing as _mp
     import threading as _threading
+    import tempfile
+    import signal as _signal
+    import redis as _redis_mod
+
+    _redis = _redis_mod.Redis.from_url(
+        os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/0"),
+        decode_responses=True,
+    )
 
     if params is None:
         params = {}
 
-    _log_buf  = _io.StringIO()
-    _real_out = _sys.stdout
-    _real_err = _sys.stderr
-    _sys.stdout = _log_buf
-    _sys.stderr = _log_buf
+    task_id  = self.request.id
+    pid_key  = _TRAIN_PID_PREFIX + task_id
 
-    _stop_event = _threading.Event()
-
-    def _emit_loop():
-        """Background thread: stream log buffer to Celery state every 3 s."""
-        _progress = 12
-        while not _stop_event.wait(3):
-            _current_log = _log_buf.getvalue()[-8000:]
-            try:
-                self.update_state(
-                    state="PROGRESS",
-                    meta={
-                        "progress": min(_progress, 90),
-                        "stage":    f"Training ({engine})…",
-                        "log":      _current_log,
-                    },
-                )
-            except Exception:
-                pass
-            _progress = min(_progress + 1, 90)
+    # Temporary file shared between child (writes) and parent (reads)
+    _tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".log", prefix="dlc_train_", delete=False
+    )
+    log_path = _tmp.name
+    _tmp.close()
 
     try:
         self.update_state(
@@ -754,10 +770,6 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         if not os.path.isfile(config_path):
             raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
 
-        # Verify a training dataset exists before calling train_network.
-        # DLC reads shuffle metadata from training-datasets/; if that directory
-        # is absent or empty it falls back to an incomplete internal config and
-        # raises an IndexError on TrainingFraction[].
         _project_dir = Path(config_path).parent
         _td_dir      = _project_dir / "training-datasets"
         if not _td_dir.is_dir() or not any(_td_dir.iterdir()):
@@ -767,49 +779,108 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
                 "Please run 'Create Training Dataset' before training the network."
             )
 
+        kwargs = {k: v for k, v in params.items() if v is not None}
+
         init_log = (
             f"config_path : {config_path}\n"
             f"engine      : {engine}\n"
             f"params      : {params}\n\n"
         )
-        _log_buf.write(init_log)
+        with open(log_path, "w") as _f:
+            _f.write(init_log)
 
         self.update_state(
             state="PROGRESS",
-            meta={
-                "progress": 10,
-                "stage":    f"Starting training ({engine})…",
-                "log":      init_log,
-            },
+            meta={"progress": 10, "stage": f"Starting training ({engine})…", "log": init_log},
         )
 
-        # Start background thread to stream log to Celery state in real time
+        # ── Spawn child process ──────────────────────────────────
+        ctx  = _mp.get_context("spawn")
+        proc = ctx.Process(
+            target=_dlc_train_subprocess,
+            args=(config_path, kwargs, log_path),
+            daemon=False,
+        )
+        proc.start()
+
+        # Advertise this task is killable (Flask reads this key; worker kills the proc)
+        stop_key = "dlc_train_stop:" + task_id
+        _redis.setex(pid_key, 7200, str(proc.pid))
+
+        # ── Background thread: stream logs + watch for stop flag ─
+        _stop_emit  = _threading.Event()
+        _user_killed = [False]   # mutable so the closure can set it
+
+        def _emit_loop():
+            import signal as _sig
+            _progress = 12
+            while not _stop_emit.wait(3):
+                # Check stop flag set by Flask stop endpoint
+                if _redis.get(stop_key):
+                    _redis.delete(stop_key)
+                    _user_killed[0] = True
+                    try:
+                        os.kill(proc.pid, _sig.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    break  # proc.join() will unblock shortly
+
+                try:
+                    with open(log_path) as _lf:
+                        _log = _lf.read()[-8000:]
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={
+                            "progress": min(_progress, 90),
+                            "stage":    f"Training ({engine})…",
+                            "log":      _log,
+                        },
+                    )
+                    _progress = min(_progress + 1, 90)
+                except Exception:
+                    pass
+
         _emitter = _threading.Thread(target=_emit_loop, daemon=True)
         _emitter.start()
 
-        # Build kwargs – only pass recognised non-None values
-        kwargs = {k: v for k, v in params.items() if v is not None}
+        proc.join()  # block until child exits naturally or is SIGKILLed
 
-        dlc.train_network(config_path, **kwargs)
-
-        _stop_event.set()
+        _stop_emit.set()
         _emitter.join(timeout=5)
+        _redis.delete(pid_key)
+        _redis.delete(stop_key)
 
-        final_log = _log_buf.getvalue()[-8000:]
+        # ── Check outcome ────────────────────────────────────────
+        with open(log_path) as _lf:
+            final_log = _lf.read()
+
+        if _user_killed[0]:
+            raise RuntimeError("__USER_STOPPED__")
+
+        if proc.exitcode != 0:
+            if proc.exitcode is not None and proc.exitcode < 0:
+                raise RuntimeError(
+                    f"Training process was killed (signal {-proc.exitcode}).\n\n"
+                    + final_log[-3000:]
+                )
+            raise RuntimeError(final_log[-5000:])
+
         return {
             "status":    "complete",
             "operation": "train_network",
             "engine":    engine,
-            "log":       final_log or f"Training complete.\nconfig: {config_path}",
+            "log":       final_log[-8000:] or f"Training complete.\nconfig: {config_path}",
         }
 
     except Exception:
-        _stop_event.set()
+        _redis.delete(pid_key)
         raise RuntimeError(traceback.format_exc()[-3000:])
 
     finally:
-        _sys.stdout = _real_out
-        _sys.stderr = _real_err
+        try:
+            os.unlink(log_path)
+        except OSError:
+            pass
 
 
 # ── Main Celery Task ──────────────────────────────────────────────
