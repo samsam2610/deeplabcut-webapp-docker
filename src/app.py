@@ -55,13 +55,32 @@ _fe_vcap      = None   # cv2.VideoCapture kept open between requests
 _fe_vcap_path = None   # absolute path string of the currently-open capture
 _fe_vcap_pos  = -1     # frame index that was just read (for sequential-read optimisation)
 
-# Standard DLC project pipeline folders
-DLC_PIPELINE_FOLDERS = [
-    ("Models",             "dlc-models"),
-    ("Labeled Data",       "labeled-data"),
-    ("Training Datasets",  "training-datasets"),
-    ("Videos",             "videos"),
+# Engine aliases
+_TF_ENGINE_ALIASES = {"tensorflow", "tf"}
+
+# Engine-specific pipeline constants
+#   (engine_aliases, models_folder, model_config_file, eval_results_folder)
+_ENGINE_PYTORCH = ("dlc-models-pytorch", "pytorch_config.yaml", "evaluation-results-pytorch")
+_ENGINE_TF      = ("dlc-models",         "pose_cfg.yaml",        "evaluation-results")
+
+_PIPELINE_BASE_FOLDERS = [
+    ("Labeled Data",      "labeled-data"),
+    ("Training Datasets", "training-datasets"),
+    ("Videos",            "videos"),
 ]
+
+
+def _engine_info(engine: str) -> tuple[str, str, str]:
+    """Return (models_folder, model_config_file, eval_results_folder) for engine."""
+    if (engine or "pytorch").lower() in _TF_ENGINE_ALIASES:
+        return _ENGINE_TF
+    return _ENGINE_PYTORCH
+
+
+def _get_pipeline_folders(engine: str) -> list:
+    """Return pipeline folder list with the correct models folder for the engine."""
+    models_folder = _engine_info(engine)[0]
+    return [("Models", models_folder)] + _PIPELINE_BASE_FOLDERS
 
 # ── Celery (client-side only — worker is in tasks.py) ─────────────
 celery = Celery(
@@ -964,7 +983,7 @@ def browse_dlc_project():
         return jsonify({"error": "Access denied."}), 403
 
     folders = []
-    for key, folder_name in DLC_PIPELINE_FOLDERS:
+    for key, folder_name in _get_pipeline_folders(project_data.get("engine", "pytorch")):
         folder_path = project_path / folder_name
         children = _walk_dir(folder_path, project_path) if folder_path.is_dir() else []
         folders.append({
@@ -1033,7 +1052,7 @@ def dlc_project_upload():
         return jsonify({"error": "Access denied."}), 403
 
     folder_name = request.form.get("folder", "").strip()
-    dlc_folder_names = [f for _, f in DLC_PIPELINE_FOLDERS]
+    dlc_folder_names = [f for _, f in _get_pipeline_folders(project_data.get("engine", "pytorch"))]
     if folder_name not in dlc_folder_names:
         return jsonify({"error": f"Invalid DLC folder: '{folder_name}'."}), 400
 
@@ -1069,7 +1088,7 @@ def dlc_project_delete_file():
         return jsonify({"error": "rel_path is required."}), 400
 
     # Must be inside a top-level pipeline folder
-    dlc_folder_names = [f for _, f in DLC_PIPELINE_FOLDERS]
+    dlc_folder_names = [f for _, f in _get_pipeline_folders(project_data.get("engine", "pytorch"))]
     top = Path(rel_path).parts[0] if Path(rel_path).parts else ""
     if top not in dlc_folder_names:
         return jsonify({"error": "Path must be inside a pipeline folder."}), 400
@@ -1101,7 +1120,7 @@ def dlc_project_rename_file():
     if not rel_path or not new_name:
         return jsonify({"error": "rel_path and new_name are required."}), 400
 
-    dlc_folder_names = [f for _, f in DLC_PIPELINE_FOLDERS]
+    dlc_folder_names = [f for _, f in _get_pipeline_folders(project_data.get("engine", "pytorch"))]
     top = Path(rel_path).parts[0] if Path(rel_path).parts else ""
     if top not in dlc_folder_names:
         return jsonify({"error": "Path must be inside a pipeline folder."}), 400
@@ -1137,7 +1156,7 @@ def dlc_project_download():
 
     folder_name = request.args.get("folder", "").strip()
     if folder_name:
-        dlc_folder_names = [f for _, f in DLC_PIPELINE_FOLDERS]
+        dlc_folder_names = [f for _, f in _get_pipeline_folders(project_data.get("engine", "pytorch"))]
         if folder_name not in dlc_folder_names:
             return jsonify({"error": f"Invalid folder: '{folder_name}'."}), 400
         download_path = project_path / folder_name
@@ -2781,8 +2800,9 @@ def list_dlc_pytorch_configs():
     if not _dlc_project_security_check(project_path):
         return jsonify({"error": "Access denied."}), 403
 
+    models_folder, model_cfg_file, _ = _engine_info(project_data.get("engine", "pytorch"))
     matches = sorted(
-        project_path.glob("dlc-models/**/train/pytorch_config.yaml"),
+        project_path.glob(f"{models_folder}/**/train/{model_cfg_file}"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -2815,13 +2835,14 @@ def get_dlc_pytorch_config():
         if not target.is_file():
             return jsonify({"error": "File not found."}), 404
     else:
+        models_folder, model_cfg_file, _ = _engine_info(project_data.get("engine", "pytorch"))
         matches = sorted(
-            project_path.glob("dlc-models/**/train/pytorch_config.yaml"),
+            project_path.glob(f"{models_folder}/**/train/{model_cfg_file}"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
         if not matches:
-            return jsonify({"error": "pytorch_config.yaml not found. Run Create Training Dataset first."}), 404
+            return jsonify({"error": f"{model_cfg_file} not found. Run Create Training Dataset first."}), 404
         target = matches[0]
 
     return jsonify({
@@ -2859,13 +2880,14 @@ def save_dlc_pytorch_config():
         if not target.is_file():
             return jsonify({"error": "File not found."}), 404
     else:
+        models_folder, model_cfg_file, _ = _engine_info(project_data.get("engine", "pytorch"))
         matches = sorted(
-            project_path.glob("dlc-models/**/train/pytorch_config.yaml"),
+            project_path.glob(f"{models_folder}/**/train/{model_cfg_file}"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
         if not matches:
-            return jsonify({"error": "pytorch_config.yaml not found."}), 404
+            return jsonify({"error": f"{model_cfg_file} not found."}), 404
         target = matches[0]
 
     target.write_text(content)
