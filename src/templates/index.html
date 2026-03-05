@@ -663,8 +663,8 @@
       </div>
 
       <!-- Model snapshot -->
-      <div class="scorer-row" style="margin-bottom:.55rem">
-        <label for="av-snapshot" style="min-width:9rem">Model snapshot</label>
+      <div class="scorer-row" style="margin-bottom:.7rem">
+        <label for="av-snapshot">Model snapshot</label>
         <select id="av-snapshot" style="flex:1;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
           <option value="-1">Latest (from config)</option>
         </select>
@@ -672,25 +672,23 @@
       </div>
 
       <!-- Common params -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem .8rem;margin-bottom:.8rem">
-        <div class="scorer-row">
-          <label for="av-shuffle">Shuffle</label>
-          <input type="number" id="av-shuffle" value="1" min="1" max="20" style="width:5rem" />
-        </div>
-        <div class="scorer-row">
-          <label for="av-trainingsetindex">Training set index</label>
-          <input type="number" id="av-trainingsetindex" value="0" min="0" style="width:5rem" />
-        </div>
-        <div class="scorer-row">
-          <label for="av-gputouse">GPU to use</label>
-          <select id="av-gputouse" style="flex:1;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
-            <option value="">auto</option>
-          </select>
-        </div>
-        <div class="scorer-row" style="align-items:center">
-          <label for="av-save-csv">Save as CSV</label>
-          <input type="checkbox" id="av-save-csv" style="width:auto;margin-left:.4rem" />
-        </div>
+      <div class="scorer-row" style="margin-bottom:.7rem">
+        <label for="av-shuffle">Shuffle</label>
+        <input type="number" id="av-shuffle" value="1" min="1" max="20" style="width:5rem" />
+      </div>
+      <div class="scorer-row" style="margin-bottom:.7rem">
+        <label for="av-trainingsetindex">Training set index</label>
+        <input type="number" id="av-trainingsetindex" value="0" min="0" style="width:5rem" />
+      </div>
+      <div class="scorer-row" style="margin-bottom:.7rem">
+        <label for="av-gputouse">GPU to use</label>
+        <select id="av-gputouse" style="flex:1;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+          <option value="">auto</option>
+        </select>
+      </div>
+      <div class="scorer-row" style="margin-bottom:.9rem">
+        <label for="av-save-csv">Save as CSV</label>
+        <input type="checkbox" id="av-save-csv" style="width:auto" />
       </div>
 
       <!-- Run / Stop -->
