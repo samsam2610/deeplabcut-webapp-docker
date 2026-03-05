@@ -5,7 +5,6 @@ Runs inside the GPU-enabled worker container.
 
 import os
 import shutil
-import signal
 import subprocess
 import time
 import traceback
@@ -901,7 +900,8 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         # Reap any orphaned children the subprocess may have spawned
         # (e.g. DLC/PyTorch dataloader workers that hold GPU memory).
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            import signal as _sig
+            os.killpg(proc.pid, _sig.SIGKILL)
         except (ProcessLookupError, OSError):
             pass  # process group already gone — that's fine
 
@@ -1188,7 +1188,8 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
         # Reap any orphaned children the subprocess may have spawned
         # (e.g. DLC/PyTorch dataloader workers that hold GPU memory).
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            import signal as _sig
+            os.killpg(proc.pid, _sig.SIGKILL)
         except (ProcessLookupError, OSError):
             pass  # process group already gone — that's fine
 
