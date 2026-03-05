@@ -940,6 +940,35 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
             pass
 
 
+# ── GPU stats probe ───────────────────────────────────────────────
+
+@celery.task(name="tasks.dlc_probe_gpu_stats", ignore_result=False)
+def dlc_probe_gpu_stats():
+    """
+    Run nvidia-smi on the GPU-enabled worker and cache the results in Redis.
+    Called on-demand from Flask when no cached stats are available.
+    """
+    import redis as _redis_mod
+    _redis = _redis_mod.Redis.from_url(
+        os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/0"),
+        decode_responses=True,
+    )
+    try:
+        result = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            _redis.setex("dlc_gpu_stats",    60, result.stdout.strip())
+            _redis.setex("dlc_gpu_stats_ts", 60, str(time.time()))
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
 # ── DLC Analyze ───────────────────────────────────────────────────
 
 _VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"}

@@ -3230,25 +3230,22 @@ def dlc_training_jobs_clear():
 @app.route("/dlc/gpu/status")
 def dlc_gpu_status():
     """
-    Return GPU stats. Prefers Redis cache (written by the Celery worker during
-    training); falls back to a direct nvidia-smi call when no cache is present.
+    Return GPU stats. Prefers the Redis cache written by the Celery worker
+    during training; when no cache is present, dispatches a lightweight probe
+    task to the GPU-enabled worker and waits up to 5 s for the result.
     """
     import time as _time
 
     raw = _redis_client.get("dlc_gpu_stats")
     ts  = _redis_client.get("dlc_gpu_stats_ts")
 
-    # Fall back to a live nvidia-smi query when the worker cache is absent/stale
+    # No cache — ask the GPU worker to run nvidia-smi for us
     if not raw:
         try:
-            result = subprocess.run(
-                ["nvidia-smi",
-                 "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu",
-                 "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                raw = result.stdout.strip()
+            task = celery.send_task("tasks.dlc_probe_gpu_stats")
+            csv  = task.get(timeout=5, propagate=False)
+            if csv:
+                raw = csv
                 ts  = str(_time.time())
         except Exception:
             pass
