@@ -3205,68 +3205,131 @@
     avRefreshSnaps.addEventListener("click", _avLoadSnapshots);
 
     // ── Project browser ───────────────────────────────────────
-    function _avBuildBrowserTree(folders, projectPath) {
-      const list = document.createElement("div");
-      list.style.cssText = "display:flex;flex-direction:column;gap:2px";
+    function _avMakeEntry(name, fullPath, isDir) {
+      const wrapper = document.createElement("div");
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:.3rem;padding:.18rem .4rem;cursor:pointer;border-radius:4px;user-select:none";
+      row.title = fullPath;
 
-      function _addEntry(relPath, name, isDir, indent) {
-        const row = document.createElement("div");
-        row.style.cssText = `padding:.18rem .3rem .18rem ${indent}rem;cursor:pointer;border-radius:4px;
-          display:flex;align-items:center;gap:.35rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`;
-        row.title = relPath;
+      const arrow = document.createElement("span");
+      arrow.style.cssText = "font-size:.62rem;color:var(--text-dim);flex-shrink:0;width:.8rem;text-align:center";
+      arrow.textContent = isDir ? "▶" : "";
 
-        const icon = document.createElement("span");
-        icon.textContent = isDir ? "📁" : "📄";
-        icon.style.flexShrink = "0";
-        const label = document.createElement("span");
-        label.textContent = name;
-        label.style.cssText = "overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-size:.75rem";
-        row.appendChild(icon); row.appendChild(label);
+      const icon = document.createElement("span");
+      icon.style.flexShrink = "0";
+      icon.textContent = isDir ? "📁" : "📄";
 
-        row.addEventListener("mouseenter", () => row.style.background = "var(--surface-3,#2a2a2a)");
-        row.addEventListener("mouseleave", () => row.style.background = "");
-        row.addEventListener("click", () => {
-          avTargetPath.value = projectPath + "/" + relPath;
-          avBrowser.classList.add("hidden");
-          _avBrowserLoaded = false;  // reset so next open refreshes
-        });
-        list.appendChild(row);
-      }
+      const label = document.createElement("span");
+      label.textContent = name;
+      label.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.75rem;flex:1;min-width:0";
 
-      function _walk(children, parentRel, depth) {
-        (children || []).forEach(child => {
-          const rel = parentRel ? parentRel + "/" + child.name : child.name;
-          const isDir = child.type === "dir";
-          _addEntry(rel, child.name, isDir, depth * 0.9);
-          if (isDir && child.children && child.children.length) {
-            _walk(child.children, rel, depth + 1);
+      row.appendChild(arrow); row.appendChild(icon); row.appendChild(label);
+      wrapper.appendChild(row);
+
+      row.addEventListener("mouseenter", () => row.style.background = "var(--surface-3,#2a2a2a)");
+      row.addEventListener("mouseleave", () => row.style.background = "");
+
+      if (isDir) {
+        const childContainer = document.createElement("div");
+        childContainer.style.cssText = "display:none;padding-left:1rem";
+        wrapper.appendChild(childContainer);
+        let loaded = false, expanded = false;
+
+        row.addEventListener("click", async () => {
+          if (!expanded && !loaded) {
+            childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">Loading…</span>`;
+            childContainer.style.display = "block";
+            try {
+              const res = await fetch(`/fs/ls?path=${encodeURIComponent(fullPath)}`);
+              const d   = await res.json();
+              childContainer.innerHTML = "";
+              if (!d.error) {
+                d.entries.forEach(e =>
+                  childContainer.appendChild(_avMakeEntry(e.name, fullPath.replace(/\/+$/, "") + "/" + e.name, e.type === "dir"))
+                );
+                if (!d.entries.length)
+                  childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">(empty)</span>`;
+              } else {
+                childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">${d.error}</span>`;
+              }
+            } catch (e) {
+              childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">Error loading.</span>`;
+            }
+            loaded = true; expanded = true; arrow.textContent = "▼";
+          } else {
+            expanded = !expanded;
+            childContainer.style.display = expanded ? "block" : "none";
+            arrow.textContent = expanded ? "▼" : "▶";
           }
         });
       }
 
-      folders.forEach(f => {
-        // Top-level folder row (selectable as target)
-        _addEntry(f.folder, f.key + "  (" + f.folder + ")", true, 0);
-        _walk(f.children, f.folder, 1);
+      // double-click selects the path and closes the browser
+      row.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        avTargetPath.value = fullPath;
+        avBrowser.classList.add("hidden");
+        _avBrowserLoaded = false;
       });
 
-      return list;
+      return wrapper;
+    }
+
+    async function _avBrowseDir(dirPath) {
+      _avBrowserLoaded = false;
+      avBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
+      try {
+        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
+        const data = await res.json();
+        if (data.error) { avBrowser.textContent = data.error; return; }
+        avBrowser.innerHTML = "";
+
+        // Header: current path + Up button
+        const header = document.createElement("div");
+        header.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.2rem .3rem .35rem;border-bottom:1px solid var(--border);margin-bottom:.25rem;min-width:0";
+        const pathLabel = document.createElement("span");
+        pathLabel.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.72rem;color:var(--text-dim)";
+        pathLabel.textContent = data.path;
+        pathLabel.title = data.path;
+        header.appendChild(pathLabel);
+        if (data.parent) {
+          const upBtn = document.createElement("button");
+          upBtn.className = "btn-sm";
+          upBtn.style.cssText = "padding:.15rem .5rem;font-size:.72rem;flex-shrink:0";
+          upBtn.textContent = "↑ Up";
+          upBtn.addEventListener("click", (e) => { e.stopPropagation(); _avBrowseDir(data.parent); });
+          header.appendChild(upBtn);
+        }
+        avBrowser.appendChild(header);
+
+        if (!data.entries.length) {
+          const empty = document.createElement("span");
+          empty.style.cssText = "font-size:.78rem;color:var(--text-dim);padding:.3rem;display:block";
+          empty.textContent = "(empty directory)";
+          avBrowser.appendChild(empty);
+        } else {
+          data.entries.forEach(e =>
+            avBrowser.appendChild(_avMakeEntry(e.name, data.path.replace(/\/+$/, "") + "/" + e.name, e.type === "dir"))
+          );
+        }
+        _avBrowserLoaded = true;
+      } catch (err) {
+        avBrowser.textContent = "Failed to load.";
+        console.error("avBrowseDir:", err);
+      }
     }
 
     avBrowseBtn.addEventListener("click", async () => {
       const isHidden = avBrowser.classList.contains("hidden");
       avBrowser.classList.toggle("hidden");
-      if (!isHidden) return;  // closing — nothing to load
-      if (_avBrowserLoaded) return;
-      avBrowser.textContent = "Loading…";
+      if (!isHidden) return;  // closing
+      if (_avBrowserLoaded) return;  // already showing content
       try {
         const res  = await fetch("/dlc/project/browse");
         const data = await res.json();
         if (data.error) { avBrowser.textContent = data.error; return; }
         _avProjectPath = data.project_path;
-        avBrowser.innerHTML = "";
-        avBrowser.appendChild(_avBuildBrowserTree(data.folders, data.project_path));
-        _avBrowserLoaded = true;
+        await _avBrowseDir(data.project_path);
       } catch (err) {
         avBrowser.textContent = "Failed to load project.";
         console.error("avBrowse:", err);

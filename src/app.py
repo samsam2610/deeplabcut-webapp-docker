@@ -1002,6 +1002,26 @@ def browse_dlc_project():
     })
 
 
+@app.route("/fs/ls")
+def fs_ls():
+    """List a directory's immediate children for the file browser."""
+    raw_path = request.args.get("path", "").strip()
+    if not raw_path:
+        return jsonify({"error": "path required"}), 400
+    p = Path(raw_path)
+    if not p.is_dir():
+        return jsonify({"error": "Not a directory"}), 404
+    try:
+        entries = []
+        for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+            if not child.name.startswith("."):
+                entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file"})
+        parent = str(p.parent) if str(p.parent) != str(p) else None
+        return jsonify({"path": str(p), "parent": parent, "entries": entries})
+    except PermissionError:
+        return jsonify({"error": "Permission denied"}), 403
+
+
 @app.route("/dlc/project/config", methods=["GET"])
 def get_dlc_project_config():
     """Return the raw text of the active DLC project's config.yaml."""
