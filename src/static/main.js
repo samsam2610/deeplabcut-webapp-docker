@@ -3205,6 +3205,13 @@
     avRefreshSnaps.addEventListener("click", _avLoadSnapshots);
 
     // ── Project browser ───────────────────────────────────────
+    const _AV_VIDEO_EXTS = new Set(['.mp4','.avi','.mov','.mkv','.wmv','.m4v']);
+    const _AV_IMAGE_EXTS = new Set(['.jpg','.jpeg','.png','.bmp','.tif','.tiff']);
+    function _avSupportedFile(name) {
+      const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : '';
+      return _AV_VIDEO_EXTS.has(ext) || _AV_IMAGE_EXTS.has(ext);
+    }
+
     function _avMakeEntry(name, fullPath, isDir) {
       const wrapper = document.createElement("div");
       const row = document.createElement("div");
@@ -3244,11 +3251,12 @@
               const d   = await res.json();
               childContainer.innerHTML = "";
               if (!d.error) {
-                d.entries.forEach(e =>
+                const vis = d.entries.filter(e => e.type === "dir" || _avSupportedFile(e.name));
+                vis.forEach(e =>
                   childContainer.appendChild(_avMakeEntry(e.name, fullPath.replace(/\/+$/, "") + "/" + e.name, e.type === "dir"))
                 );
-                if (!d.entries.length)
-                  childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">(empty)</span>`;
+                if (!vis.length)
+                  childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">(no supported files)</span>`;
               } else {
                 childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">${d.error}</span>`;
               }
@@ -3302,13 +3310,14 @@
         }
         avBrowser.appendChild(header);
 
-        if (!data.entries.length) {
+        const visible = data.entries.filter(e => e.type === "dir" || _avSupportedFile(e.name));
+        if (!visible.length) {
           const empty = document.createElement("span");
           empty.style.cssText = "font-size:.78rem;color:var(--text-dim);padding:.3rem;display:block";
-          empty.textContent = "(empty directory)";
+          empty.textContent = "(no supported video or image files)";
           avBrowser.appendChild(empty);
         } else {
-          data.entries.forEach(e =>
+          visible.forEach(e =>
             avBrowser.appendChild(_avMakeEntry(e.name, data.path.replace(/\/+$/, "") + "/" + e.name, e.type === "dir"))
           );
         }
