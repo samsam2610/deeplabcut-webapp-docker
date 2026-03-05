@@ -3132,7 +3132,7 @@
           sel.value = prevVal;
         }
       } else {
-        sel.innerHTML = '<option value="">auto (no GPU data — train first)</option>';
+        sel.innerHTML = '<option value="">auto (no GPU detected)</option>';
       }
     } catch (e) {
       sel.innerHTML = '<option value="">auto</option>';

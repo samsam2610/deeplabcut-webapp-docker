@@ -3230,32 +3230,53 @@ def dlc_training_jobs_clear():
 @app.route("/dlc/gpu/status")
 def dlc_gpu_status():
     """
-    Return cached GPU stats written by the Celery worker during training.
-    The worker runs nvidia-smi every ~3 s and caches the output in Redis.
+    Return GPU stats. Prefers Redis cache (written by the Celery worker during
+    training); falls back to a direct nvidia-smi call when no cache is present.
     """
     import time as _time
 
     raw = _redis_client.get("dlc_gpu_stats")
     ts  = _redis_client.get("dlc_gpu_stats_ts")
 
+    # Fall back to a live nvidia-smi query when the worker cache is absent/stale
+    if not raw:
+        try:
+            result = subprocess.run(
+                ["nvidia-smi",
+                 "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                raw = result.stdout.strip()
+                ts  = str(_time.time())
+        except Exception:
+            pass
+
     if not raw:
         return jsonify({"gpus": [], "available": False})
 
-    gpus = []
-    for line in raw.strip().split("\n"):
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) >= 6:
-            try:
-                gpus.append({
-                    "index":        int(parts[0]),
-                    "name":         parts[1],
-                    "utilization":  int(parts[2]),
-                    "memory_used":  int(parts[3]),
-                    "memory_total": int(parts[4]),
-                    "temperature":  int(parts[5]),
-                })
-            except (ValueError, IndexError):
-                pass
+    def _parse_csv(text):
+        gpus = []
+        for line in text.strip().split("\n"):
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 6:
+                try:
+                    gpus.append({
+                        "index":        int(parts[0]),
+                        "name":         parts[1],
+                        "utilization":  int(parts[2]),
+                        "memory_used":  int(parts[3]),
+                        "memory_total": int(parts[4]),
+                        "temperature":  int(parts[5]),
+                    })
+                except (ValueError, IndexError):
+                    pass
+        return gpus
+
+    gpus = _parse_csv(raw)
+    if not gpus:
+        return jsonify({"gpus": [], "available": False})
 
     age = round(_time.time() - float(ts), 1) if ts else None
     return jsonify({"gpus": gpus, "available": True, "age_s": age})
