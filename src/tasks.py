@@ -1000,16 +1000,26 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
         sys.stderr = _f
         try:
             p = _Path(target_path)
-            kw = {k: v for k, v in params.items() if v is not None}
+            create_labeled = params.get("create_labeled", False)
+            kw = {k: v for k, v in params.items()
+                  if v is not None and k not in ("create_labeled",)}
+            # kwargs shared by create_labeled_video
+            label_kw = {k: kw[k] for k in ("shuffle", "trainingsetindex") if k in kw}
 
             if p.is_file():
                 ext = p.suffix.lower()
                 if ext in {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"}:
                     _f.write(f"Analyzing video file: {p}\n\n")
                     _dlc.analyze_videos(config_path, [str(p)], **kw)
+                    if create_labeled:
+                        _f.write(f"\nCreating labeled video: {p}\n\n")
+                        _dlc.create_labeled_video(config_path, [str(p)], **label_kw)
                 elif ext in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}:
                     _f.write(f"Analyzing image directory (selected frame): {p.parent}\n\n")
                     _dlc.analyze_time_lapse_frames(config_path, str(p.parent), **kw)
+                    if create_labeled:
+                        _f.write(f"\nCreating labeled frames in: {p.parent}\n\n")
+                        _dlc.create_labeled_video(config_path, [str(p.parent)], save_frames=True, **label_kw)
                 else:
                     raise ValueError(f"Unsupported file type: {ext}")
 
@@ -1022,12 +1032,19 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
                     raise ValueError(f"No supported video or image files found in: {p}")
 
                 if video_files:
+                    video_paths = [str(v) for v in sorted(video_files)]
                     _f.write(f"Analyzing {len(video_files)} video(s) in: {p}\n\n")
-                    _dlc.analyze_videos(config_path, [str(v) for v in sorted(video_files)], **kw)
+                    _dlc.analyze_videos(config_path, video_paths, **kw)
+                    if create_labeled:
+                        _f.write(f"\nCreating labeled video(s)...\n\n")
+                        _dlc.create_labeled_video(config_path, video_paths, **label_kw)
 
                 if image_files:
                     _f.write(f"\nAnalyzing {len(image_files)} image(s) in: {p}\n\n")
                     _dlc.analyze_time_lapse_frames(config_path, str(p), **kw)
+                    if create_labeled:
+                        _f.write(f"\nCreating labeled frames in: {p}\n\n")
+                        _dlc.create_labeled_video(config_path, [str(p)], save_frames=True, **label_kw)
 
             else:
                 raise FileNotFoundError(f"Target not found: {target_path}")
@@ -1044,7 +1061,7 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
     """
     Run DLC analysis (analyze_videos / analyze_time_lapse_frames) in a child
     process so it can be killed cleanly without taking down the Celery worker.
-    params keys: shuffle, trainingsetindex, gputouse, save_as_csv, snapshot_index
+    params keys: shuffle, trainingsetindex, gputouse, save_as_csv, create_labeled, snapshot_index
     """
     import multiprocessing as _mp
     import threading as _threading

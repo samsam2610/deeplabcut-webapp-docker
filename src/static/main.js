@@ -3441,6 +3441,7 @@
                             ? parseInt(document.getElementById("av-gputouse").value)
                             : null,
         save_as_csv:      document.getElementById("av-save-csv").checked,
+        create_labeled:   document.getElementById("av-create-labeled").checked,
         snapshot_index:   snapshotIndex !== null ? parseInt(snapshotIndex) : null,
       };
 

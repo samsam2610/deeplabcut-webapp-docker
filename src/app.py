@@ -3143,6 +3143,7 @@ def dlc_project_analyze():
       trainingsetindex: int  (default 0)
       gputouse        : int  (optional)
       save_as_csv     : bool (default false)
+      create_labeled  : bool (default false)
       snapshot_index  : int  (optional; None = latest from config)
     """
     raw = _redis_client.get(_DLC_PROJECT_KEY)
@@ -3173,6 +3174,7 @@ def dlc_project_analyze():
         "trainingsetindex": _int_or_none("trainingsetindex") if _int_or_none("trainingsetindex") is not None else 0,
         "gputouse":         _int_or_none("gputouse"),
         "save_as_csv":      bool(body.get("save_as_csv", False)),
+        "create_labeled":   bool(body.get("create_labeled", False)),
         "snapshot_index":   _int_or_none("snapshot_index"),
     }
 
