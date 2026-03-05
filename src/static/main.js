@@ -534,8 +534,9 @@
   const dlcRefreshBtn       = document.getElementById("dlc-refresh-btn");
   const dlcDownloadProjectBtn = document.getElementById("dlc-download-project-btn");
 
-  let _dlcBrowsePath = null; // path currently browsed in the folder nav
-  let _dlcEngine     = "pytorch"; // engine read from config.yaml when project is loaded
+  let _dlcBrowsePath    = null;     // path currently browsed in the folder nav
+  let _dlcEngine        = "pytorch"; // engine read from config.yaml when project is loaded
+  let _dlcTrainingActive = false;   // true while a training job has status "running"
 
   // ── Apply DLC project state to bar + card ───────────────────
   function applyDlcProjectState(data) {
@@ -2921,10 +2922,21 @@
 
     // ── Open / close ─────────────────────────────────────────────
     if (tnOpenBtn) {
-      tnOpenBtn.addEventListener("click", () => {
+      tnOpenBtn.addEventListener("click", async () => {
         tnCard.classList.remove("hidden");
         tnCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
         _tnDetectEngine(); // sync — reads _dlcEngine set when project was loaded
+        // Check if a training job is already running and disable run button if so
+        try {
+          const res  = await fetch("/dlc/training/jobs");
+          const data = await res.json();
+          _dlcTrainingActive = (data.jobs || []).some(j => j.status === "running");
+          if (_dlcTrainingActive && !tnRunBtn._tnPolling) {
+            tnRunBtn.disabled = true;
+            tnRunStatus.textContent = "A training job is already running. Stop it first.";
+            tnRunStatus.className   = "fe-extract-status err";
+          }
+        } catch (_) {}
       });
     }
     if (tnCloseBtn) {
@@ -2936,6 +2948,11 @@
 
     // ── Run train_network ────────────────────────────────────────
     tnRunBtn.addEventListener("click", async () => {
+      if (_dlcTrainingActive) {
+        tnRunStatus.textContent = "A training job is already running. Stop it first.";
+        tnRunStatus.className   = "fe-extract-status err";
+        return;
+      }
       tnRunBtn.disabled        = true;
       tnRunStatus.textContent  = "";
       tnRunStatus.className    = "fe-extract-status";
@@ -3016,7 +3033,9 @@
 
     // ── Poll task status ─────────────────────────────────────────
     function _tnSetRunning(running) {
-      tnRunBtn.disabled = running;
+      tnRunBtn.disabled      = running;
+      tnRunBtn._tnPolling    = running; // flag read by GPU monitor to avoid double-disabling
+      _dlcTrainingActive     = running; // keep module-level flag in sync
       if (running) {
         tnStopBtn.classList.remove("hidden");
         tnStopBtn.disabled = false;
@@ -3093,6 +3112,7 @@
     const gmOpenBtn    = document.getElementById("btn-open-gpu-monitor");
     const gmCloseBtn   = document.getElementById("btn-close-gpu-monitor");
     const gmRefreshBtn = document.getElementById("gm-refresh-btn");
+    const gmClearBtn   = document.getElementById("gm-clear-btn");
     const gmGpuList    = document.getElementById("gm-gpu-list");
     const gmGpuAge     = document.getElementById("gm-gpu-age");
     const gmJobsList   = document.getElementById("gm-jobs-list");
@@ -3112,6 +3132,15 @@
       clearInterval(_gmPollTimer); _gmPollTimer = null;
     });
     gmRefreshBtn?.addEventListener("click", _gmRefresh);
+
+    gmClearBtn?.addEventListener("click", async () => {
+      gmClearBtn.disabled = true;
+      try {
+        await fetch("/dlc/training/jobs/clear", { method: "POST" });
+        await _gmRefresh();
+      } catch (e) { console.error(e); }
+      gmClearBtn.disabled = false;
+    });
 
     // ── Render GPU bars ───────────────────────────────────────
     function _gmRenderGpus(data) {
@@ -3154,6 +3183,15 @@
 
     // ── Render jobs list ──────────────────────────────────────
     function _gmRenderJobs(data) {
+      // Update the global training-active flag and the run button
+      _dlcTrainingActive = (data.jobs || []).some(j => j.status === "running");
+      const tnRunBtn = document.getElementById("btn-run-train-network");
+      if (tnRunBtn && !tnRunBtn._tnPolling) {
+        // Only gate if training is not already polling (which manages its own disabled state)
+        tnRunBtn.disabled = _dlcTrainingActive;
+        tnRunBtn.title    = _dlcTrainingActive ? "A training job is already running" : "";
+      }
+
       if (!data.jobs || data.jobs.length === 0) {
         gmJobsList.innerHTML = '<span style="font-size:.82rem;color:var(--text-dim)">No training jobs found.</span>';
         return;

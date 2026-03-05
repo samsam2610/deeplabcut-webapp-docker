@@ -2994,10 +2994,23 @@ def dlc_train_network_stop():
     if not task_id:
         return jsonify({"error": "task_id is required."}), 400
 
-    # Worker background thread polls this key every 3 s and kills the child
+    # Tell the worker's background thread to killpg the entire process tree
     _redis_client.setex("dlc_train_stop:" + task_id, 120, "1")
-    # Revoke prevents the task from being re-picked-up if the worker restarts
+
+    # Revoke the task in Celery (prevents re-pickup on worker restart)
     celery.control.revoke(task_id, terminate=False)
+
+    # Purge the Celery result so the task can't be seen as "still running"
+    try:
+        AsyncResult(task_id, app=celery).forget()
+    except Exception:
+        pass
+
+    # Remove the job from the sorted set so it disappears from the monitor
+    _redis_client.zrem("dlc_train_jobs", task_id)
+    # Mark job as stopped in its hash (it will expire on its own TTL)
+    _redis_client.hset("dlc_train_job:" + task_id, "status", "stopped")
+    _redis_client.expire("dlc_train_job:" + task_id, 3600)
 
     return jsonify({"status": "stop_requested", "task_id": task_id}), 200
 
@@ -3005,8 +3018,6 @@ def dlc_train_network_stop():
 @app.route("/dlc/training/jobs")
 def dlc_training_jobs():
     """Return all training jobs (running + recent) stored in Redis."""
-    import time as _time
-
     job_ids = _redis_client.zrevrange("dlc_train_jobs", 0, 49)  # last 50
     jobs = []
     for jid in job_ids:
@@ -3015,6 +3026,21 @@ def dlc_training_jobs():
             jobs.append(job)
 
     return jsonify({"jobs": jobs})
+
+
+@app.route("/dlc/training/jobs/clear", methods=["POST"])
+def dlc_training_jobs_clear():
+    """Delete all finished (non-running) jobs from the monitor list."""
+    job_ids = _redis_client.zrevrange("dlc_train_jobs", 0, 199)
+    removed = 0
+    for jid in job_ids:
+        job = _redis_client.hgetall("dlc_train_job:" + jid)
+        if job.get("status") != "running":
+            _redis_client.zrem("dlc_train_jobs", jid)
+            _redis_client.delete("dlc_train_job:" + jid)
+            removed += 1
+
+    return jsonify({"removed": removed})
 
 
 @app.route("/dlc/gpu/status")

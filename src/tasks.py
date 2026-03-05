@@ -714,15 +714,14 @@ _TRAIN_PID_PREFIX = "dlc_train_pid:"
 def _dlc_train_subprocess(config_path: str, kwargs: dict, log_path: str) -> None:
     """
     Runs inside a child process spawned by dlc_train_network.
-    Redirects stdout/stderr to log_path so the parent can tail it.
-    Installs a SIGTERM handler that calls sys.exit(0) so Python unwinds
-    the stack normally, allowing PyTorch/CUDA to release GPU resources
-    before the process dies.
+    Becomes a process-group leader immediately so that killpg() from the
+    parent will also reach all grandchild processes (PyTorch DataLoader
+    workers, CUDA subprocesses, etc.), preventing GPU-context leaks.
     """
-    import sys, signal as _sig, deeplabcut as _dlc
+    import os as _os, sys, deeplabcut as _dlc
 
-    # SIGTERM → clean Python exit so CUDA contexts are released properly
-    _sig.signal(_sig.SIGTERM, lambda *_: sys.exit(0))
+    # Become process-group leader — parent uses os.killpg(proc.pid, SIGKILL)
+    _os.setpgrp()
 
     with open(log_path, "a", buffering=1) as _f:
         sys.stdout = _f
@@ -730,8 +729,6 @@ def _dlc_train_subprocess(config_path: str, kwargs: dict, log_path: str) -> None
         try:
             _dlc.train_network(config_path, **kwargs)
             _f.write("\n__TRAIN_COMPLETE__\n")
-        except SystemExit:
-            _f.write("\n__TRAIN_STOPPED__\n")
         except Exception:
             import traceback as _tb
             _f.write("\n__TRAIN_ERROR__\n")
@@ -847,24 +844,18 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
             while not _stop_emit.wait(3):
                 # Check stop flag set by Flask stop endpoint
                 if _redis.get(stop_key):
-                    _redis.delete(stop_key)
                     _user_killed[0] = True
-                    # SIGTERM first — child's handler calls sys.exit(0) which
-                    # unwinds Python/PyTorch and releases CUDA contexts cleanly.
+                    # Kill the ENTIRE process group (training proc + all its
+                    # children: PyTorch DataLoader workers, CUDA subprocesses).
+                    # SIGKILL is immediate and cannot be ignored — this is
+                    # intentional; leaving any child alive causes GPU hangs.
                     try:
-                        os.kill(proc.pid, _sig.SIGTERM)
-                    except ProcessLookupError:
-                        break
-                    # Wait up to 30 s for clean exit, then SIGKILL as fallback
-                    for _ in range(30):
-                        if not proc.is_alive():
-                            break
-                        _threading.Event().wait(1)
-                    else:
-                        try:
-                            os.kill(proc.pid, _sig.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                        os.killpg(proc.pid, _sig.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        pass
+                    # Purge all task state from Redis immediately
+                    _redis.delete(stop_key, pid_key, job_key)
+                    _redis.zrem("dlc_train_jobs", task_id)
                     break  # proc.join() will unblock shortly
 
                 try:
@@ -903,15 +894,19 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
 
         _stop_emit.set()
         _emitter.join(timeout=5)
-        _redis.delete(pid_key)
-        _redis.delete(stop_key)
+        # Clean up any leftover keys (_emit_loop already deletes them on user
+        # stop, but delete idempotently here for the natural-exit path too)
+        _redis.delete(pid_key, stop_key)
 
         # ── Check outcome ────────────────────────────────────────
-        with open(log_path) as _lf:
-            final_log = _lf.read()
+        try:
+            with open(log_path) as _lf:
+                final_log = _lf.read()
+        except OSError:
+            final_log = ""
 
         if _user_killed[0]:
-            _job_set("stopped")
+            # Keys already purged by _emit_loop; just raise the sentinel
             raise RuntimeError("__USER_STOPPED__")
 
         if proc.exitcode != 0:
@@ -932,7 +927,9 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         }
 
     except Exception:
-        _redis.delete(pid_key)
+        # Purge all Redis state so no stale "running" record remains
+        _redis.delete(pid_key, stop_key)
+        _redis.zrem("dlc_train_jobs", task_id)
         _job_set("failed")
         raise RuntimeError(traceback.format_exc()[-3000:])
 
