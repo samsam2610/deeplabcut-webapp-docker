@@ -723,6 +723,11 @@ def _dlc_train_subprocess(config_path: str, kwargs: dict, log_path: str) -> None
     # Become process-group leader — parent uses os.killpg(proc.pid, SIGKILL)
     _os.setpgrp()
 
+    # Ensure CUDA device numbering matches nvidia-smi (PCI bus ID order).
+    # Without this, CUDA may use FASTEST_FIRST ordering, causing a mismatch
+    # between the GPU index shown in the UI and the one actually used.
+    _os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+
     with open(log_path, "a", buffering=1) as _f:
         sys.stdout = _f
         sys.stderr = _f
@@ -986,6 +991,9 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
     from pathlib import Path as _Path
 
     _os.setpgrp()
+
+    # Ensure CUDA device numbering matches nvidia-smi (PCI bus ID order).
+    _os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
     with open(log_path, "a", buffering=1) as _f:
         sys.stdout = _f
