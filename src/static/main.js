@@ -3106,6 +3106,268 @@
     }
   })();
 
+  // ── Analyze Video / Frames ────────────────────────────────────
+  (() => {
+    const avCard         = document.getElementById("analyze-card");
+    const avOpenBtn      = document.getElementById("btn-open-analyze");
+    const avCloseBtn     = document.getElementById("btn-close-analyze");
+    const avTargetPath   = document.getElementById("av-target-path");
+    const avBrowseBtn    = document.getElementById("av-browse-btn");
+    const avBrowser      = document.getElementById("av-browser");
+    const avSnapshot     = document.getElementById("av-snapshot");
+    const avRefreshSnaps = document.getElementById("av-refresh-snapshots");
+    const avRunBtn       = document.getElementById("btn-run-analyze");
+    const avStopBtn      = document.getElementById("btn-stop-analyze");
+    const avRunStatus    = document.getElementById("av-run-status");
+    const avProgress     = document.getElementById("av-progress");
+    const avTaskId       = document.getElementById("av-task-id");
+    const avProgressBar  = document.getElementById("av-progress-bar");
+    const avProgressStage= document.getElementById("av-progress-stage");
+    const avProgressPct  = document.getElementById("av-progress-pct");
+    const avLogOutput    = document.getElementById("av-log-output");
+
+    let _avPollTimer  = null;
+    let _avActiveTask = null;
+    let _avBrowserLoaded = false;
+    let _avProjectPath   = null;   // set when browse data arrives
+
+    // ── Snapshots ─────────────────────────────────────────────
+    async function _avLoadSnapshots() {
+      try {
+        const res  = await fetch("/dlc/project/snapshots");
+        const data = await res.json();
+        if (data.error) return;
+        // Rebuild select keeping "Latest" first
+        avSnapshot.innerHTML = '<option value="-1">Latest (from config)</option>';
+        (data.snapshots || []).forEach(s => {
+          const opt = document.createElement("option");
+          opt.value       = s.rel_path;
+          opt.textContent = s.label;
+          avSnapshot.appendChild(opt);
+        });
+      } catch (err) {
+        console.error("avLoadSnapshots:", err);
+      }
+    }
+
+    avRefreshSnaps.addEventListener("click", _avLoadSnapshots);
+
+    // ── Project browser ───────────────────────────────────────
+    function _avBuildBrowserTree(folders, projectPath) {
+      const list = document.createElement("div");
+      list.style.cssText = "display:flex;flex-direction:column;gap:2px";
+
+      function _addEntry(relPath, name, isDir, indent) {
+        const row = document.createElement("div");
+        row.style.cssText = `padding:.18rem .3rem .18rem ${indent}rem;cursor:pointer;border-radius:4px;
+          display:flex;align-items:center;gap:.35rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`;
+        row.title = relPath;
+
+        const icon = document.createElement("span");
+        icon.textContent = isDir ? "📁" : "📄";
+        icon.style.flexShrink = "0";
+        const label = document.createElement("span");
+        label.textContent = name;
+        label.style.cssText = "overflow:hidden;text-overflow:ellipsis;font-family:var(--mono);font-size:.75rem";
+        row.appendChild(icon); row.appendChild(label);
+
+        row.addEventListener("mouseenter", () => row.style.background = "var(--surface-3,#2a2a2a)");
+        row.addEventListener("mouseleave", () => row.style.background = "");
+        row.addEventListener("click", () => {
+          avTargetPath.value = projectPath + "/" + relPath;
+          avBrowser.classList.add("hidden");
+          _avBrowserLoaded = false;  // reset so next open refreshes
+        });
+        list.appendChild(row);
+      }
+
+      function _walk(children, parentRel, depth) {
+        (children || []).forEach(child => {
+          const rel = parentRel ? parentRel + "/" + child.name : child.name;
+          const isDir = child.type === "dir";
+          _addEntry(rel, child.name, isDir, depth * 0.9);
+          if (isDir && child.children && child.children.length) {
+            _walk(child.children, rel, depth + 1);
+          }
+        });
+      }
+
+      folders.forEach(f => {
+        // Top-level folder row (selectable as target)
+        _addEntry(f.folder, f.key + "  (" + f.folder + ")", true, 0);
+        _walk(f.children, f.folder, 1);
+      });
+
+      return list;
+    }
+
+    avBrowseBtn.addEventListener("click", async () => {
+      const isHidden = avBrowser.classList.contains("hidden");
+      avBrowser.classList.toggle("hidden");
+      if (!isHidden) return;  // closing — nothing to load
+      if (_avBrowserLoaded) return;
+      avBrowser.textContent = "Loading…";
+      try {
+        const res  = await fetch("/dlc/project/browse");
+        const data = await res.json();
+        if (data.error) { avBrowser.textContent = data.error; return; }
+        _avProjectPath = data.project_path;
+        avBrowser.innerHTML = "";
+        avBrowser.appendChild(_avBuildBrowserTree(data.folders, data.project_path));
+        _avBrowserLoaded = true;
+      } catch (err) {
+        avBrowser.textContent = "Failed to load project.";
+        console.error("avBrowse:", err);
+      }
+    });
+
+    // ── Running state helpers ─────────────────────────────────
+    function _avSetRunning(running) {
+      avRunBtn.classList.toggle("hidden",  running);
+      avStopBtn.classList.toggle("hidden", !running);
+      avRunBtn.disabled  = running;
+    }
+
+    // ── Polling ───────────────────────────────────────────────
+    function _avStartPolling(taskId) {
+      avProgress.classList.remove("hidden", "state-success", "state-fail");
+      avTaskId.textContent    = taskId.slice(0, 12) + "…";
+      avProgressBar.style.width = "0%";
+      avProgressPct.textContent = "0 %";
+      avProgressStage.textContent = "Queued";
+      avLogOutput.textContent = "Waiting for output…";
+      _avSetRunning(true);
+
+      if (_avPollTimer) clearInterval(_avPollTimer);
+      _avPollTimer = setInterval(() => _avPoll(taskId), 2000);
+      _avPoll(taskId);
+    }
+
+    async function _avPoll(taskId) {
+      try {
+        const res  = await fetch(`/status/${taskId}`);
+        const data = await res.json();
+
+        const pct = Math.min(data.progress || 0, 100);
+        avProgressBar.style.width   = pct + "%";
+        avProgressPct.textContent   = pct + " %";
+        avProgressStage.textContent = data.stage || data.state;
+
+        if (data.log) {
+          avLogOutput.textContent = data.log;
+          avLogOutput.scrollTop   = avLogOutput.scrollHeight;
+        }
+
+        if (data.state === "SUCCESS") {
+          clearInterval(_avPollTimer); _avPollTimer = null;
+          avProgress.classList.add("state-success");
+          avProgressStage.textContent = "✓ Analysis complete";
+          avProgressBar.style.width   = "100%";
+          avProgressPct.textContent   = "100 %";
+          avRunStatus.textContent = "Analysis finished successfully.";
+          avRunStatus.className   = "fe-extract-status ok";
+          _avSetRunning(false);
+          if (data.result && data.result.log) avLogOutput.textContent = data.result.log;
+        }
+
+        if (data.state === "FAILURE" || data.state === "REVOKED") {
+          clearInterval(_avPollTimer); _avPollTimer = null;
+          const userStopped = data.state === "REVOKED" ||
+            (data.error || "").includes("__USER_STOPPED__");
+          avProgress.classList.add("state-fail");
+          avProgressStage.textContent = userStopped
+            ? "✗ Stopped by user"
+            : "✗ " + (data.error || "Failed").split("\n")[0];
+          if (!userStopped) avLogOutput.textContent = data.error || "An unknown error occurred.";
+          avRunStatus.textContent = userStopped ? "Analysis stopped." : "";
+          avRunStatus.className   = "fe-extract-status";
+          _avSetRunning(false);
+        }
+      } catch (err) {
+        console.error("Analyze poll error:", err);
+      }
+    }
+
+    // ── Open / Close ──────────────────────────────────────────
+    avOpenBtn?.addEventListener("click", () => {
+      avCard.classList.remove("hidden");
+      avCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      _avLoadSnapshots();
+      _avBrowserLoaded = false;
+      avBrowser.classList.add("hidden");
+    });
+
+    avCloseBtn?.addEventListener("click", () => {
+      avCard.classList.add("hidden");
+      if (_avPollTimer) { clearInterval(_avPollTimer); _avPollTimer = null; }
+    });
+
+    // ── Run ───────────────────────────────────────────────────
+    avRunBtn.addEventListener("click", async () => {
+      const target = avTargetPath.value.trim();
+      if (!target) {
+        avRunStatus.textContent = "Please enter a target path.";
+        avRunStatus.className   = "fe-extract-status err";
+        return;
+      }
+
+      avRunStatus.textContent = "";
+      avRunStatus.className   = "fe-extract-status";
+
+      const snapshotVal = avSnapshot.value;
+      const snapshotIndex = snapshotVal === "-1" ? null : snapshotVal;
+
+      const body = {
+        target_path:      target,
+        shuffle:          parseInt(document.getElementById("av-shuffle").value) || 1,
+        trainingsetindex: parseInt(document.getElementById("av-trainingsetindex").value) ?? 0,
+        gputouse:         document.getElementById("av-gputouse").value !== ""
+                            ? parseInt(document.getElementById("av-gputouse").value)
+                            : null,
+        save_as_csv:      document.getElementById("av-save-csv").checked,
+        snapshot_index:   snapshotIndex !== null ? parseInt(snapshotIndex) : null,
+      };
+
+      try {
+        const res  = await fetch("/dlc/project/analyze", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          avRunStatus.textContent = data.error || "Failed to start analysis.";
+          avRunStatus.className   = "fe-extract-status err";
+          return;
+        }
+        _avActiveTask = data.task_id;
+        _avStartPolling(data.task_id);
+      } catch (err) {
+        avRunStatus.textContent = "Network error: " + err.message;
+        avRunStatus.className   = "fe-extract-status err";
+      }
+    });
+
+    // ── Stop ──────────────────────────────────────────────────
+    avStopBtn.addEventListener("click", async () => {
+      if (!_avActiveTask) return;
+      avStopBtn.disabled = true;
+      try {
+        await fetch("/dlc/project/analyze/stop", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ task_id: _avActiveTask }),
+        });
+        avRunStatus.textContent = "Stop signal sent — analysis will terminate shortly.";
+        avRunStatus.className   = "fe-extract-status";
+      } catch (err) {
+        avRunStatus.textContent = "Stop error: " + err.message;
+        avRunStatus.className   = "fe-extract-status err";
+        avStopBtn.disabled = false;
+      }
+    });
+  })();
+
   // ── GPU & Training Monitor ────────────────────────────────────
   (() => {
     const gmCard       = document.getElementById("gpu-monitor-card");

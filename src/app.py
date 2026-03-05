@@ -3037,6 +3037,118 @@ def dlc_train_network_stop():
     return jsonify({"status": "stop_requested", "task_id": task_id}), 200
 
 
+# ── DLC Analyze ───────────────────────────────────────────────────
+
+@app.route("/dlc/project/snapshots", methods=["GET"])
+def dlc_project_snapshots():
+    """
+    List available model snapshots in the active DLC project.
+    Returns engine-appropriate snapshot files from the models folder.
+    """
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not project_path.is_dir():
+        return jsonify({"error": "Project directory not found."}), 404
+
+    engine = project_data.get("engine", "pytorch")
+    models_folder, _, _ = _engine_info(engine)
+
+    # Find snapshot files: *.pt for pytorch, *.index for tensorflow
+    if engine in _TF_ENGINE_ALIASES:
+        snap_pattern = f"{models_folder}/**/train/*.index"
+        # Strip .index to get clean snapshot name
+        def _snap_label(p): return p.stem
+    else:
+        snap_pattern = f"{models_folder}/**/train/*.pt"
+        def _snap_label(p): return p.stem
+
+    snap_paths = sorted(
+        project_path.glob(snap_pattern),
+        key=lambda p: p.stat().st_mtime,
+    )
+
+    snapshots = [
+        {"label": _snap_label(p), "rel_path": str(p.relative_to(project_path))}
+        for p in snap_paths
+    ]
+    return jsonify({"snapshots": snapshots, "engine": engine})
+
+
+@app.route("/dlc/project/analyze", methods=["POST"])
+def dlc_project_analyze():
+    """
+    Dispatch a Celery task to run DLC analysis on a file or folder.
+    Body (JSON) fields:
+      target_path     : absolute path to a video file, image file, or directory
+      shuffle         : int  (default 1)
+      trainingsetindex: int  (default 0)
+      gputouse        : int  (optional)
+      save_as_csv     : bool (default false)
+      snapshot_index  : int  (optional; None = latest from config)
+    """
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    config_path  = project_data.get("config_path", "")
+    if not config_path or not Path(config_path).is_file():
+        return jsonify({"error": "No config.yaml in active project."}), 400
+
+    body        = request.get_json(force=True) or {}
+    target_path = (body.get("target_path") or "").strip()
+    if not target_path:
+        return jsonify({"error": "target_path is required."}), 400
+    if not Path(target_path).exists():
+        return jsonify({"error": f"Target not found: {target_path}"}), 400
+
+    def _int_or_none(key):
+        v = body.get(key)
+        try:
+            return int(v) if v is not None and v != "" else None
+        except (ValueError, TypeError):
+            return None
+
+    params = {
+        "shuffle":          _int_or_none("shuffle") or 1,
+        "trainingsetindex": _int_or_none("trainingsetindex") if _int_or_none("trainingsetindex") is not None else 0,
+        "gputouse":         _int_or_none("gputouse"),
+        "save_as_csv":      bool(body.get("save_as_csv", False)),
+        "snapshot_index":   _int_or_none("snapshot_index"),
+    }
+
+    task = celery.send_task(
+        "tasks.dlc_analyze",
+        kwargs={"config_path": config_path, "target_path": target_path, "params": params},
+    )
+    return jsonify({"task_id": task.id, "operation": "analyze"}), 202
+
+
+@app.route("/dlc/project/analyze/stop", methods=["POST"])
+def dlc_project_analyze_stop():
+    """
+    Request a stop of a running dlc_analyze task.
+    Body (JSON): { "task_id": "<celery task id>" }
+    """
+    body    = request.get_json(force=True) or {}
+    task_id = (body.get("task_id") or "").strip()
+    if not task_id:
+        return jsonify({"error": "task_id is required."}), 400
+
+    _redis_client.setex("dlc_analyze_stop:" + task_id, 120, "1")
+    celery.control.revoke(task_id, terminate=False)
+    try:
+        AsyncResult(task_id, app=celery).forget()
+    except Exception:
+        pass
+
+    return jsonify({"status": "stop_requested", "task_id": task_id}), 200
+
+
 @app.route("/dlc/training/jobs")
 def dlc_training_jobs():
     """Return all training jobs (running + recent) stored in Redis."""

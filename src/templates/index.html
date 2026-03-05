@@ -205,6 +205,12 @@
           </svg>
           <span>Train Network</span>
         </button>
+        <button id="btn-open-analyze" class="inspect-btn" style="width:100%;gap:.55rem">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
+          </svg>
+          <span>Analyze Video / Frames</span>
+        </button>
         <button id="btn-open-gpu-monitor" class="inspect-btn" style="width:100%;gap:.55rem">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/><line x1="12" y1="17" x2="12" y2="21"/>
@@ -624,6 +630,94 @@
             Log
           </div>
           <pre id="tn-log-output">Waiting for output…</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Analyze Video / Frames card ──────────────────────── -->
+    <section class="card dlc-theme hidden" id="analyze-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>Analyze Video / Frames</h2>
+        <button class="btn-sm" id="btn-close-analyze" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Run pose estimation on a video file, image file, or folder using the trained model.</p>
+
+      <!-- Target path -->
+      <div style="margin-bottom:.7rem">
+        <label style="display:block;font-size:.78rem;color:var(--text-dim);margin-bottom:.3rem">Target (file or folder path)</label>
+        <div style="display:flex;gap:.4rem">
+          <input type="text" id="av-target-path" placeholder="/path/to/video.mp4  or  /path/to/folder"
+            style="flex:1;font-family:var(--mono);font-size:.78rem;padding:.35rem .55rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+          <button class="btn-sm" id="av-browse-btn" title="Browse project folders">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Browse
+          </button>
+        </div>
+        <!-- Inline project browser -->
+        <div id="av-browser" class="hidden" style="margin-top:.5rem;max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem"></div>
+      </div>
+
+      <!-- Model snapshot -->
+      <div class="scorer-row" style="margin-bottom:.55rem">
+        <label for="av-snapshot" style="min-width:9rem">Model snapshot</label>
+        <select id="av-snapshot" style="flex:1;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+          <option value="-1">Latest (from config)</option>
+        </select>
+        <button class="btn-sm" id="av-refresh-snapshots" title="Refresh snapshot list" style="padding:.2rem .45rem;font-size:.75rem">↺</button>
+      </div>
+
+      <!-- Common params -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem .8rem;margin-bottom:.8rem">
+        <div class="scorer-row">
+          <label for="av-shuffle">Shuffle</label>
+          <input type="number" id="av-shuffle" value="1" min="1" max="20" style="width:5rem" />
+        </div>
+        <div class="scorer-row">
+          <label for="av-trainingsetindex">Training set index</label>
+          <input type="number" id="av-trainingsetindex" value="0" min="0" style="width:5rem" />
+        </div>
+        <div class="scorer-row">
+          <label for="av-gputouse">GPU to use</label>
+          <input type="number" id="av-gputouse" placeholder="auto" min="0" style="width:5rem" />
+        </div>
+        <div class="scorer-row" style="align-items:center">
+          <label for="av-save-csv">Save as CSV</label>
+          <input type="checkbox" id="av-save-csv" style="width:auto;margin-left:.4rem" />
+        </div>
+      </div>
+
+      <!-- Run / Stop -->
+      <div style="display:flex;gap:.6rem;margin-bottom:.3rem">
+        <button id="btn-run-analyze" class="btn-sm btn-create">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Start Analysis
+        </button>
+        <button id="btn-stop-analyze" class="btn-sm btn-danger hidden">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          Stop
+        </button>
+      </div>
+      <span id="av-run-status" class="fe-extract-status"></span>
+
+      <!-- Progress -->
+      <div id="av-progress" class="hidden" style="margin-top:1.2rem">
+        <div class="progress-header">
+          <span>Analysis</span>
+          <span id="av-task-id" class="task-id-badge"></span>
+        </div>
+        <div class="progress-track">
+          <div id="av-progress-bar" class="progress-fill"></div>
+        </div>
+        <div class="progress-meta">
+          <span id="av-progress-stage">Queued</span>
+          <span id="av-progress-pct">0 %</span>
+        </div>
+        <div class="log-panel">
+          <div class="log-title">Log</div>
+          <pre id="av-log-output">Waiting for output…</pre>
         </div>
       </div>
     </section>

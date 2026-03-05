@@ -940,6 +940,206 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
             pass
 
 
+# ── DLC Analyze ───────────────────────────────────────────────────
+
+_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"}
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+_ANALYZE_PID_PREFIX = "dlc_analyze_pid:"
+
+
+def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, log_path: str) -> None:
+    """
+    Runs inside a child process spawned by dlc_analyze.
+    Detects whether the target is a video file, image file, or directory,
+    then calls the appropriate DLC function(s).
+    """
+    import os as _os, sys, deeplabcut as _dlc
+    from pathlib import Path as _Path
+
+    _os.setpgrp()
+
+    with open(log_path, "a", buffering=1) as _f:
+        sys.stdout = _f
+        sys.stderr = _f
+        try:
+            p = _Path(target_path)
+            kw = {k: v for k, v in params.items() if v is not None}
+
+            if p.is_file():
+                ext = p.suffix.lower()
+                if ext in {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"}:
+                    _f.write(f"Analyzing video file: {p}\n\n")
+                    _dlc.analyze_videos(config_path, [str(p)], **kw)
+                elif ext in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}:
+                    _f.write(f"Analyzing image directory (selected frame): {p.parent}\n\n")
+                    _dlc.analyze_time_lapse_frames(config_path, str(p.parent), **kw)
+                else:
+                    raise ValueError(f"Unsupported file type: {ext}")
+
+            elif p.is_dir():
+                files = [f for f in p.iterdir() if f.is_file()]
+                video_files = [f for f in files if f.suffix.lower() in {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"}]
+                image_files = [f for f in files if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}]
+
+                if not video_files and not image_files:
+                    raise ValueError(f"No supported video or image files found in: {p}")
+
+                if video_files:
+                    _f.write(f"Analyzing {len(video_files)} video(s) in: {p}\n\n")
+                    _dlc.analyze_videos(config_path, [str(v) for v in sorted(video_files)], **kw)
+
+                if image_files:
+                    _f.write(f"\nAnalyzing {len(image_files)} image(s) in: {p}\n\n")
+                    _dlc.analyze_time_lapse_frames(config_path, str(p), **kw)
+
+            else:
+                raise FileNotFoundError(f"Target not found: {target_path}")
+
+            _f.write("\n__ANALYZE_COMPLETE__\n")
+        except Exception:
+            import traceback as _tb
+            _f.write("\n__ANALYZE_ERROR__\n")
+            _f.write(_tb.format_exc())
+
+
+@celery.task(bind=True, name="tasks.dlc_analyze", acks_late=False)
+def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
+    """
+    Run DLC analysis (analyze_videos / analyze_time_lapse_frames) in a child
+    process so it can be killed cleanly without taking down the Celery worker.
+    params keys: shuffle, trainingsetindex, gputouse, save_as_csv, snapshot_index
+    """
+    import multiprocessing as _mp
+    import threading as _threading
+    import tempfile
+    import signal as _signal
+    import redis as _redis_mod
+
+    _redis = _redis_mod.Redis.from_url(
+        os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/0"),
+        decode_responses=True,
+    )
+
+    if params is None:
+        params = {}
+
+    task_id = self.request.id
+    pid_key  = _ANALYZE_PID_PREFIX + task_id
+    stop_key = "dlc_analyze_stop:" + task_id
+
+    _tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".log", prefix="dlc_analyze_", delete=False
+    )
+    log_path = _tmp.name
+    _tmp.close()
+
+    try:
+        self.update_state(
+            state="PROGRESS",
+            meta={"progress": 5, "stage": "Checking target…", "log": ""},
+        )
+
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
+        if not os.path.exists(target_path):
+            raise FileNotFoundError(f"Target not found: {target_path}")
+
+        init_log = (
+            f"config_path  : {config_path}\n"
+            f"target_path  : {target_path}\n"
+            f"params       : {params}\n\n"
+        )
+        with open(log_path, "w") as _f:
+            _f.write(init_log)
+
+        self.update_state(
+            state="PROGRESS",
+            meta={"progress": 10, "stage": "Starting analysis…", "log": init_log},
+        )
+
+        ctx  = _mp.get_context("spawn")
+        proc = ctx.Process(
+            target=_dlc_analyze_subprocess,
+            args=(config_path, target_path, params, log_path),
+            daemon=False,
+        )
+        proc.start()
+        _redis.setex(pid_key, 7200, str(proc.pid))
+
+        _stop_emit   = _threading.Event()
+        _user_killed = [False]
+
+        def _emit_loop():
+            import signal as _sig
+            _progress = 12
+            while not _stop_emit.wait(3):
+                if _redis.get(stop_key):
+                    _user_killed[0] = True
+                    try:
+                        os.killpg(proc.pid, _sig.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        pass
+                    _redis.delete(stop_key, pid_key)
+                    break
+
+                try:
+                    with open(log_path) as _lf:
+                        _log = _lf.read()[-8000:]
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={
+                            "progress": min(_progress, 90),
+                            "stage":    "Analyzing…",
+                            "log":      _log,
+                        },
+                    )
+                    _progress = min(_progress + 1, 90)
+                except Exception:
+                    pass
+
+        _emitter = _threading.Thread(target=_emit_loop, daemon=True)
+        _emitter.start()
+
+        proc.join()
+
+        _stop_emit.set()
+        _emitter.join(timeout=5)
+        _redis.delete(pid_key, stop_key)
+
+        try:
+            with open(log_path) as _lf:
+                final_log = _lf.read()
+        except OSError:
+            final_log = ""
+
+        if _user_killed[0]:
+            raise RuntimeError("__USER_STOPPED__")
+
+        if proc.exitcode != 0:
+            if proc.exitcode is not None and proc.exitcode < 0:
+                raise RuntimeError(
+                    f"Analysis process was killed (signal {-proc.exitcode}).\n\n"
+                    + final_log[-3000:]
+                )
+            raise RuntimeError(final_log[-5000:])
+
+        return {
+            "status":    "complete",
+            "operation": "analyze",
+            "log":       final_log[-8000:] or f"Analysis complete.\nconfig: {config_path}",
+        }
+
+    except Exception:
+        _redis.delete(pid_key, stop_key)
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+    finally:
+        try:
+            os.unlink(log_path)
+        except OSError:
+            pass
+
+
 # ── Main Celery Task ──────────────────────────────────────────────
 @celery.task(bind=True, name="tasks.run_processing")
 def run_processing(self, project_id: str, task_type: str = "anipose"):
