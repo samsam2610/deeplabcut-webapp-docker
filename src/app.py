@@ -3063,33 +3063,41 @@ def dlc_project_snapshots():
     snap_pattern = f"{models_folder}/**/train/*.index" if engine in _TF_ENGINE_ALIASES \
                    else f"{models_folder}/**/train/*.pt"
 
-    def _parse_iter(p):
-        """Extract numeric iteration from filename like snapshot-50000.pt → 50000."""
-        m = _re.search(r'[-_](\d+)$', p.stem)
-        return int(m.group(1)) if m else None
+    models_root = project_path / models_folder
 
-    snap_paths = project_path.glob(snap_pattern)
+    def _parse_folder_iter(p):
+        """
+        Extract the iteration number from the iteration-N folder in the path.
+        e.g. dlc-models-pytorch/iteration-0/shuffle1/train/snapshot-50000.pt → 0
+        """
+        try:
+            rel_parts = p.relative_to(models_root).parts
+            # First component after models_folder should be iteration-N
+            folder = rel_parts[0] if rel_parts else ""
+            m = _re.search(r'iteration[-_](\d+)', folder, _re.IGNORECASE)
+            return int(m.group(1)) if m else None
+        except Exception:
+            return None
 
-    # Build list, parse iterations, sort ascending
     raw = []
-    for p in snap_paths:
-        iteration = _parse_iter(p)
+    for p in project_path.glob(snap_pattern):
+        folder_iter = _parse_folder_iter(p)
         raw.append({
-            "stem":      p.stem,
-            "iteration": iteration,
-            "rel_path":  str(p.relative_to(project_path)),
-            "mtime":     p.stat().st_mtime,
+            "stem":         p.stem,
+            "folder_iter":  folder_iter,   # from iteration-N folder (config iteration)
+            "rel_path":     str(p.relative_to(project_path)),
+            "mtime":        p.stat().st_mtime,
         })
 
-    # Sort: by iteration ascending (None last), then mtime
-    raw.sort(key=lambda s: (s["iteration"] is None, s["iteration"] or 0, s["mtime"]))
+    # Sort: by folder iteration ascending (None last), then mtime
+    raw.sort(key=lambda s: (s["folder_iter"] is None, s["folder_iter"] or 0, s["mtime"]))
 
     snapshots = [
         {
-            "label":     s["stem"],
-            "iteration": s["iteration"],
-            "index":     i,
-            "rel_path":  s["rel_path"],
+            "label":      s["stem"],
+            "iteration":  s["folder_iter"],   # config.yaml iteration value
+            "index":      i,
+            "rel_path":   s["rel_path"],
         }
         for i, s in enumerate(raw)
     ]
@@ -3100,8 +3108,8 @@ def dlc_project_snapshots():
     return jsonify({
         "snapshots":        snapshots,
         "engine":           engine,
-        "latest_label":     latest["stem"]      if latest else None,
-        "latest_iteration": latest["iteration"] if latest else None,
+        "latest_label":     latest["stem"]        if latest else None,
+        "latest_iteration": latest["folder_iter"] if latest else None,
     })
 
 
