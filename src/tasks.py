@@ -6,6 +6,7 @@ Runs inside the GPU-enabled worker container.
 import os
 import shutil
 import subprocess
+import time
 import traceback
 from pathlib import Path
 import deeplabcut as dlc
@@ -714,28 +715,38 @@ def _dlc_train_subprocess(config_path: str, kwargs: dict, log_path: str) -> None
     """
     Runs inside a child process spawned by dlc_train_network.
     Redirects stdout/stderr to log_path so the parent can tail it.
-    Writes a sentinel line on completion or exception.
+    Installs a SIGTERM handler that calls sys.exit(0) so Python unwinds
+    the stack normally, allowing PyTorch/CUDA to release GPU resources
+    before the process dies.
     """
-    import sys, deeplabcut as _dlc
+    import sys, signal as _sig, deeplabcut as _dlc
+
+    # SIGTERM → clean Python exit so CUDA contexts are released properly
+    _sig.signal(_sig.SIGTERM, lambda *_: sys.exit(0))
+
     with open(log_path, "a", buffering=1) as _f:
         sys.stdout = _f
         sys.stderr = _f
         try:
             _dlc.train_network(config_path, **kwargs)
             _f.write("\n__TRAIN_COMPLETE__\n")
+        except SystemExit:
+            _f.write("\n__TRAIN_STOPPED__\n")
         except Exception:
             import traceback as _tb
             _f.write("\n__TRAIN_ERROR__\n")
             _f.write(_tb.format_exc())
 
 
-@celery.task(bind=True, name="tasks.dlc_train_network")
+@celery.task(bind=True, name="tasks.dlc_train_network", acks_late=False)
 def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: dict = None):
     """
     Run deeplabcut.train_network() in a child process so it can be killed
     cleanly without taking down the Celery worker.
     engine: 'pytorch' | 'tensorflow'
     params: engine-specific keyword arguments forwarded to train_network().
+    acks_late=False overrides the global setting so that killing the worker
+    does NOT re-queue the task on restart.
     """
     import multiprocessing as _mp
     import threading as _threading
@@ -751,8 +762,27 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
     if params is None:
         params = {}
 
-    task_id  = self.request.id
-    pid_key  = _TRAIN_PID_PREFIX + task_id
+    task_id   = self.request.id
+    pid_key   = _TRAIN_PID_PREFIX + task_id
+    job_key   = "dlc_train_job:" + task_id
+    jobs_zset = "dlc_train_jobs"
+
+    def _job_set(status: str):
+        _redis.hset(job_key, "status", status)
+        if status in ("complete", "stopped", "failed"):
+            _redis.expire(job_key, 3600)   # keep 1 h after finish
+
+    # Register job so all users can see it
+    _redis.hset(job_key, mapping={
+        "task_id":     task_id,
+        "engine":      engine,
+        "project":     Path(config_path).parent.name,
+        "config_path": config_path,
+        "started_at":  str(time.time()),
+        "status":      "running",
+    })
+    _redis.expire(job_key, 7200)
+    _redis.zadd(jobs_zset, {task_id: time.time()})
 
     # Temporary file shared between child (writes) and parent (reads)
     _tmp = tempfile.NamedTemporaryFile(
@@ -819,10 +849,22 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
                 if _redis.get(stop_key):
                     _redis.delete(stop_key)
                     _user_killed[0] = True
+                    # SIGTERM first — child's handler calls sys.exit(0) which
+                    # unwinds Python/PyTorch and releases CUDA contexts cleanly.
                     try:
-                        os.kill(proc.pid, _sig.SIGKILL)
+                        os.kill(proc.pid, _sig.SIGTERM)
                     except ProcessLookupError:
-                        pass
+                        break
+                    # Wait up to 30 s for clean exit, then SIGKILL as fallback
+                    for _ in range(30):
+                        if not proc.is_alive():
+                            break
+                        _threading.Event().wait(1)
+                    else:
+                        try:
+                            os.kill(proc.pid, _sig.SIGKILL)
+                        except ProcessLookupError:
+                            pass
                     break  # proc.join() will unblock shortly
 
                 try:
@@ -837,6 +879,20 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
                         },
                     )
                     _progress = min(_progress + 1, 90)
+                except Exception:
+                    pass
+
+                # Cache GPU stats from nvidia-smi so Flask can read them
+                try:
+                    _gr = subprocess.run(
+                        ["nvidia-smi",
+                         "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+                         "--format=csv,noheader,nounits"],
+                        capture_output=True, text=True, timeout=3,
+                    )
+                    if _gr.returncode == 0:
+                        _redis.setex("dlc_gpu_stats",    30, _gr.stdout)
+                        _redis.setex("dlc_gpu_stats_ts", 30, str(time.time()))
                 except Exception:
                     pass
 
@@ -855,9 +911,11 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
             final_log = _lf.read()
 
         if _user_killed[0]:
+            _job_set("stopped")
             raise RuntimeError("__USER_STOPPED__")
 
         if proc.exitcode != 0:
+            _job_set("failed")
             if proc.exitcode is not None and proc.exitcode < 0:
                 raise RuntimeError(
                     f"Training process was killed (signal {-proc.exitcode}).\n\n"
@@ -865,6 +923,7 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
                 )
             raise RuntimeError(final_log[-5000:])
 
+        _job_set("complete")
         return {
             "status":    "complete",
             "operation": "train_network",
@@ -874,6 +933,7 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
 
     except Exception:
         _redis.delete(pid_key)
+        _job_set("failed")
         raise RuntimeError(traceback.format_exc()[-3000:])
 
     finally:
