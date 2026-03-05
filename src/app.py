@@ -3057,25 +3057,52 @@ def dlc_project_snapshots():
     engine = project_data.get("engine", "pytorch")
     models_folder, _, _ = _engine_info(engine)
 
-    # Find snapshot files: *.pt for pytorch, *.index for tensorflow
-    if engine in _TF_ENGINE_ALIASES:
-        snap_pattern = f"{models_folder}/**/train/*.index"
-        # Strip .index to get clean snapshot name
-        def _snap_label(p): return p.stem
-    else:
-        snap_pattern = f"{models_folder}/**/train/*.pt"
-        def _snap_label(p): return p.stem
+    import re as _re
 
-    snap_paths = sorted(
-        project_path.glob(snap_pattern),
-        key=lambda p: p.stat().st_mtime,
-    )
+    # Find snapshot files: *.pt for pytorch, *.index for tensorflow
+    snap_pattern = f"{models_folder}/**/train/*.index" if engine in _TF_ENGINE_ALIASES \
+                   else f"{models_folder}/**/train/*.pt"
+
+    def _parse_iter(p):
+        """Extract numeric iteration from filename like snapshot-50000.pt → 50000."""
+        m = _re.search(r'[-_](\d+)$', p.stem)
+        return int(m.group(1)) if m else None
+
+    snap_paths = project_path.glob(snap_pattern)
+
+    # Build list, parse iterations, sort ascending
+    raw = []
+    for p in snap_paths:
+        iteration = _parse_iter(p)
+        raw.append({
+            "stem":      p.stem,
+            "iteration": iteration,
+            "rel_path":  str(p.relative_to(project_path)),
+            "mtime":     p.stat().st_mtime,
+        })
+
+    # Sort: by iteration ascending (None last), then mtime
+    raw.sort(key=lambda s: (s["iteration"] is None, s["iteration"] or 0, s["mtime"]))
 
     snapshots = [
-        {"label": _snap_label(p), "rel_path": str(p.relative_to(project_path))}
-        for p in snap_paths
+        {
+            "label":     s["stem"],
+            "iteration": s["iteration"],
+            "index":     i,
+            "rel_path":  s["rel_path"],
+        }
+        for i, s in enumerate(raw)
     ]
-    return jsonify({"snapshots": snapshots, "engine": engine})
+
+    # Latest snapshot info for the "Latest" default option
+    latest = raw[-1] if raw else None
+
+    return jsonify({
+        "snapshots":        snapshots,
+        "engine":           engine,
+        "latest_label":     latest["stem"]      if latest else None,
+        "latest_iteration": latest["iteration"] if latest else None,
+    })
 
 
 @app.route("/dlc/project/analyze", methods=["POST"])
@@ -3146,34 +3173,49 @@ def dlc_project_analyze_stop():
     except Exception:
         pass
 
+    # Optimistically mark as stopped so the monitor updates immediately
+    _redis_client.zrem("dlc_analyze_jobs", task_id)
+    _redis_client.hset("dlc_analyze_job:" + task_id, "status", "stopped")
+    _redis_client.expire("dlc_analyze_job:" + task_id, 3600)
+
     return jsonify({"status": "stop_requested", "task_id": task_id}), 200
 
 
 @app.route("/dlc/training/jobs")
 def dlc_training_jobs():
-    """Return all training jobs (running + recent) stored in Redis."""
-    job_ids = _redis_client.zrevrange("dlc_train_jobs", 0, 49)  # last 50
+    """Return all training and analyze jobs (running + recent) stored in Redis."""
     jobs = []
-    for jid in job_ids:
+    for jid in _redis_client.zrevrange("dlc_train_jobs", 0, 49):
         job = _redis_client.hgetall("dlc_train_job:" + jid)
+        if job:
+            job.setdefault("operation", "train")
+            jobs.append(job)
+    for jid in _redis_client.zrevrange("dlc_analyze_jobs", 0, 49):
+        job = _redis_client.hgetall("dlc_analyze_job:" + jid)
         if job:
             jobs.append(job)
 
-    return jsonify({"jobs": jobs})
+    # Sort combined list by started_at descending
+    jobs.sort(key=lambda j: float(j.get("started_at", 0)), reverse=True)
+    return jsonify({"jobs": jobs[:50]})
 
 
 @app.route("/dlc/training/jobs/clear", methods=["POST"])
 def dlc_training_jobs_clear():
-    """Delete all finished (non-running) jobs from the monitor list."""
-    job_ids = _redis_client.zrevrange("dlc_train_jobs", 0, 199)
+    """Delete all finished (non-running) train and analyze jobs from the monitor list."""
     removed = 0
-    for jid in job_ids:
+    for jid in _redis_client.zrevrange("dlc_train_jobs", 0, 199):
         job = _redis_client.hgetall("dlc_train_job:" + jid)
         if job.get("status") != "running":
             _redis_client.zrem("dlc_train_jobs", jid)
             _redis_client.delete("dlc_train_job:" + jid)
             removed += 1
-
+    for jid in _redis_client.zrevrange("dlc_analyze_jobs", 0, 199):
+        job = _redis_client.hgetall("dlc_analyze_job:" + jid)
+        if job.get("status") != "running":
+            _redis_client.zrem("dlc_analyze_jobs", jid)
+            _redis_client.delete("dlc_analyze_job:" + jid)
+            removed += 1
     return jsonify({"removed": removed})
 
 

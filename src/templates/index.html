@@ -549,7 +549,9 @@
       </div>
       <div class="scorer-row" style="margin-bottom:.9rem">
         <label for="tn-gputouse">GPU to use</label>
-        <input type="number" id="tn-gputouse" placeholder="auto" min="0" style="width:5rem" />
+        <select id="tn-gputouse" style="flex:1;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+          <option value="">auto</option>
+        </select>
       </div>
 
       <!-- TensorFlow params -->
@@ -681,7 +683,9 @@
         </div>
         <div class="scorer-row">
           <label for="av-gputouse">GPU to use</label>
-          <input type="number" id="av-gputouse" placeholder="auto" min="0" style="width:5rem" />
+          <select id="av-gputouse" style="flex:1;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+            <option value="">auto</option>
+          </select>
         </div>
         <div class="scorer-row" style="align-items:center">
           <label for="av-save-csv">Save as CSV</label>

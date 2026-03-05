@@ -1023,9 +1023,29 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
     if params is None:
         params = {}
 
-    task_id = self.request.id
-    pid_key  = _ANALYZE_PID_PREFIX + task_id
-    stop_key = "dlc_analyze_stop:" + task_id
+    task_id   = self.request.id
+    pid_key   = _ANALYZE_PID_PREFIX + task_id
+    stop_key  = "dlc_analyze_stop:" + task_id
+    job_key   = "dlc_analyze_job:" + task_id
+    jobs_zset = "dlc_analyze_jobs"
+
+    def _job_set(status: str):
+        _redis.hset(job_key, "status", status)
+        if status in ("complete", "stopped", "failed"):
+            _redis.expire(job_key, 3600)
+
+    # Register job so it appears in the monitor
+    _redis.hset(job_key, mapping={
+        "task_id":     task_id,
+        "operation":   "analyze",
+        "project":     Path(config_path).parent.name,
+        "config_path": config_path,
+        "target_path": target_path,
+        "started_at":  str(time.time()),
+        "status":      "running",
+    })
+    _redis.expire(job_key, 7200)
+    _redis.zadd(jobs_zset, {task_id: time.time()})
 
     _tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".log", prefix="dlc_analyze_", delete=False
@@ -1079,7 +1099,8 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
                         os.killpg(proc.pid, _sig.SIGKILL)
                     except (ProcessLookupError, OSError):
                         pass
-                    _redis.delete(stop_key, pid_key)
+                    _redis.delete(stop_key, pid_key, job_key)
+                    _redis.zrem(jobs_zset, task_id)
                     break
 
                 try:
@@ -1113,9 +1134,12 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
             final_log = ""
 
         if _user_killed[0]:
+            _redis.delete(job_key)
+            _redis.zrem(jobs_zset, task_id)
             raise RuntimeError("__USER_STOPPED__")
 
         if proc.exitcode != 0:
+            _job_set("failed")
             if proc.exitcode is not None and proc.exitcode < 0:
                 raise RuntimeError(
                     f"Analysis process was killed (signal {-proc.exitcode}).\n\n"
@@ -1123,6 +1147,7 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
                 )
             raise RuntimeError(final_log[-5000:])
 
+        _job_set("complete")
         return {
             "status":    "complete",
             "operation": "analyze",
@@ -1131,6 +1156,8 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
 
     except Exception:
         _redis.delete(pid_key, stop_key)
+        _redis.zrem(jobs_zset, task_id)
+        _job_set("failed")
         raise RuntimeError(traceback.format_exc()[-3000:])
 
     finally:
