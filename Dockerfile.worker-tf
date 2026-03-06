@@ -1,8 +1,8 @@
 # ─────────────────────────────────────────────────────────────────
-#  Worker Container — Adapted from existing DLC/Anipose Dockerfile
-#  Base: PyTorch 2.9.1 + CUDA 13.0 + cuDNN 9
+#  TensorFlow Worker Container — Legacy DLC (TensorFlow engine)
+#  Base: tensorflow/tensorflow:2.13.0-gpu (CUDA 11.8 / cuDNN 8)
 # ─────────────────────────────────────────────────────────────────
-FROM pytorch/pytorch:2.9.1-cuda13.0-cudnn9-runtime
+FROM tensorflow/tensorflow:2.13.0-gpu
 
 # ---------- Build Args ----------
 ARG UID=1000
@@ -39,39 +39,30 @@ WORKDIR /app
 
 # ---------- Environment Setup ----------
 ENV PATH="/home/${UNAME}/.local/bin:${PATH}"
-ENV PYTHONPATH="/home/${UNAME}/.local/lib/python3.11/site-packages:${PYTHONPATH:-}"
+ENV PYTHONPATH="/home/${UNAME}/.local/lib/python3.10/site-packages:${PYTHONPATH:-}"
 ENV PYTHONUNBUFFERED=1
 
 # ---------- Python Setup (Run as USER) ----------
 RUN python -m pip install --upgrade pip wheel setuptools
 
 # ==========================================
-# 1. Install DeepLabCut (Source)
+# 1. Install DeepLabCut (TF-compatible version from source)
 # ==========================================
 WORKDIR /home/${UNAME}
-RUN git clone https://github.com/DeepLabCut/DeepLabCut.git
+RUN git clone --branch v2.3.11 --depth 1 https://github.com/DeepLabCut/DeepLabCut.git
 
 WORKDIR /home/${UNAME}/DeepLabCut
-RUN python -m pip install -e .
+RUN python -m pip install -e ".[tf]"
 
 # ==========================================
-# 2. Install Anipose (Source)
+# 2. OpenCV Headless + NumPy Pin
 # ==========================================
-WORKDIR /home/${UNAME}
-RUN git clone https://github.com/lambdaloop/anipose.git
-
-WORKDIR /home/${UNAME}/anipose
-RUN python -m pip install -e .
+RUN python -m pip uninstall -y opencv-python opencv-python-headless || true \
+    && python -m pip install --no-cache-dir opencv-contrib-python-headless==4.7.0.72 \
+    && python -m pip install "numpy>=1.23,<2.0"
 
 # ==========================================
-# 3. OpenCV Headless + NumPy Pin
-# ==========================================
-RUN python -m pip uninstall -y opencv-python \
-    && python -m pip install --no-cache-dir opencv-contrib-python-headless==4.7.0.68 \
-    && python -m pip install numpy==1.26.4
-
-# ==========================================
-# 4. Celery + Redis (worker deps)
+# 3. Celery + Redis (worker deps)
 # ==========================================
 RUN python -m pip install --no-cache-dir \
     "celery[redis]==5.3.*" \
@@ -79,16 +70,15 @@ RUN python -m pip install --no-cache-dir \
 
 # ---------- Verification ----------
 RUN python -c "import deeplabcut; print('DLC Version:', deeplabcut.__version__)"
-RUN python -c "import anipose; print('Anipose installed successfully')"
 RUN python -c "import celery; print('Celery Version:', celery.__version__)"
 
 # ---------- Application Code ----------
 WORKDIR /app
 COPY --chown=${UNAME}:${GNAME} src/ /app/
 
-# ---------- Run Celery Worker ----------
+# ---------- Run Celery Worker — TensorFlow queue only ----------
 CMD ["celery", "-A", "tasks", "worker", \
      "--loglevel=info", \
      "--concurrency=1", \
      "--pool=solo", \
-     "-Q", "default"]
+     "-Q", "tensorflow"]

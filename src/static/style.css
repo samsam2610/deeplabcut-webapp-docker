@@ -1891,7 +1891,6 @@ footer {
 
 .fl-canvas-wrap {
   position: relative;
-  width: 100%;
   background: #000;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1901,7 +1900,9 @@ footer {
 
 #fl-canvas {
   display: block;
-  width: 100%;
+  /* No CSS width override — canvas display size is controlled entirely by the
+     width/height attributes so getBoundingClientRect() matches the resolution
+     and click-to-image coordinate mapping stays correct at all zoom levels. */
   cursor: crosshair;
   user-select: none;
 }
@@ -1981,6 +1982,12 @@ footer {
   opacity: .8;
 }
 .fl-bp-chip.labeled .fl-bp-check { display: block; }
+
+/* Eye-slash icon — shown when marker is visibility-toggled off */
+.fl-bp-eye-slash { display: none; flex-shrink: 0; opacity: .7; }
+.fl-bp-chip.vis-hidden .fl-bp-eye-slash { display: block; }
+.fl-bp-chip.vis-hidden .fl-bp-check     { display: none;  }
+.fl-bp-chip.vis-hidden { opacity: .5; }
 
 .fl-bp-hint {
   font-size: .8rem;

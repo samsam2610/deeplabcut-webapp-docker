@@ -211,6 +211,20 @@
           </svg>
           <span>Analyze Video / Frames</span>
         </button>
+        <button id="btn-open-view-analyzed" class="inspect-btn" style="width:100%;gap:.55rem">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+          </svg>
+          <span>View Analyzed Videos/Frames</span>
+        </button>
+        <button id="btn-open-annotate-video" class="inspect-btn" style="width:100%;gap:.55rem">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+            <rect x="2" y="2" width="9" height="7" rx="1.5" style="display:none"/>
+          </svg>
+          <span>Annotate Video</span>
+        </button>
         <button id="btn-open-gpu-monitor" class="inspect-btn" style="width:100%;gap:.55rem">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/><line x1="12" y1="17" x2="12" y2="21"/>
@@ -300,7 +314,6 @@
                 <span class="fe-window-label">Window:</span>
                 <label class="fe-window-input-label"><input type="number" id="fe-status-before" min="0" value="200" class="fe-window-input"> before</label>
                 <label class="fe-window-input-label"><input type="number" id="fe-status-after"  min="0" value="800" class="fe-window-input"> after</label>
-                <label class="fe-window-input-label fe-ignore-label"><input type="number" id="fe-status-ignore" min="0" value="200" class="fe-window-input"> ignore gap</label>
                 <button id="fe-status-apply" class="btn-sm fe-window-apply">Apply</button>
                 <span class="fe-window-hint">frames · click=navigate to window start · shift+click=extract</span>
               </div>
@@ -320,15 +333,14 @@
                 <span class="fe-window-label">Window:</span>
                 <label class="fe-window-input-label"><input type="number" id="fe-note-before" min="0" value="200" class="fe-window-input"> before</label>
                 <label class="fe-window-input-label"><input type="number" id="fe-note-after"  min="0" value="800" class="fe-window-input"> after</label>
-                <label class="fe-window-input-label fe-ignore-label"><input type="number" id="fe-note-ignore" min="0" value="200" class="fe-window-input"> ignore gap</label>
                 <button id="fe-note-apply" class="btn-sm fe-window-apply">Apply</button>
                 <span class="fe-window-hint">frames · click=navigate to window start · shift+click=extract</span>
               </div>
               <div id="fe-note-tags" class="fe-tag-filter"></div>
               <div id="fe-note-nav" class="fe-seg-nav hidden">
-                <button id="fe-note-prev" class="btn-sm fe-seg-nav-btn" title="Previous segment">&#8592; Prev</button>
+                <button id="fe-note-prev" class="btn-sm fe-seg-nav-btn" title="Previous note window (same tag)">&#8592; Prev</button>
                 <span id="fe-note-nav-info" class="fe-seg-nav-info"></span>
-                <button id="fe-note-next" class="btn-sm fe-seg-nav-btn" title="Next segment">Next &#8594;</button>
+                <button id="fe-note-next" class="btn-sm fe-seg-nav-btn" title="Next note window (same tag)">Next &#8594;</button>
               </div>
             </div>
           </div>
@@ -340,9 +352,27 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
             Extract Frame
           </button>
+          <button id="fe-btn-stop-extract" class="btn-sm btn-danger hidden" style="flex-shrink:0;padding:.5rem .9rem">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+            Stop
+          </button>
           <span id="fe-extract-count" class="fe-extract-count">0 frames saved</span>
         </div>
         <span id="fe-extract-status" class="fe-extract-status"></span>
+
+        <!-- Window-extract confirmation dialog -->
+        <dialog id="fe-extract-dialog" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.25rem 1.5rem;color:var(--text);max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.45)">
+          <p id="fe-dialog-msg" style="margin:0 0 .9rem;font-size:.9rem;line-height:1.4"></p>
+          <div id="fe-dialog-custom-wrap" style="display:none;margin-bottom:.85rem">
+            <label style="font-size:.82rem;display:block;margin-bottom:.35rem;opacity:.75">Frames to extract (from window start):</label>
+            <input id="fe-dialog-custom-input" type="number" min="1" style="width:100%;padding:.35rem .55rem;background:var(--input-bg,var(--surface));border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:.88rem;box-sizing:border-box">
+          </div>
+          <div style="display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap">
+            <button id="fe-dialog-cancel" class="btn-sm">Cancel</button>
+            <button id="fe-dialog-custom-btn" class="btn-sm">Custom amount…</button>
+            <button id="fe-dialog-confirm" class="btn-sm btn-create">Extract all</button>
+          </div>
+        </dialog>
 
         <!-- Hidden canvas for frame capture -->
         <canvas id="fe-canvas" style="display:none"></canvas>
@@ -358,7 +388,18 @@
           Close
         </button>
       </div>
-      <p class="subtitle">Click on the frame to place a marker. Right-click on the frame, press <kbd>Delete</kbd> (cursor over frame), or double-click a body part chip to remove its marker. Labels are saved as <code id="fl-scorer-filename" style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">CollectedData_&lt;scorer&gt;.csv</code>.</p>
+      <p class="subtitle">Labels are saved as <code id="fl-scorer-filename" style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">CollectedData_&lt;scorer&gt;.csv</code>.</p>
+      <div style="font-size:.75rem;color:var(--text-dim);background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:.45rem .65rem;margin-bottom:.75rem;display:grid;grid-template-columns:auto 1fr;gap:.2rem .75rem;line-height:1.5">
+        <span style="color:var(--text)"><kbd>Click</kbd></span>                                <span>Place selected body-part marker</span>
+        <span style="color:var(--text)"><kbd>→</kbd> <kbd>←</kbd></span>                      <span>Next / previous frame</span>
+        <span style="color:var(--text)"><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd></span>           <span>Next / previous body part</span>
+        <span style="color:var(--text)"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span> <span>Nudge selected marker 1 px (cursor inside canvas + marker placed) — hold <kbd>Shift</kbd> for 10 px</span>
+        <span style="color:var(--text)"><kbd>Space</kbd></span>                                <span>Toggle visibility of selected marker — hides from view, preserves data</span>
+        <span style="color:var(--text)"><kbd>⌫</kbd> Backspace</span>                          <span>Delete selected body-part marker</span>
+        <span style="color:var(--text)"><kbd>Del</kbd> / Right-click canvas</span>             <span>Delete selected marker (cursor inside canvas)</span>
+        <span style="color:var(--text)">Double-click chip</span>                               <span>Toggle marker visibility</span>
+        <span style="color:var(--text)">Double-click <em>Clear Frame</em></span>               <span>Erase all markers on the current frame</span>
+      </div>
 
       <!-- ── Labeled-data folder selector ──────────────────────── -->
       <div style="margin-bottom:.75rem">
@@ -376,6 +417,80 @@
           </button>
         </div>
         <span id="fl-stem-status" class="fe-extract-status" style="margin-top:.3rem"></span>
+      </div>
+
+      <!-- ── Machine pre-labeling panel ──────────────────────────── -->
+      <div style="margin-bottom:.75rem">
+        <label style="display:flex;align-items:center;gap:.5rem;font-size:.82rem;cursor:pointer;user-select:none">
+          <input type="checkbox" id="fl-ml-checkbox" style="accent-color:var(--accent)">
+          Pre-label frames with trained model
+        </label>
+        <div id="fl-ml-opts" class="hidden" style="margin-top:.55rem;padding:.6rem .7rem;background:var(--surface);border:1px solid var(--border);border-radius:6px">
+          <!-- Model snapshot -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-snapshot" style="white-space:nowrap">Model snapshot</label>
+            <select id="fl-ml-snapshot" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+              <option value="-1">Latest (from config)</option>
+            </select>
+            <button class="btn-sm" id="fl-ml-refresh-snap" title="Refresh snapshot list" style="padding:.2rem .45rem;font-size:.75rem">↺</button>
+          </div>
+          <!-- Shuffle -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-shuffle">Shuffle</label>
+            <input type="number" id="fl-ml-shuffle" value="1" min="1" max="20" style="width:5rem" />
+          </div>
+          <!-- Training set index -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-tsidx">Training set index</label>
+            <input type="number" id="fl-ml-tsidx" value="0" min="0" style="width:5rem" />
+          </div>
+          <!-- GPU -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-gpu">GPU to use</label>
+            <select id="fl-ml-gpu" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+              <option value="">auto</option>
+            </select>
+          </div>
+          <!-- Likelihood threshold -->
+          <div class="scorer-row" style="margin-bottom:.7rem">
+            <label for="fl-ml-likelihood" title="Predictions below this confidence score will be discarded">Likelihood threshold</label>
+            <input type="number" id="fl-ml-likelihood" value="0.9" min="0" max="1" step="0.05" style="width:5rem" />
+          </div>
+          <!-- Run / Stop -->
+          <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.3rem">
+            <button id="fl-ml-run-btn" class="btn-sm btn-create">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run Machine Labels
+            </button>
+            <button id="fl-ml-run-all-btn" class="btn-sm btn-create">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+              Run All Folders
+            </button>
+            <button id="fl-ml-stop-btn" class="btn-sm btn-danger hidden">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+              Stop
+            </button>
+          </div>
+          <span id="fl-ml-status" class="fe-extract-status"></span>
+          <!-- Progress -->
+          <div id="fl-ml-progress" class="hidden" style="margin-top:.8rem">
+            <div class="progress-header">
+              <span>Machine Labeling</span>
+              <span id="fl-ml-task-id" class="task-id-badge"></span>
+            </div>
+            <div class="progress-track">
+              <div id="fl-ml-progress-bar" class="progress-fill"></div>
+            </div>
+            <div class="progress-meta">
+              <span id="fl-ml-progress-stage">Queued</span>
+              <span id="fl-ml-progress-pct">0 %</span>
+            </div>
+            <div class="log-panel">
+              <div class="log-title">Log</div>
+              <pre id="fl-ml-log-output">Waiting for output…</pre>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- ── Player section (shown when a stem is selected) ─────── -->
@@ -396,9 +511,14 @@
         <!-- Marker display controls -->
         <div style="display:flex;align-items:center;gap:1.2rem;margin-bottom:.5rem;flex-wrap:wrap">
           <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Viewer size
+            <input type="range" id="fl-zoom" min="50" max="300" value="100" step="25" style="width:80px;accent-color:var(--accent)">
+            <span id="fl-zoom-val" style="min-width:2.5rem;text-align:right;color:var(--text)">100 %</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
             Marker size
-            <input type="range" id="fl-marker-size" min="2" max="24" value="6" style="width:80px;accent-color:var(--accent)">
-            <span id="fl-marker-size-val" style="min-width:1.4rem;text-align:right;color:var(--text)">6</span>
+            <input type="range" id="fl-marker-size" min="1" max="24" value="4" style="width:80px;accent-color:var(--accent)">
+            <span id="fl-marker-size-val" style="min-width:1.4rem;text-align:right;color:var(--text)">4</span>
           </label>
           <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);cursor:pointer;user-select:none">
             <input type="checkbox" id="fl-show-names" checked style="accent-color:var(--accent)">
@@ -424,6 +544,11 @@
           <button id="fl-btn-save" class="btn-sm btn-create" style="flex:1;justify-content:center;padding:.5rem 1rem">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             Save Labels
+          </button>
+          <button id="fl-btn-clear-frame" class="btn-sm" title="Double-click to erase all markers on this frame"
+            style="padding:.5rem .8rem;border-color:var(--danger);color:var(--danger);opacity:.75">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            Clear Frame
           </button>
           <span id="fl-save-status" class="fl-save-status"></span>
         </div>
@@ -724,6 +849,215 @@
         <div class="log-panel">
           <div class="log-title">Log</div>
           <pre id="av-log-output">Waiting for output…</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── View Analyzed Videos / Frames card ──────────────── -->
+    <section class="card dlc-theme hidden" id="view-analyzed-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>View Analyzed Videos / Frames</h2>
+        <button class="btn-sm" id="btn-close-view-analyzed" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Browse and play labeled videos or frame-by-frame labeled image folders produced by the analysis step.</p>
+
+      <!-- Content list -->
+      <div style="margin-bottom:.7rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+          <label style="font-size:.78rem;color:var(--text-dim)">Labeled content</label>
+          <button class="btn-sm" id="va-refresh-btn" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
+        </div>
+        <div id="va-content-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
+          <p class="explorer-empty" id="va-content-empty">Loading…</p>
+        </div>
+      </div>
+
+      <!-- Player section (shown after a selection is made) -->
+      <div id="va-player-section" class="hidden">
+        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap">
+          <span id="va-selected-name" style="font-family:var(--mono);font-size:.78rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
+          <button class="btn-sm" id="va-btn-back" style="padding:.2rem .6rem;font-size:.75rem;flex-shrink:0">&#8592; Back</button>
+        </div>
+
+        <!-- Viewer size control -->
+        <div style="display:flex;align-items:center;gap:1.2rem;margin-bottom:.5rem">
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Viewer size
+            <input type="range" id="va-zoom" min="50" max="300" value="100" step="25" style="width:80px;accent-color:var(--accent)">
+            <span id="va-zoom-val" style="min-width:2.5rem;text-align:right;color:var(--text)">100 %</span>
+          </label>
+        </div>
+
+        <div id="va-video-wrap" style="position:relative;background:#000;border-radius:8px;border:1px solid var(--border);margin-bottom:.75rem">
+          <img id="va-frame-img" alt="" draggable="false" style="width:100%;display:block;height:auto" />
+          <div id="va-frame-spinner" class="fe-frame-spinner hidden"></div>
+        </div>
+
+        <!-- Controls row -->
+        <div class="fe-controls">
+          <button id="va-btn-play" class="btn-sm fe-ctrl-btn" title="Play / Pause">
+            <svg id="va-play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <svg id="va-pause-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" class="hidden"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          </button>
+          <button id="va-btn-prev" class="btn-sm fe-ctrl-btn" title="Previous frame (&#8592;)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/><line x1="9" y1="6" x2="9" y2="18"/></svg>
+          </button>
+          <button id="va-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (&#8594;)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
+          </button>
+          <span class="fe-frame-counter" id="va-frame-counter">Frame 0 / 0</span>
+          <span class="fe-time-display" id="va-time-display">0.000 s</span>
+        </div>
+
+        <!-- Seek slider -->
+        <input type="range" id="va-seek" class="fe-seek" min="0" max="1000" value="0" step="1" />
+
+        <span id="va-status" class="fe-extract-status"></span>
+      </div>
+    </section>
+
+    <!-- ─── Video Annotator card ─────────────────────────────── -->
+    <section class="card dlc-theme hidden" id="annotate-video-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>Video Annotator</h2>
+        <button class="btn-sm" id="btn-close-annotate-video" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Browse to any video on the mounted drive, load or create a companion CSV, and annotate frames with notes and status tags.</p>
+
+      <!-- ── Video file browser ──────────────────────────────── -->
+      <div id="anv-source-section" style="margin-bottom:.75rem">
+        <label style="display:block;margin-bottom:.4rem">Video file</label>
+        <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.4rem">
+          <input type="text" id="anv-video-path" placeholder="/userdata/path/to/video.mp4"
+            spellcheck="false" autocorrect="off" autocapitalize="off"
+            style="flex:1;min-width:0;font-family:var(--mono);font-size:.78rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.3rem .5rem" />
+          <button id="anv-browse-btn" class="btn-sm btn-server-pick" title="Browse mounted drive">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            Browse
+          </button>
+          <button id="anv-load-btn" class="btn-sm btn-create">Load</button>
+        </div>
+        <!-- File browser panel -->
+        <div id="anv-browser" class="hidden"
+          style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.3rem .4rem;font-size:.77rem;margin-bottom:.5rem">
+        </div>
+        <span id="anv-load-status" class="fe-extract-status"></span>
+      </div>
+
+      <!-- ── Player section (shown after video loaded) ─────────── -->
+      <div id="anv-player-section" class="hidden">
+
+        <!-- Video wrap: no overflow:hidden, no max-height — scales at aspect ratio -->
+        <div id="anv-video-wrap" style="position:relative;background:#000;border-radius:8px;border:1px solid var(--border);margin-bottom:.75rem">
+          <img id="anv-frame-img" alt="" draggable="false" style="width:100%;display:block;height:auto;user-select:none" />
+          <div id="anv-frame-spinner" class="fe-frame-spinner hidden"></div>
+        </div>
+
+        <!-- Controls row -->
+        <div class="fe-controls">
+          <button id="anv-btn-play" class="btn-sm fe-ctrl-btn" title="Play / Pause">
+            <svg id="anv-play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <svg id="anv-pause-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" class="hidden"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          </button>
+          <button id="anv-btn-prev" class="btn-sm fe-ctrl-btn" title="Previous frame (←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/><line x1="9" y1="6" x2="9" y2="18"/></svg>
+          </button>
+          <button id="anv-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
+          </button>
+          <span class="fe-frame-counter" id="anv-frame-counter" title="Double-click to jump to frame">Frame 0 / 0<input id="anv-frame-jump" class="fe-frame-jump hidden" type="number" min="0" step="1" /></span>
+          <span class="fe-time-display" id="anv-time-display">0.000 s</span>
+        </div>
+
+        <!-- Seek slider -->
+        <input type="range" id="anv-seek" class="fe-seek" min="0" max="1000" value="0" step="1" />
+
+        <!-- Viewer size + Refresh CSV row -->
+        <div style="display:flex;align-items:center;gap:1.2rem;margin-top:.4rem;margin-bottom:.2rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Viewer size
+            <input type="range" id="anv-zoom" min="50" max="300" value="100" step="25" style="width:80px;accent-color:var(--accent)">
+            <span id="anv-zoom-val" style="min-width:2.5rem;text-align:right;color:var(--text)">100 %</span>
+          </label>
+          <button id="anv-refresh-csv-btn" class="btn-sm" style="margin-left:auto" title="Reload CSV from disk">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh CSV
+          </button>
+        </div>
+
+        <!-- ── CSV annotation bars ───────────────────────────── -->
+        <div id="anv-csv-bars" class="hidden">
+          <div id="anv-status-bar-wrap" class="hidden">
+            <div class="fe-csv-bar-label">Status</div>
+            <div id="anv-status-bar" class="fe-timeline-bar"></div>
+          </div>
+          <div id="anv-note-bar-wrap" class="hidden">
+            <div class="fe-csv-bar-label">Notes</div>
+            <div id="anv-note-bar" class="fe-timeline-bar"></div>
+          </div>
+        </div>
+
+        <!-- ── CSV status row ──────────────────────────────────── -->
+        <div id="anv-csv-section" style="margin-top:.75rem;padding:.55rem .7rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
+          <!-- No CSV found -->
+          <div id="anv-csv-none">
+            <span style="font-size:.82rem;color:var(--text-dim)">No companion CSV found. Create one to start annotating.</span>
+            <div style="margin-top:.5rem;display:flex;align-items:center;gap:.6rem">
+              <button id="anv-create-csv-btn" class="btn-sm btn-create">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Create CSV
+              </button>
+              <span id="anv-csv-create-status" class="fe-extract-status"></span>
+            </div>
+          </div>
+          <!-- CSV loaded -->
+          <div id="anv-csv-loaded" class="hidden" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+            <span style="font-size:.75rem;color:var(--text-dim);flex-shrink:0">CSV: </span>
+            <span id="anv-csv-path-display" style="font-family:var(--mono);font-size:.73rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
+          </div>
+        </div>
+
+        <!-- ── Annotation panel (shown when CSV ready) ─────────── -->
+        <div id="anv-annotation-panel" class="hidden" style="margin-top:.75rem">
+          <div style="font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim);margin-bottom:.45rem">
+            Annotate frame <span id="anv-annotate-frame-num" style="color:var(--text);font-family:var(--mono)">0</span>
+          </div>
+
+          <!-- Note + Status row -->
+          <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.55rem">
+            <label style="font-size:.78rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Note</label>
+            <input type="text" id="anv-note-input" placeholder="Enter note…"
+              style="flex:1;min-width:120px;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.28rem .5rem" />
+            <label style="font-size:.78rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Status</label>
+            <input type="number" id="anv-status-input" value="0"
+              style="width:5rem;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.28rem .4rem" />
+            <button id="anv-save-annotation-btn" class="btn-sm btn-create" style="padding:.3rem .8rem">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Save
+            </button>
+          </div>
+          <span id="anv-save-status" class="fe-extract-status"></span>
+
+          <!-- ── Note tags panel ──────────────────────────────── -->
+          <div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border)">
+            <div style="font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim);margin-bottom:.4rem">Note tags — click to apply to current frame</div>
+            <div id="anv-tag-chips" class="fe-tag-filter" style="margin-bottom:.4rem;min-height:1.4rem"></div>
+            <!-- Add new tag -->
+            <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+              <input type="text" id="anv-new-tag-input" placeholder="New tag name…"
+                style="flex:1;min-width:120px;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.25rem .45rem" />
+              <button id="anv-add-tag-btn" class="btn-sm">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add Tag
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </section>
