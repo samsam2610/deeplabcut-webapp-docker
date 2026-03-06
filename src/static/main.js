@@ -1955,7 +1955,7 @@
         const val = row[field];
         if (!val) return;
         const last = runs[runs.length - 1];
-        if (last && last.value === val) { last.endFrame = row.frame_number; }
+        if (last && last.value === val && row.frame_number === last.endFrame + 1) { last.endFrame = row.frame_number; }
         else { runs.push({ value: val, startFrame: row.frame_number, endFrame: row.frame_number }); }
       });
       return { runs, colorMap };
