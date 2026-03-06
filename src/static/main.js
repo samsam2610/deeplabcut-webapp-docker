@@ -2188,6 +2188,24 @@
     const flMarkerSizeVal   = document.getElementById("fl-marker-size-val");
     const flShowNamesInput  = document.getElementById("fl-show-names");
 
+    // ── Machine-labeling elements ────────────────────────────────
+    const flMlCheckbox     = document.getElementById("fl-ml-checkbox");
+    const flMlOpts         = document.getElementById("fl-ml-opts");
+    const flMlSnapshot     = document.getElementById("fl-ml-snapshot");
+    const flMlRefreshSnap  = document.getElementById("fl-ml-refresh-snap");
+    const flMlShuffle      = document.getElementById("fl-ml-shuffle");
+    const flMlRunBtn       = document.getElementById("fl-ml-run-btn");
+    const flMlRunAllBtn    = document.getElementById("fl-ml-run-all-btn");
+    const flMlLikelihood   = document.getElementById("fl-ml-likelihood");
+    const flMlStopBtn      = document.getElementById("fl-ml-stop-btn");
+    const flMlStatus       = document.getElementById("fl-ml-status");
+    const flMlProgress     = document.getElementById("fl-ml-progress");
+    const flMlTaskId       = document.getElementById("fl-ml-task-id");
+    const flMlProgressBar  = document.getElementById("fl-ml-progress-bar");
+    const flMlProgressStage= document.getElementById("fl-ml-progress-stage");
+    const flMlProgressPct  = document.getElementById("fl-ml-progress-pct");
+    const flMlLogOutput    = document.getElementById("fl-ml-log-output");
+
     // ── State ───────────────────────────────────────────────────
     let _flBodyparts   = [];
     let _flScorer      = "User";
@@ -2199,9 +2217,222 @@
     let _flSelectedBp  = null;
     let _flImg         = new Image();
     let _flImgLoaded   = false;
-    let _flMarkerRadius   = 6;
+    let _flMarkerRadius   = 4;
     let _flShowNames      = true;
     let _flCursorInCanvas = false;
+    let _flZoom           = 100;
+    let _flHidden         = {};  // {frame_name: {bp: bool}} — visibility-toggled markers  // percent of container width (100 = fit to card)
+
+    // Machine labeling state (persists across folder changes)
+    let _flMlPollTimer   = null;
+    let _flMlActiveTask  = null;
+    let _flMlQueue       = [];   // stems queued for "Run All Folders"
+    let _flMlQueueIdx    = -1;   // current index in queue (-1 = single-folder mode)
+    let _flMlQueueTotal  = 0;
+
+    // ── Machine labeling: toggle panel ──────────────────────────
+    flMlCheckbox.addEventListener("change", () => {
+      flMlOpts.classList.toggle("hidden", !flMlCheckbox.checked);
+      if (flMlCheckbox.checked) {
+        _flMlLoadSnapshots();
+        _populateGpuSelect("fl-ml-gpu");
+      }
+    });
+
+    // ── Machine labeling: load snapshots ────────────────────────
+    async function _flMlLoadSnapshots() {
+      const shuffle = flMlShuffle.value || "1";
+      try {
+        const res  = await fetch(`/dlc/project/snapshots?shuffle=${encodeURIComponent(shuffle)}`);
+        const data = await res.json();
+        if (data.error) return;
+        flMlSnapshot.innerHTML = "";
+        const latestOpt = document.createElement("option");
+        latestOpt.value = "-1";
+        latestOpt.textContent = data.latest_label
+          ? `Latest — ${data.latest_label}${data.latest_iteration != null ? "  ·  iter " + data.latest_iteration.toLocaleString() : ""}`
+          : "Latest (from config)";
+        flMlSnapshot.appendChild(latestOpt);
+        (data.snapshots || []).forEach(s => {
+          const opt = document.createElement("option");
+          opt.value = String(s.index);
+          opt.textContent = `${s.label}${s.iteration != null ? "  ·  iter " + s.iteration.toLocaleString() : ""}`;
+          flMlSnapshot.appendChild(opt);
+        });
+      } catch (err) {
+        console.error("flMlLoadSnapshots:", err);
+      }
+    }
+
+    flMlRefreshSnap.addEventListener("click", _flMlLoadSnapshots);
+    flMlShuffle.addEventListener("change", _flMlLoadSnapshots);
+
+    // ── Machine labeling: run / stop ────────────────────────────
+    function _flMlSetRunning(running) {
+      flMlRunBtn.classList.toggle("hidden",    running);
+      flMlRunAllBtn.classList.toggle("hidden", running);
+      flMlStopBtn.classList.toggle("hidden",  !running);
+      flMlRunBtn.disabled    = running;
+      flMlRunAllBtn.disabled = running;
+    }
+
+    function _flMlQueueLabel() {
+      if (_flMlQueueIdx < 0 || _flMlQueueTotal <= 1) return "";
+      return ` (${_flMlQueueIdx + 1}/${_flMlQueueTotal}: ${_flMlQueue[_flMlQueueIdx]})`;
+    }
+
+    function _flMlStartPolling(taskId) {
+      flMlProgress.classList.remove("hidden", "state-success", "state-fail");
+      flMlTaskId.textContent        = taskId.slice(0, 12) + "…";
+      flMlProgressBar.style.width   = "0%";
+      flMlProgressPct.textContent   = "0 %";
+      flMlProgressStage.textContent = "Queued" + _flMlQueueLabel();
+      flMlLogOutput.textContent     = "Waiting for output…";
+      _flMlSetRunning(true);
+      if (_flMlPollTimer) clearInterval(_flMlPollTimer);
+      _flMlPollTimer = setInterval(() => _flMlPoll(taskId), 2000);
+      _flMlPoll(taskId);
+    }
+
+    async function _flMlPoll(taskId) {
+      try {
+        const res  = await fetch(`/status/${taskId}`);
+        const data = await res.json();
+        const pct  = Math.min(data.progress || 0, 100);
+        flMlProgressBar.style.width   = pct + "%";
+        flMlProgressPct.textContent   = pct + " %";
+        flMlProgressStage.textContent = (data.stage || data.state) + _flMlQueueLabel();
+        if (data.log) {
+          flMlLogOutput.textContent = data.log;
+          flMlLogOutput.scrollTop   = flMlLogOutput.scrollHeight;
+        }
+        if (data.state === "SUCCESS") {
+          clearInterval(_flMlPollTimer); _flMlPollTimer = null;
+          if (data.result && data.result.log) flMlLogOutput.textContent = data.result.log;
+          // Reload labels for the current stem so the user sees machine labels immediately
+          if (_flVideoStem) {
+            const found = _flStemData.find(s => s.video_stem === _flVideoStem);
+            if (found) await _flSelectStem(found.video_stem, found.frames);
+          }
+          // Advance queue if running all folders
+          if (_flMlQueueIdx >= 0 && _flMlQueueIdx < _flMlQueue.length - 1) {
+            _flMlQueueIdx++;
+            flMlStatus.textContent = `Folder ${_flMlQueueIdx + 1}/${_flMlQueueTotal} done — starting next…`;
+            flMlStatus.className   = "fe-extract-status ok";
+            await _flMlDispatch(_flMlQueue[_flMlQueueIdx]);
+          } else {
+            // Done (single folder or last in queue)
+            _flMlQueue = []; _flMlQueueIdx = -1; _flMlQueueTotal = 0;
+            flMlProgress.classList.add("state-success");
+            flMlProgressStage.textContent = "✓ Machine labeling complete";
+            flMlProgressBar.style.width   = "100%";
+            flMlProgressPct.textContent   = "100 %";
+            flMlStatus.textContent = "Labels loaded — review and correct as needed.";
+            flMlStatus.className   = "fe-extract-status ok";
+            _flMlSetRunning(false);
+          }
+        }
+        if (data.state === "FAILURE" || data.state === "REVOKED") {
+          clearInterval(_flMlPollTimer); _flMlPollTimer = null;
+          _flMlQueue = []; _flMlQueueIdx = -1; _flMlQueueTotal = 0;
+          const userStopped = data.state === "REVOKED" || (data.error || "").includes("__USER_STOPPED__");
+          flMlProgress.classList.add("state-fail");
+          flMlProgressStage.textContent = userStopped ? "✗ Stopped by user" : "✗ " + (data.error || "Failed").split("\n")[0];
+          if (!userStopped) flMlLogOutput.textContent = data.error || "An unknown error occurred.";
+          flMlStatus.textContent = userStopped ? "Machine labeling stopped." : "";
+          flMlStatus.className   = "fe-extract-status";
+          _flMlSetRunning(false);
+        }
+      } catch (err) {
+        console.error("flMlPoll:", err);
+      }
+    }
+
+    function _flMlBuildBody(videoStem) {
+      const snapVal = flMlSnapshot.value;
+      return {
+        video_stem:           videoStem,
+        shuffle:              parseInt(flMlShuffle.value) || 1,
+        trainingsetindex:     parseInt(document.getElementById("fl-ml-tsidx").value) ?? 0,
+        gputouse:             document.getElementById("fl-ml-gpu").value !== ""
+                                ? parseInt(document.getElementById("fl-ml-gpu").value) : null,
+        snapshot_index:       snapVal !== "-1" ? parseInt(snapVal) : null,
+        likelihood_threshold: parseFloat(flMlLikelihood.value) || 0.9,
+      };
+    }
+
+    async function _flMlDispatch(videoStem) {
+      try {
+        const res  = await fetch("/dlc/project/machine-label-frames", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify(_flMlBuildBody(videoStem)),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          flMlStatus.textContent = data.error || "Failed to start machine labeling.";
+          flMlStatus.className   = "fe-extract-status err";
+          _flMlQueue = []; _flMlQueueIdx = -1; _flMlQueueTotal = 0;
+          _flMlSetRunning(false);
+          return;
+        }
+        _flMlActiveTask = data.task_id;
+        _flMlStartPolling(data.task_id);
+      } catch (err) {
+        flMlStatus.textContent = "Network error: " + err.message;
+        flMlStatus.className   = "fe-extract-status err";
+        _flMlQueue = []; _flMlQueueIdx = -1; _flMlQueueTotal = 0;
+        _flMlSetRunning(false);
+      }
+    }
+
+    flMlRunBtn.addEventListener("click", async () => {
+      if (!_flVideoStem) {
+        flMlStatus.textContent = "Select a labeled-data folder first.";
+        flMlStatus.className   = "fe-extract-status err";
+        return;
+      }
+      flMlStatus.textContent = "";
+      flMlStatus.className   = "fe-extract-status";
+      _flMlQueue = []; _flMlQueueIdx = -1; _flMlQueueTotal = 0;
+      await _flMlDispatch(_flVideoStem);
+    });
+
+    flMlRunAllBtn.addEventListener("click", async () => {
+      if (!_flStemData || _flStemData.length === 0) {
+        flMlStatus.textContent = "No labeled-data folders loaded.";
+        flMlStatus.className   = "fe-extract-status err";
+        return;
+      }
+      flMlStatus.textContent = "";
+      flMlStatus.className   = "fe-extract-status";
+      _flMlQueue      = _flStemData.map(s => s.video_stem);
+      _flMlQueueIdx   = 0;
+      _flMlQueueTotal = _flMlQueue.length;
+      flMlStatus.textContent = `Starting ${_flMlQueueTotal} folder(s)…`;
+      flMlStatus.className   = "fe-extract-status ok";
+      await _flMlDispatch(_flMlQueue[0]);
+    });
+
+    flMlStopBtn.addEventListener("click", async () => {
+      if (!_flMlActiveTask) return;
+      // Cancel the whole queue
+      _flMlQueue = []; _flMlQueueIdx = -1; _flMlQueueTotal = 0;
+      flMlStopBtn.disabled = true;
+      try {
+        await fetch("/dlc/project/machine-label-frames/stop", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ task_id: _flMlActiveTask }),
+        });
+        flMlStatus.textContent = "Stop signal sent.";
+        flMlStatus.className   = "fe-extract-status";
+      } catch (err) {
+        flMlStatus.textContent = "Stop error: " + err.message;
+        flMlStatus.className   = "fe-extract-status err";
+        flMlStopBtn.disabled = false;
+      }
+    });
 
     function _flUpdateScorerFilename() {
       if (flScorerFilename) flScorerFilename.textContent = `CollectedData_${_flScorer}.csv`;
@@ -2229,6 +2460,15 @@
     });
 
     // ── Marker display controls ──────────────────────────────────
+    const flZoomInput = document.getElementById("fl-zoom");
+    const flZoomVal   = document.getElementById("fl-zoom-val");
+
+    flZoomInput.addEventListener("input", () => {
+      _flZoom = parseInt(flZoomInput.value, 10);
+      flZoomVal.textContent = _flZoom + " %";
+      if (_flImgLoaded) { _flFitCanvas(); _flDraw(); }
+    });
+
     flMarkerSizeInput.addEventListener("input", () => {
       _flMarkerRadius = parseInt(flMarkerSizeInput.value, 10);
       flMarkerSizeVal.textContent = _flMarkerRadius;
@@ -2334,11 +2574,13 @@
         chip.innerHTML =
           `<span class="fl-bp-dot"></span>` +
           `<span class="fl-bp-name">${bp}</span>` +
-          `<svg class="fl-bp-check" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+          `<svg class="fl-bp-check" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>` +
+          `<svg class="fl-bp-eye-slash" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
         chip.addEventListener("click", () => _flSelectBp(bp));
-        chip.addEventListener("dblclick", () => {
+        chip.addEventListener("dblclick", e => {
+          e.preventDefault();
           _flSelectBp(bp);
-          _flRemoveBpLabel(bp);
+          _flToggleVisibility(bp);
         });
         flBodypartList.appendChild(chip);
       });
@@ -2385,10 +2627,39 @@
     }
 
     function _flFitCanvas() {
-      const w     = flCanvas.parentElement.clientWidth || 480;
-      const scale = w / _flImg.naturalWidth;
-      flCanvas.width  = w;
-      flCanvas.height = Math.round(_flImg.naturalHeight * scale);
+      const wrap = flCanvas.parentElement;
+      const cs   = getComputedStyle(flCard);
+      const padL = parseFloat(cs.paddingLeft)  || 0;
+      const padR = parseFloat(cs.paddingRight) || 0;
+
+      // Base width = card's inner content width (canvas at 100% zoom)
+      const baseW = flCard.clientWidth - padL - padR;
+
+      // Maximum width: fill the viewport minus a small margin on each side.
+      // The card is centred, so the canvas expands symmetrically beyond its border.
+      const maxW    = Math.max(baseW, window.innerWidth - 32);
+      const targetW = Math.min(Math.round(baseW * (_flZoom / 100)), Math.floor(maxW));
+
+      flCanvas.width  = targetW;
+      flCanvas.height = Math.round(_flImg.naturalHeight * (targetW / _flImg.naturalWidth));
+
+      // Break out of card padding symmetrically — card has no overflow:hidden so
+      // the wrapper renders beyond the card border without clipping.
+      const extra = targetW - baseW;
+      if (extra > 0) {
+        wrap.style.width      = targetW + "px";
+        wrap.style.marginLeft = `-${extra / 2}px`;
+      } else {
+        wrap.style.width      = "";
+        wrap.style.marginLeft = "";
+      }
+    }
+
+    // Re-fit whenever the card width changes (window resize, layout shifts)
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(() => {
+        if (_flImgLoaded) { _flFitCanvas(); _flDraw(); }
+      }).observe(flCard);
     }
 
     function _flDraw() {
@@ -2405,6 +2676,7 @@
       _flBodyparts.forEach((bp, i) => {
         const pt = frameLabels[bp];
         if (!pt) return;
+        if (_flHidden[fname] && _flHidden[fname][bp]) return;
         const cx    = pt[0] * scaleX;
         const cy    = pt[1] * scaleY;
         const color = _flColor(i);
@@ -2463,10 +2735,40 @@
       const fname = _flFrames[_flFrameIdx];
       if (!fname || !_flLabels[fname]) return;
       _flLabels[fname][bp] = null;
+      // Also clear hidden state when marker is deleted
+      if (_flHidden[fname]) delete _flHidden[fname][bp];
       _flDraw();
       _flUpdateBpChipStatus();
       _flUpdateLabelCount();
     }
+
+    function _flToggleVisibility(bp) {
+      const fname = _flFrames[_flFrameIdx];
+      if (!fname) return;
+      if (!_flHidden[fname]) _flHidden[fname] = {};
+      _flHidden[fname][bp] = !_flHidden[fname][bp];
+      _flDraw();
+      _flUpdateBpChipStatus();
+    }
+
+    // Clear all body-part markers on the currently displayed frame
+    function _flClearFrame() {
+      const fname = _flFrames[_flFrameIdx];
+      if (!fname) return;
+      if (!_flLabels[fname]) _flLabels[fname] = {};
+      _flBodyparts.forEach(bp => { _flLabels[fname][bp] = null; });
+      delete _flHidden[fname];
+      _flDraw();
+      _flUpdateBpChipStatus();
+      _flUpdateLabelCount();
+    }
+
+    // Double-click on Clear Frame button erases all markers on current frame
+    document.getElementById("fl-btn-clear-frame").addEventListener("dblclick", e => {
+      e.preventDefault();
+      if (!_flVideoStem) return;
+      _flClearFrame();
+    });
 
     // Auto-advance to the next unlabeled body part (napari behavior)
     function _flAutoAdvanceBp() {
@@ -2486,8 +2788,11 @@
       const fname       = _flFrames[_flFrameIdx];
       const frameLabels = _flLabels[fname] || {};
       flBodypartList.querySelectorAll(".fl-bp-chip").forEach(c => {
-        const pt = frameLabels[c.dataset.bp];
-        c.classList.toggle("labeled", !!(pt && pt[0] !== null));
+        const bp = c.dataset.bp;
+        const pt = frameLabels[bp];
+        const isHidden = !!(_flHidden[fname] && _flHidden[fname][bp]);
+        c.classList.toggle("labeled",    !!(pt && pt[0] !== null));
+        c.classList.toggle("vis-hidden", !!(pt && pt[0] !== null) && isHidden);
       });
     }
 
@@ -2505,9 +2810,61 @@
     document.addEventListener("keydown", e => {
       if (flCard.classList.contains("hidden")) return;
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+
+      // WASD nudge: move the selected marker when cursor is inside the canvas
+      // and the current frame already has a point placed for the active body part.
+      const _wasdKeys = ["a", "d", "w", "s"];
+      if (_wasdKeys.includes(e.key) && _flCursorInCanvas && _flSelectedBp && _flVideoStem) {
+        const fname = _flFrames[_flFrameIdx];
+        const pt    = fname && _flLabels[fname] && _flLabels[fname][_flSelectedBp];
+        if (pt && pt[0] !== null) {
+          e.preventDefault();
+          const step = e.shiftKey ? 10 : 1;
+          let [x, y] = pt;
+          if (e.key === "a") x -= step;
+          if (e.key === "d") x += step;
+          if (e.key === "w") y -= step;
+          if (e.key === "s") y += step;
+          // Clamp to image dimensions
+          x = Math.max(0, Math.min(x, _flImg.naturalWidth  - 1));
+          y = Math.max(0, Math.min(y, _flImg.naturalHeight - 1));
+          _flLabels[fname][_flSelectedBp] = [x, y];
+          _flDraw();
+          return;
+        }
+      }
+
+      // Tab / Shift+Tab — cycle through body parts
+      if (e.key === "Tab" && _flVideoStem) {
+        e.preventDefault();
+        const cur  = _flBodyparts.indexOf(_flSelectedBp);
+        const next = e.shiftKey
+          ? (_flBodyparts.length + cur - 1) % _flBodyparts.length
+          : (cur + 1) % _flBodyparts.length;
+        _flSelectBp(_flBodyparts[next]);
+        return;
+      }
+
+      // Spacebar — toggle visibility of selected marker
+      if (e.key === " " && _flSelectedBp && _flVideoStem) {
+        e.preventDefault();
+        _flToggleVisibility(_flSelectedBp);
+        return;
+      }
+
+      // Backspace — delete selected marker (no cursor-in-canvas requirement)
+      if (e.key === "Backspace" && _flSelectedBp && _flVideoStem) {
+        e.preventDefault();
+        _flRemoveBpLabel(_flSelectedBp);
+        return;
+      }
+
+      // Frame navigation (arrow keys)
       if (e.key === "ArrowLeft")  { e.preventDefault(); _flShowFrame(_flFrameIdx - 1); }
       if (e.key === "ArrowRight") { e.preventDefault(); _flShowFrame(_flFrameIdx + 1); }
-      if ((e.key === "Delete" || e.key === "Backspace") && _flCursorInCanvas && _flSelectedBp && _flVideoStem) {
+
+      // Delete (with cursor over canvas) — also deletes selected marker
+      if (e.key === "Delete" && _flCursorInCanvas && _flSelectedBp && _flVideoStem) {
         e.preventDefault();
         _flRemoveBpLabel(_flSelectedBp);
       }
@@ -3167,8 +3524,9 @@
 
     // ── Snapshots ─────────────────────────────────────────────
     async function _avLoadSnapshots() {
+      const shuffle = document.getElementById("av-shuffle").value || "1";
       try {
-        const res  = await fetch("/dlc/project/snapshots");
+        const res  = await fetch(`/dlc/project/snapshots?shuffle=${encodeURIComponent(shuffle)}`);
         const data = await res.json();
         if (data.error) return;
 
@@ -3203,6 +3561,9 @@
     }
 
     avRefreshSnaps.addEventListener("click", _avLoadSnapshots);
+
+    // Reload snapshots when shuffle changes (indices are per-shuffle)
+    document.getElementById("av-shuffle").addEventListener("change", _avLoadSnapshots);
 
     // ── Project browser ───────────────────────────────────────
     const _AV_VIDEO_EXTS = new Set(['.mp4','.avi','.mov','.mkv','.wmv','.m4v']);
@@ -3251,7 +3612,7 @@
               const d   = await res.json();
               childContainer.innerHTML = "";
               if (!d.error) {
-                const vis = d.entries.filter(e => e.type === "dir" || _avSupportedFile(e.name));
+                const vis = d.entries.filter(e => (e.type === "dir" && e.has_media !== false) || (e.type === "file" && _avSupportedFile(e.name)));
                 vis.forEach(e =>
                   childContainer.appendChild(_avMakeEntry(e.name, fullPath.replace(/\/+$/, "") + "/" + e.name, e.type === "dir"))
                 );
@@ -3310,7 +3671,7 @@
         }
         avBrowser.appendChild(header);
 
-        const visible = data.entries.filter(e => e.type === "dir" || _avSupportedFile(e.name));
+        const visible = data.entries.filter(e => (e.type === "dir" && e.has_media !== false) || (e.type === "file" && _avSupportedFile(e.name)));
         if (!visible.length) {
           const empty = document.createElement("span");
           empty.style.cssText = "font-size:.78rem;color:var(--text-dim);padding:.3rem;display:block";
@@ -3491,6 +3852,277 @@
         avRunStatus.className   = "fe-extract-status err";
         avStopBtn.disabled = false;
       }
+    });
+  })();
+
+  // ── View Analyzed Videos / Frames ─────────────────────────────
+  (() => {
+    const vaCard         = document.getElementById("view-analyzed-card");
+    const vaOpenBtn      = document.getElementById("btn-open-view-analyzed");
+    const vaCloseBtn     = document.getElementById("btn-close-view-analyzed");
+    const vaRefreshBtn   = document.getElementById("va-refresh-btn");
+    const vaContentList  = document.getElementById("va-content-list");
+    const vaPlayerSec    = document.getElementById("va-player-section");
+    const vaSelectedName = document.getElementById("va-selected-name");
+    const vaBackBtn      = document.getElementById("va-btn-back");
+    const vaVideoWrap    = document.getElementById("va-video-wrap");
+    const vaFrameImg     = document.getElementById("va-frame-img");
+    const vaFrameSpinner = document.getElementById("va-frame-spinner");
+    const vaZoomInput    = document.getElementById("va-zoom");
+    const vaZoomVal      = document.getElementById("va-zoom-val");
+    const vaBtnPlay      = document.getElementById("va-btn-play");
+    const vaPlayIcon     = document.getElementById("va-play-icon");
+    const vaPauseIcon    = document.getElementById("va-pause-icon");
+    const vaBtnPrev      = document.getElementById("va-btn-prev");
+    const vaBtnNext      = document.getElementById("va-btn-next");
+    const vaFrameCounter = document.getElementById("va-frame-counter");
+    const vaTimeDisplay  = document.getElementById("va-time-display");
+    const vaSeek         = document.getElementById("va-seek");
+    const vaStatus       = document.getElementById("va-status");
+
+    // State
+    let _vaMode         = null;   // "video" | "frames"
+    let _vaCurrentFrame = 0;
+    let _vaFrameCount   = 0;
+    let _vaFps          = 30;
+    let _vaFrameBusy    = false;
+    let _vaPlayTimer    = null;
+    let _vaSeekDragging = false;
+    let _vaZoom         = 100;
+    // video mode
+    let _vaVideoName  = null;
+    // frames mode
+    let _vaFrameStem  = null;
+    let _vaFrameFiles = [];   // sorted list of labeled frame filenames
+
+    // ── Viewer sizing (same break-out-of-card approach as frame labeler) ──
+    function _vaFitViewer() {
+      if (!vaFrameImg.naturalWidth) return;
+      const cs    = getComputedStyle(vaCard);
+      const padL  = parseFloat(cs.paddingLeft)  || 0;
+      const padR  = parseFloat(cs.paddingRight) || 0;
+      const baseW = vaCard.clientWidth - padL - padR;
+      const maxW  = Math.max(baseW, window.innerWidth - 32);
+      const targetW = Math.min(Math.round(baseW * (_vaZoom / 100)), Math.floor(maxW));
+      const extra   = targetW - baseW;
+      vaVideoWrap.style.width      = targetW + "px";
+      vaVideoWrap.style.marginLeft = extra > 0 ? `-${extra / 2}px` : "";
+    }
+
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(() => { if (vaFrameImg.naturalWidth) _vaFitViewer(); }).observe(vaCard);
+    }
+
+    vaZoomInput.addEventListener("input", () => {
+      _vaZoom = parseInt(vaZoomInput.value, 10);
+      vaZoomVal.textContent = _vaZoom + " %";
+      _vaFitViewer();
+    });
+
+    function _vaReset() {
+      if (_vaPlayTimer) { clearInterval(_vaPlayTimer); _vaPlayTimer = null; }
+      _vaMode         = null;
+      _vaCurrentFrame = 0;
+      _vaFrameCount   = 0;
+      _vaFps          = 30;
+      _vaFrameBusy    = false;
+      _vaVideoName    = null;
+      _vaFrameStem    = null;
+      _vaFrameFiles   = [];
+      vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
+      vaFrameImg.onload  = null;
+      vaFrameImg.onerror = null;
+      if (vaFrameImg.src && vaFrameImg.src.startsWith("blob:")) URL.revokeObjectURL(vaFrameImg.src);
+      vaFrameImg.removeAttribute("src");
+      vaVideoWrap.style.width      = "";
+      vaVideoWrap.style.marginLeft = "";
+      vaFrameSpinner.classList.add("hidden");
+      vaPlayerSec.classList.add("hidden");
+      vaStatus.textContent = "";
+      vaStatus.className   = "fe-extract-status";
+    }
+
+    function _vaFrameUrl(n) {
+      if (_vaMode === "video") {
+        return `/dlc/project/video-frame/${encodeURIComponent(_vaVideoName)}/${n}`;
+      }
+      // frames mode: index into _vaFrameFiles
+      return `/dlc/project/frame-image/${encodeURIComponent(_vaFrameStem)}/${encodeURIComponent(_vaFrameFiles[n])}`;
+    }
+
+    function _vaUpdateDisplay() {
+      vaFrameCounter.textContent = `Frame ${_vaCurrentFrame} / ${_vaFrameCount}`;
+      if (_vaMode === "video") {
+        vaTimeDisplay.textContent = `${(_vaCurrentFrame / _vaFps).toFixed(3)} s`;
+      } else {
+        vaTimeDisplay.textContent = _vaFrameFiles[_vaCurrentFrame] || "";
+      }
+      if (!_vaSeekDragging)
+        vaSeek.value = Math.round((_vaCurrentFrame / Math.max(_vaFrameCount - 1, 1)) * 1000);
+    }
+
+    async function _vaLoadFrame(n) {
+      if (_vaFrameBusy) return;
+      _vaFrameBusy = true;
+      n = Math.max(0, Math.min(n, Math.max(_vaFrameCount - 1, 0)));
+      _vaCurrentFrame = n;
+      vaFrameSpinner.classList.remove("hidden");
+      try {
+        const resp = await fetch(_vaFrameUrl(n));
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.error || `HTTP ${resp.status}`);
+        }
+        const blob    = await resp.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        await new Promise((resolve, reject) => {
+          vaFrameImg.onload  = resolve;
+          vaFrameImg.onerror = reject;
+          const prev = vaFrameImg.src;
+          vaFrameImg.src = blobUrl;
+          if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+        });
+        _vaFitViewer();
+        _vaUpdateDisplay();
+      } catch (err) {
+        vaStatus.textContent = `Failed to load frame: ${err.message}`;
+        vaStatus.className   = "fe-extract-status err";
+      } finally {
+        _vaFrameBusy = false;
+        vaFrameSpinner.classList.add("hidden");
+      }
+    }
+
+    async function _vaOpenVideo(name) {
+      _vaReset();
+      _vaMode      = "video";
+      _vaVideoName = name;
+      vaSelectedName.textContent = name;
+      try {
+        const res  = await fetch(`/dlc/project/video-info/${encodeURIComponent(name)}`);
+        const info = await res.json();
+        _vaFps        = info.fps || 30;
+        _vaFrameCount = info.frame_count || 0;
+      } catch (_) { _vaFps = 30; _vaFrameCount = 0; }
+      vaPlayerSec.classList.remove("hidden");
+      _vaLoadFrame(0);
+    }
+
+    function _vaOpenFrameFolder(stem, frames) {
+      _vaReset();
+      _vaMode       = "frames";
+      _vaFrameStem  = stem;
+      _vaFrameFiles = frames;
+      _vaFrameCount = frames.length;
+      _vaFps        = 5;   // slow playback for sparse labeled frames
+      vaSelectedName.textContent = `${stem}/ (${frames.length} labeled frames)`;
+      vaPlayerSec.classList.remove("hidden");
+      _vaLoadFrame(0);
+    }
+
+    // ── Load content list ─────────────────────────────────────
+    async function _vaLoadContent() {
+      vaContentList.innerHTML = '<p class="explorer-empty">Loading…</p>';
+      try {
+        const res  = await fetch("/dlc/project/labeled-content");
+        const data = await res.json();
+        if (data.error) {
+          vaContentList.innerHTML = `<p class="explorer-empty">${data.error}</p>`;
+          return;
+        }
+        const hasVideos  = data.videos  && data.videos.length  > 0;
+        const hasFolders = data.frame_folders && data.frame_folders.length > 0;
+        if (!hasVideos && !hasFolders) {
+          vaContentList.innerHTML = '<p class="explorer-empty">No labeled videos or frame folders found. Run "Analyze Video / Frames" with "Create labeled video / frame" enabled.</p>';
+          return;
+        }
+        vaContentList.innerHTML = "";
+
+        function _makeItem(svgHtml, name, subtitle, onClick) {
+          const item = document.createElement("div");
+          item.className = "fe-video-item";
+          item.innerHTML = `${svgHtml}<div style="display:flex;flex-direction:column;min-width:0;flex:1"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name}</span>${subtitle ? `<span style="font-size:.7rem;color:var(--text-dim)">${subtitle}</span>` : ""}</div>`;
+          item.addEventListener("click", onClick);
+          return item;
+        }
+
+        if (hasVideos) {
+          const hdr = document.createElement("div");
+          hdr.style.cssText = "font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);padding:.25rem .3rem .1rem";
+          hdr.textContent   = "Labeled Videos";
+          vaContentList.appendChild(hdr);
+          data.videos.forEach(v => {
+            const sub  = v.size ? Math.round(v.size / 1024 / 1024) + " MB" : "";
+            const svg  = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><rect x="2" y="2" width="20" height="20" rx="3"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg>`;
+            vaContentList.appendChild(_makeItem(svg, v.name, sub, () => _vaOpenVideo(v.name)));
+          });
+        }
+
+        if (hasFolders) {
+          const hdr = document.createElement("div");
+          hdr.style.cssText = "font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);padding:.35rem .3rem .1rem";
+          hdr.textContent   = "Labeled Frame Folders";
+          vaContentList.appendChild(hdr);
+          data.frame_folders.forEach(f => {
+            const sub = f.frame_count + " labeled frames";
+            const svg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+            vaContentList.appendChild(_makeItem(svg, f.stem + "/", sub, () => _vaOpenFrameFolder(f.stem, f.frames)));
+          });
+        }
+      } catch (err) {
+        vaContentList.innerHTML = `<p class="explorer-empty">Error: ${err.message}</p>`;
+      }
+    }
+
+    // ── Player controls ───────────────────────────────────────
+    vaBtnPlay.addEventListener("click", () => {
+      if (_vaPlayTimer) {
+        clearInterval(_vaPlayTimer); _vaPlayTimer = null;
+        vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
+      } else {
+        vaPlayIcon.classList.add("hidden"); vaPauseIcon.classList.remove("hidden");
+        _vaPlayTimer = setInterval(async () => {
+          if (_vaCurrentFrame >= _vaFrameCount - 1) {
+            clearInterval(_vaPlayTimer); _vaPlayTimer = null;
+            vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
+            return;
+          }
+          await _vaLoadFrame(_vaCurrentFrame + 1);
+        }, 1000 / _vaFps);
+      }
+    });
+
+    vaBtnPrev.addEventListener("click", () => _vaLoadFrame(_vaCurrentFrame - 1));
+    vaBtnNext.addEventListener("click", () => _vaLoadFrame(_vaCurrentFrame + 1));
+
+    vaSeek.addEventListener("mousedown",  () => { _vaSeekDragging = true; });
+    vaSeek.addEventListener("touchstart", () => { _vaSeekDragging = true; });
+    vaSeek.addEventListener("input", () => {
+      _vaCurrentFrame = Math.round((vaSeek.value / 1000) * Math.max(_vaFrameCount - 1, 0));
+      _vaUpdateDisplay();
+    });
+    vaSeek.addEventListener("change", () => { _vaSeekDragging = false; _vaLoadFrame(_vaCurrentFrame); });
+
+    vaBackBtn.addEventListener("click", _vaReset);
+    vaRefreshBtn.addEventListener("click", _vaLoadContent);
+
+    // ── Open / close ──────────────────────────────────────────
+    vaOpenBtn?.addEventListener("click", () => {
+      vaCard.classList.remove("hidden");
+      vaCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      _vaLoadContent();
+    });
+
+    vaCloseBtn?.addEventListener("click", () => {
+      vaCard.classList.add("hidden");
+      _vaReset();
+    });
+
+    // Arrow key navigation when player is active
+    vaCard.addEventListener("keydown", (e) => {
+      if (vaPlayerSec.classList.contains("hidden")) return;
+      if (e.key === "ArrowLeft")  { e.preventDefault(); _vaLoadFrame(_vaCurrentFrame - 1); }
+      if (e.key === "ArrowRight") { e.preventDefault(); _vaLoadFrame(_vaCurrentFrame + 1); }
     });
   })();
 

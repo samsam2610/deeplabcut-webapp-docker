@@ -211,6 +211,12 @@
           </svg>
           <span>Analyze Video / Frames</span>
         </button>
+        <button id="btn-open-view-analyzed" class="inspect-btn" style="width:100%;gap:.55rem">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+          </svg>
+          <span>View Analyzed Videos/Frames</span>
+        </button>
         <button id="btn-open-gpu-monitor" class="inspect-btn" style="width:100%;gap:.55rem">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/><line x1="12" y1="17" x2="12" y2="21"/>
@@ -358,7 +364,18 @@
           Close
         </button>
       </div>
-      <p class="subtitle">Click on the frame to place a marker. Right-click on the frame, press <kbd>Delete</kbd> (cursor over frame), or double-click a body part chip to remove its marker. Labels are saved as <code id="fl-scorer-filename" style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">CollectedData_&lt;scorer&gt;.csv</code>.</p>
+      <p class="subtitle">Labels are saved as <code id="fl-scorer-filename" style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">CollectedData_&lt;scorer&gt;.csv</code>.</p>
+      <div style="font-size:.75rem;color:var(--text-dim);background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:.45rem .65rem;margin-bottom:.75rem;display:grid;grid-template-columns:auto 1fr;gap:.2rem .75rem;line-height:1.5">
+        <span style="color:var(--text)"><kbd>Click</kbd></span>                                <span>Place selected body-part marker</span>
+        <span style="color:var(--text)"><kbd>→</kbd> <kbd>←</kbd></span>                      <span>Next / previous frame</span>
+        <span style="color:var(--text)"><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd></span>           <span>Next / previous body part</span>
+        <span style="color:var(--text)"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span> <span>Nudge selected marker 1 px (cursor inside canvas + marker placed) — hold <kbd>Shift</kbd> for 10 px</span>
+        <span style="color:var(--text)"><kbd>Space</kbd></span>                                <span>Toggle visibility of selected marker — hides from view, preserves data</span>
+        <span style="color:var(--text)"><kbd>⌫</kbd> Backspace</span>                          <span>Delete selected body-part marker</span>
+        <span style="color:var(--text)"><kbd>Del</kbd> / Right-click canvas</span>             <span>Delete selected marker (cursor inside canvas)</span>
+        <span style="color:var(--text)">Double-click chip</span>                               <span>Toggle marker visibility</span>
+        <span style="color:var(--text)">Double-click <em>Clear Frame</em></span>               <span>Erase all markers on the current frame</span>
+      </div>
 
       <!-- ── Labeled-data folder selector ──────────────────────── -->
       <div style="margin-bottom:.75rem">
@@ -376,6 +393,80 @@
           </button>
         </div>
         <span id="fl-stem-status" class="fe-extract-status" style="margin-top:.3rem"></span>
+      </div>
+
+      <!-- ── Machine pre-labeling panel ──────────────────────────── -->
+      <div style="margin-bottom:.75rem">
+        <label style="display:flex;align-items:center;gap:.5rem;font-size:.82rem;cursor:pointer;user-select:none">
+          <input type="checkbox" id="fl-ml-checkbox" style="accent-color:var(--accent)">
+          Pre-label frames with trained model
+        </label>
+        <div id="fl-ml-opts" class="hidden" style="margin-top:.55rem;padding:.6rem .7rem;background:var(--surface);border:1px solid var(--border);border-radius:6px">
+          <!-- Model snapshot -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-snapshot" style="white-space:nowrap">Model snapshot</label>
+            <select id="fl-ml-snapshot" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+              <option value="-1">Latest (from config)</option>
+            </select>
+            <button class="btn-sm" id="fl-ml-refresh-snap" title="Refresh snapshot list" style="padding:.2rem .45rem;font-size:.75rem">↺</button>
+          </div>
+          <!-- Shuffle -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-shuffle">Shuffle</label>
+            <input type="number" id="fl-ml-shuffle" value="1" min="1" max="20" style="width:5rem" />
+          </div>
+          <!-- Training set index -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-tsidx">Training set index</label>
+            <input type="number" id="fl-ml-tsidx" value="0" min="0" style="width:5rem" />
+          </div>
+          <!-- GPU -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-gpu">GPU to use</label>
+            <select id="fl-ml-gpu" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+              <option value="">auto</option>
+            </select>
+          </div>
+          <!-- Likelihood threshold -->
+          <div class="scorer-row" style="margin-bottom:.7rem">
+            <label for="fl-ml-likelihood" title="Predictions below this confidence score will be discarded">Likelihood threshold</label>
+            <input type="number" id="fl-ml-likelihood" value="0.9" min="0" max="1" step="0.05" style="width:5rem" />
+          </div>
+          <!-- Run / Stop -->
+          <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.3rem">
+            <button id="fl-ml-run-btn" class="btn-sm btn-create">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run Machine Labels
+            </button>
+            <button id="fl-ml-run-all-btn" class="btn-sm btn-create">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+              Run All Folders
+            </button>
+            <button id="fl-ml-stop-btn" class="btn-sm btn-danger hidden">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+              Stop
+            </button>
+          </div>
+          <span id="fl-ml-status" class="fe-extract-status"></span>
+          <!-- Progress -->
+          <div id="fl-ml-progress" class="hidden" style="margin-top:.8rem">
+            <div class="progress-header">
+              <span>Machine Labeling</span>
+              <span id="fl-ml-task-id" class="task-id-badge"></span>
+            </div>
+            <div class="progress-track">
+              <div id="fl-ml-progress-bar" class="progress-fill"></div>
+            </div>
+            <div class="progress-meta">
+              <span id="fl-ml-progress-stage">Queued</span>
+              <span id="fl-ml-progress-pct">0 %</span>
+            </div>
+            <div class="log-panel">
+              <div class="log-title">Log</div>
+              <pre id="fl-ml-log-output">Waiting for output…</pre>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- ── Player section (shown when a stem is selected) ─────── -->
@@ -396,9 +487,14 @@
         <!-- Marker display controls -->
         <div style="display:flex;align-items:center;gap:1.2rem;margin-bottom:.5rem;flex-wrap:wrap">
           <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Viewer size
+            <input type="range" id="fl-zoom" min="50" max="300" value="100" step="25" style="width:80px;accent-color:var(--accent)">
+            <span id="fl-zoom-val" style="min-width:2.5rem;text-align:right;color:var(--text)">100 %</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
             Marker size
-            <input type="range" id="fl-marker-size" min="2" max="24" value="6" style="width:80px;accent-color:var(--accent)">
-            <span id="fl-marker-size-val" style="min-width:1.4rem;text-align:right;color:var(--text)">6</span>
+            <input type="range" id="fl-marker-size" min="1" max="24" value="4" style="width:80px;accent-color:var(--accent)">
+            <span id="fl-marker-size-val" style="min-width:1.4rem;text-align:right;color:var(--text)">4</span>
           </label>
           <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);cursor:pointer;user-select:none">
             <input type="checkbox" id="fl-show-names" checked style="accent-color:var(--accent)">
@@ -424,6 +520,11 @@
           <button id="fl-btn-save" class="btn-sm btn-create" style="flex:1;justify-content:center;padding:.5rem 1rem">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             Save Labels
+          </button>
+          <button id="fl-btn-clear-frame" class="btn-sm" title="Double-click to erase all markers on this frame"
+            style="padding:.5rem .8rem;border-color:var(--danger);color:var(--danger);opacity:.75">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            Clear Frame
           </button>
           <span id="fl-save-status" class="fl-save-status"></span>
         </div>
@@ -725,6 +826,72 @@
           <div class="log-title">Log</div>
           <pre id="av-log-output">Waiting for output…</pre>
         </div>
+      </div>
+    </section>
+
+    <!-- ─── View Analyzed Videos / Frames card ──────────────── -->
+    <section class="card dlc-theme hidden" id="view-analyzed-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>View Analyzed Videos / Frames</h2>
+        <button class="btn-sm" id="btn-close-view-analyzed" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Browse and play labeled videos or frame-by-frame labeled image folders produced by the analysis step.</p>
+
+      <!-- Content list -->
+      <div style="margin-bottom:.7rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+          <label style="font-size:.78rem;color:var(--text-dim)">Labeled content</label>
+          <button class="btn-sm" id="va-refresh-btn" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
+        </div>
+        <div id="va-content-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
+          <p class="explorer-empty" id="va-content-empty">Loading…</p>
+        </div>
+      </div>
+
+      <!-- Player section (shown after a selection is made) -->
+      <div id="va-player-section" class="hidden">
+        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap">
+          <span id="va-selected-name" style="font-family:var(--mono);font-size:.78rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
+          <button class="btn-sm" id="va-btn-back" style="padding:.2rem .6rem;font-size:.75rem;flex-shrink:0">&#8592; Back</button>
+        </div>
+
+        <!-- Viewer size control -->
+        <div style="display:flex;align-items:center;gap:1.2rem;margin-bottom:.5rem">
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Viewer size
+            <input type="range" id="va-zoom" min="50" max="300" value="100" step="25" style="width:80px;accent-color:var(--accent)">
+            <span id="va-zoom-val" style="min-width:2.5rem;text-align:right;color:var(--text)">100 %</span>
+          </label>
+        </div>
+
+        <div id="va-video-wrap" style="position:relative;background:#000;border-radius:8px;border:1px solid var(--border);margin-bottom:.75rem">
+          <img id="va-frame-img" alt="" draggable="false" style="width:100%;display:block;height:auto" />
+          <div id="va-frame-spinner" class="fe-frame-spinner hidden"></div>
+        </div>
+
+        <!-- Controls row -->
+        <div class="fe-controls">
+          <button id="va-btn-play" class="btn-sm fe-ctrl-btn" title="Play / Pause">
+            <svg id="va-play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <svg id="va-pause-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" class="hidden"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          </button>
+          <button id="va-btn-prev" class="btn-sm fe-ctrl-btn" title="Previous frame (&#8592;)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/><line x1="9" y1="6" x2="9" y2="18"/></svg>
+          </button>
+          <button id="va-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (&#8594;)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
+          </button>
+          <span class="fe-frame-counter" id="va-frame-counter">Frame 0 / 0</span>
+          <span class="fe-time-display" id="va-time-display">0.000 s</span>
+        </div>
+
+        <!-- Seek slider -->
+        <input type="range" id="va-seek" class="fe-seek" min="0" max="1000" value="0" step="1" />
+
+        <span id="va-status" class="fe-extract-status"></span>
       </div>
     </section>
 

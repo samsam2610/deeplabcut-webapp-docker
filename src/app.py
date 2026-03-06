@@ -947,13 +947,38 @@ def set_dlc_project():
     has_config  = (p / "config.yaml").is_file()
     config_path = str(p / "config.yaml") if has_config else None
 
-    # Read engine from config.yaml (default pytorch)
+    # Read engine from config.yaml (default pytorch) and fix project_path if stale
     engine = "pytorch"
-    if has_config and _yaml is not None:
+    if has_config:
         try:
-            with open(p / "config.yaml") as f:
-                cfg = _yaml.safe_load(f)
-            engine = (cfg.get("engine") or "pytorch").lower()
+            text = (p / "config.yaml").read_text()
+            if _yaml is not None:
+                cfg = _yaml.safe_load(text) or {}
+                engine = (cfg.get("engine") or "pytorch").lower()
+                # Fix stale project_path so DLC resolves all paths to the actual location
+                cfg_project_path = cfg.get("project_path", "")
+                if cfg_project_path and Path(cfg_project_path).resolve() != p.resolve():
+                    updated = re.sub(
+                        r'^(project_path\s*:\s*).*$',
+                        lambda m: m.group(1) + str(p),
+                        text,
+                        flags=re.MULTILINE,
+                    )
+                    (p / "config.yaml").write_text(updated)
+            else:
+                m = re.search(r'^engine\s*:\s*(\S+)', text, re.MULTILINE)
+                if m:
+                    engine = m.group(1).strip().strip("\"'").lower()
+                # Fix stale project_path via regex fallback
+                m2 = re.search(r'^(project_path\s*:\s*)(.+)$', text, re.MULTILINE)
+                if m2 and m2.group(2).strip() != str(p):
+                    updated = re.sub(
+                        r'^(project_path\s*:\s*).*$',
+                        lambda m: m.group(1) + str(p),
+                        text,
+                        flags=re.MULTILINE,
+                    )
+                    (p / "config.yaml").write_text(updated)
         except Exception:
             pass
 
@@ -1009,6 +1034,26 @@ def browse_dlc_project():
     })
 
 
+_FS_LS_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"}
+_FS_LS_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+_FS_LS_MEDIA_EXTS = _FS_LS_VIDEO_EXTS | _FS_LS_IMAGE_EXTS
+
+
+def _dir_has_media(path: Path) -> bool:
+    """Return True if path contains at least one supported media file or subdirectory."""
+    try:
+        for child in path.iterdir():
+            if child.name.startswith("."):
+                continue
+            if child.is_dir():
+                return True
+            if child.suffix.lower() in _FS_LS_MEDIA_EXTS:
+                return True
+    except PermissionError:
+        pass
+    return False
+
+
 @app.route("/fs/ls")
 def fs_ls():
     """List a directory's immediate children for the file browser."""
@@ -1021,8 +1066,12 @@ def fs_ls():
     try:
         entries = []
         for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
-            if not child.name.startswith("."):
-                entries.append({"name": child.name, "type": "dir" if child.is_dir() else "file"})
+            if child.name.startswith("."):
+                continue
+            if child.is_dir():
+                entries.append({"name": child.name, "type": "dir", "has_media": _dir_has_media(child)})
+            else:
+                entries.append({"name": child.name, "type": "file"})
         parent = str(p.parent) if str(p.parent) != str(p) else None
         return jsonify({"path": str(p), "parent": parent, "entries": entries})
     except PermissionError:
@@ -3092,50 +3141,62 @@ def dlc_project_snapshots():
 
     import re as _re
 
+    # Optional shuffle filter — limits snapshots to the given shuffle number so
+    # returned indices match DLC's per-shuffle snapshot_index parameter.
+    shuffle_param = request.args.get("shuffle", "").strip()
+    shuffle_filter = int(shuffle_param) if shuffle_param.isdigit() else None
+
     # Find snapshot files: *.pt for pytorch, *.index for tensorflow
-    snap_pattern = f"{models_folder}/**/train/*.index" if engine in _TF_ENGINE_ALIASES \
-                   else f"{models_folder}/**/train/*.pt"
+    snap_ext = "*.index" if engine in _TF_ENGINE_ALIASES else "*.pt"
+    snap_pattern = f"{models_folder}/**/train/{snap_ext}"
 
     models_root = project_path / models_folder
 
     def _parse_folder_iter(p):
-        """
-        Extract the iteration number from the iteration-N folder in the path.
-        e.g. dlc-models-pytorch/iteration-0/shuffle1/train/snapshot-50000.pt → 0
-        """
+        """Extract iteration number from the iteration-N folder in the path."""
         try:
-            rel_parts = p.relative_to(models_root).parts
-            # First component after models_folder should be iteration-N
-            folder = rel_parts[0] if rel_parts else ""
+            folder = p.relative_to(models_root).parts[0]
             m = _re.search(r'iteration[-_](\d+)', folder, _re.IGNORECASE)
             return int(m.group(1)) if m else None
         except Exception:
             return None
 
+    def _parse_shuffle(p):
+        """Extract shuffle number from the train-folder name (e.g. …shuffle3/train)."""
+        try:
+            # train-folder is two levels deep under models_root: iteration-N / <name> / train
+            train_folder = p.relative_to(models_root).parts[1]
+            m = _re.search(r'shuffle(\d+)', train_folder, _re.IGNORECASE)
+            return int(m.group(1)) if m else None
+        except Exception:
+            return None
+
     raw = []
-    for p in project_path.glob(snap_pattern):
-        folder_iter = _parse_folder_iter(p)
+    for snap in project_path.glob(snap_pattern):
+        if shuffle_filter is not None and _parse_shuffle(snap) != shuffle_filter:
+            continue
         raw.append({
-            "stem":         p.stem,
-            "folder_iter":  folder_iter,   # from iteration-N folder (config iteration)
-            "rel_path":     str(p.relative_to(project_path)),
-            "mtime":        p.stat().st_mtime,
+            "stem":         snap.stem,
+            "folder_iter":  _parse_folder_iter(snap),
+            "rel_path":     str(snap.relative_to(project_path)),
+            "mtime":        snap.stat().st_mtime,
         })
 
     # Sort: by folder iteration ascending (None last), then mtime
     raw.sort(key=lambda s: (s["folder_iter"] is None, s["folder_iter"] or 0, s["mtime"]))
 
+    # index here is positional within the sorted list for this shuffle —
+    # this matches what DLC's snapshot_index parameter expects.
     snapshots = [
         {
             "label":      s["stem"],
-            "iteration":  s["folder_iter"],   # config.yaml iteration value
+            "iteration":  s["folder_iter"],
             "index":      i,
             "rel_path":   s["rel_path"],
         }
         for i, s in enumerate(raw)
     ]
 
-    # Latest snapshot info for the "Latest" default option
     latest = raw[-1] if raw else None
 
     return jsonify({
@@ -3223,6 +3284,132 @@ def dlc_project_analyze_stop():
     _redis_client.hset("dlc_analyze_job:" + task_id, "status", "stopped")
     _redis_client.expire("dlc_analyze_job:" + task_id, 3600)
 
+    return jsonify({"status": "stop_requested", "task_id": task_id}), 200
+
+
+@app.route("/dlc/project/labeled-content")
+def dlc_labeled_content():
+    """List labeled videos and frame folders produced by create_labeled_video."""
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not project_path.is_dir():
+        return jsonify({"error": "Project directory not found."}), 404
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    # Labeled videos: any video file whose stem contains "_labeled" in the videos/ dir
+    videos = []
+    videos_dir = project_path / "videos"
+    if videos_dir.is_dir():
+        for f in sorted(videos_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in _FS_LS_VIDEO_EXTS and "_labeled" in f.stem:
+                videos.append({"name": f.name, "size": f.stat().st_size})
+
+    # Labeled frame folders: labeled-data/<stem>/ dirs that contain *_labeled.png files
+    frame_folders = []
+    labeled_base = project_path / "labeled-data"
+    if labeled_base.is_dir():
+        for stem_dir in sorted(labeled_base.iterdir(), key=lambda p: _natural_keys(p.name)):
+            if not stem_dir.is_dir():
+                continue
+            labeled_frames = sorted(
+                [f.name for f in stem_dir.iterdir()
+                 if f.is_file() and f.suffix.lower() == ".png" and "_labeled" in f.stem],
+                key=_natural_keys,
+            )
+            if labeled_frames:
+                frame_folders.append({
+                    "stem": stem_dir.name,
+                    "frames": labeled_frames,
+                    "frame_count": len(labeled_frames),
+                })
+
+    return jsonify({
+        "project_path": str(project_path),
+        "videos": videos,
+        "frame_folders": frame_folders,
+    })
+
+
+@app.route("/dlc/project/machine-label-frames", methods=["POST"])
+def dlc_project_machine_label_frames():
+    """
+    Dispatch a Celery task to run model inference on a labeled-data frames folder
+    and save predictions as CollectedData_<scorer>.csv.
+    Body (JSON): { video_stem, shuffle, trainingsetindex, gputouse, snapshot_index }
+    """
+    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    config_path  = project_data.get("config_path", "")
+    engine       = project_data.get("engine", "pytorch")
+    project_path = Path(project_data.get("project_path", ""))
+    if not config_path or not Path(config_path).is_file():
+        return jsonify({"error": "No config.yaml in active project."}), 400
+
+    body       = request.get_json(force=True) or {}
+    video_stem = (body.get("video_stem") or "").strip()
+    if not video_stem:
+        return jsonify({"error": "video_stem is required."}), 400
+
+    labeled_data_path = project_path / "labeled-data" / secure_filename(video_stem)
+    if not labeled_data_path.is_dir():
+        return jsonify({"error": f"Frames folder not found: {labeled_data_path}"}), 400
+
+    def _int_or_none(key):
+        v = body.get(key)
+        try:
+            return int(v) if v is not None and v != "" else None
+        except (ValueError, TypeError):
+            return None
+
+    def _float_or(key, default):
+        v = body.get(key)
+        try:
+            return float(v) if v is not None and v != "" else default
+        except (ValueError, TypeError):
+            return default
+
+    params = {
+        "shuffle":              _int_or_none("shuffle") or 1,
+        "trainingsetindex":     _int_or_none("trainingsetindex") if _int_or_none("trainingsetindex") is not None else 0,
+        "gputouse":             _int_or_none("gputouse"),
+        "save_as_csv":          True,
+        "snapshot_index":       _int_or_none("snapshot_index"),
+        "likelihood_threshold": _float_or("likelihood_threshold", 0.9),
+    }
+
+    task = celery.send_task(
+        "tasks.dlc_machine_label_frames",
+        kwargs={
+            "config_path":       config_path,
+            "labeled_data_path": str(labeled_data_path),
+            "params":            params,
+        },
+        queue=_get_engine_queue(engine),
+    )
+    return jsonify({"task_id": task.id, "operation": "machine_label_frames"}), 202
+
+
+@app.route("/dlc/project/machine-label-frames/stop", methods=["POST"])
+def dlc_project_machine_label_frames_stop():
+    """Stop a running dlc_machine_label_frames task."""
+    body    = request.get_json(force=True) or {}
+    task_id = (body.get("task_id") or "").strip()
+    if not task_id:
+        return jsonify({"error": "task_id is required."}), 400
+
+    _redis_client.setex("dlc_ml_stop:" + task_id, 120, "1")
+    celery.control.revoke(task_id, terminate=False)
+    try:
+        AsyncResult(task_id, app=celery).forget()
+    except Exception:
+        pass
     return jsonify({"status": "stop_requested", "task_id": task_id}), 200
 
 
