@@ -39,7 +39,7 @@ WORKDIR /app
 
 # ---------- Environment Setup ----------
 ENV PATH="/home/${UNAME}/.local/bin:${PATH}"
-ENV PYTHONPATH="/home/${UNAME}/.local/lib/python3.10/site-packages:${PYTHONPATH:-}"
+ENV PYTHONPATH="/home/${UNAME}/.local/lib/python3.11/site-packages:${PYTHONPATH:-}"
 ENV PYTHONUNBUFFERED=1
 
 # ---------- Python Setup (Run as USER) ----------

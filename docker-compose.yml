@@ -4,7 +4,10 @@ services:
     image: alpine:3
     volumes:
       - ${HOST_DATA_DIR:-./data}:/data
-      - ${HOST_USER_DATA_DIR}:/user-data
+      - /home/sam/data-disk/Parra-Data:/user-data/Parra-Data/Disk
+      - /home/sam/synology/Parra-Lab-Data:/user-data/Parra-Data/Cloud
+      - /home/sam/data-mount-dir:/user-data/Martin-Data/USB
+      - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
     command: sh -c "mkdir -p /data && chmod 777 /data && mkdir -p /user-data && chmod 777 /user-data"
     restart: "no"
 
@@ -31,7 +34,10 @@ services:
       - "5000:5000"
     volumes:
       - ${HOST_DATA_DIR:-./data}:/app/data
-      - ${HOST_USER_DATA_DIR}:/user-data
+      - /home/sam/data-disk/Parra-Data:/user-data/Parra-Data/Disk
+      - /home/sam/synology/Parra-Lab-Data:/user-data/Parra-Data/Cloud
+      - /home/sam/data-mount-dir:/user-data/Martin-Data/USB
+      - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
       # Live-reload: mount source files so edits take effect without rebuild
       - ./src/app.py:/app/app.py
       - ./src/templates:/app/templates
@@ -66,7 +72,10 @@ services:
         GNAME: dlcuser
     volumes:
       - ${HOST_DATA_DIR:-./data}:/app/data
-      - ${HOST_USER_DATA_DIR}:/user-data
+      - /home/sam/data-disk/Parra-Data:/user-data/Parra-Data/Disk
+      - /home/sam/synology/Parra-Lab-Data:/user-data/Parra-Data/Cloud
+      - /home/sam/data-mount-dir:/user-data/Martin-Data/USB
+      - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
       # Mount src/ so all .py edits take effect after worker restart
       - ./src:/app
     environment:

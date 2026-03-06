@@ -995,29 +995,10 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
     Detects whether the target is a video file, image file, or directory,
     then calls the appropriate DLC function(s).
     """
-    import os as _os, sys, importlib, deeplabcut as _dlc
+    import os as _os, sys
     from pathlib import Path as _Path
 
     _os.setpgrp()
-
-    # DLC 3.x moved functions into pose_estimation_pytorch submodule.
-    # This helper searches submodules if the function isn't at the top level.
-    def _dlc_fn(name):
-        if hasattr(_dlc, name):
-            return getattr(_dlc, name)
-        for sub in ("deeplabcut.pose_estimation_pytorch",
-                    "deeplabcut.pose_estimation_tensorflow"):
-            try:
-                m = importlib.import_module(sub)
-                if hasattr(m, name):
-                    return getattr(m, name)
-            except ImportError:
-                pass
-        raise AttributeError(f"deeplabcut has no attribute '{name}'")
-
-    _analyze_videos           = _dlc_fn("analyze_videos")
-    _analyze_time_lapse       = _dlc_fn("analyze_time_lapse_frames")
-    _create_labeled_video     = _dlc_fn("create_labeled_video")
 
     # Ensure CUDA device numbering matches nvidia-smi (PCI bus ID order).
     _os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -1026,6 +1007,27 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
         sys.stdout = _f
         sys.stderr = _f
         try:
+            import importlib, deeplabcut as _dlc
+
+            # DLC 3.x moved functions into pose_estimation_pytorch submodule.
+            # This helper searches submodules if the function isn't at the top level.
+            def _dlc_fn(name):
+                if hasattr(_dlc, name):
+                    return getattr(_dlc, name)
+                for sub in ("deeplabcut.pose_estimation_pytorch",
+                            "deeplabcut.pose_estimation_tensorflow"):
+                    try:
+                        m = importlib.import_module(sub)
+                        if hasattr(m, name):
+                            return getattr(m, name)
+                    except Exception as _e:
+                        _f.write(f"[_dlc_fn] could not import {sub}: {_e}\n")
+                raise AttributeError(f"deeplabcut has no attribute '{name}'")
+
+            _analyze_videos       = _dlc_fn("analyze_videos")
+            _analyze_time_lapse   = _dlc_fn("analyze_time_lapse_frames")
+            _create_labeled_video = _dlc_fn("create_labeled_video")
+
             p = _Path(target_path)
             create_labeled = params.get("create_labeled", False)
             kw = {k: v for k, v in params.items()
