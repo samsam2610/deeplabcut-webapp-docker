@@ -1578,6 +1578,14 @@
     const feTimeDisplay   = document.getElementById("fe-time-display");
     const feSeek          = document.getElementById("fe-seek");
     const feBtnExtract    = document.getElementById("fe-btn-extract");
+    const feBtnStopExtract = document.getElementById("fe-btn-stop-extract");
+    const feExtractDialog = document.getElementById("fe-extract-dialog");
+    const feDialogMsg     = document.getElementById("fe-dialog-msg");
+    const feDialogConfirm = document.getElementById("fe-dialog-confirm");
+    const feDialogCustomBtn = document.getElementById("fe-dialog-custom-btn");
+    const feDialogCustomWrap = document.getElementById("fe-dialog-custom-wrap");
+    const feDialogCustomInput = document.getElementById("fe-dialog-custom-input");
+    const feDialogCancel  = document.getElementById("fe-dialog-cancel");
     const feExtractCount  = document.getElementById("fe-extract-count");
     const feExtractStatus = document.getElementById("fe-extract-status");
     const feCsvBars       = document.getElementById("fe-csv-bars");
@@ -1627,6 +1635,7 @@
     let _feCurrentFrame = 0;
     let _feFrameBusy    = false;
     let _fePlayTimer    = null;
+    let _feStopExtraction = false;
 
     function _feFrameUrl(n) {
       return `/dlc/project/video-frame/${encodeURIComponent(_feCurrentVideo)}/${n}`;
@@ -1881,13 +1890,20 @@
 
     async function _feSaveFrames(count) {
       if (!_feCurrentVideo) return;
+      _feStopExtraction = false;
       feBtnExtract.disabled = true;
+      if (count > 1) {
+        feBtnStopExtract.classList.remove("hidden");
+        feExtractStatus.textContent = `Saving ${count} frames…`;
+        feExtractStatus.className = "fe-extract-status";
+      }
       if (_fePlayTimer) { clearInterval(_fePlayTimer); _fePlayTimer = null; fePlayIcon.classList.remove("hidden"); fePauseIcon.classList.add("hidden"); }
-      if (count > 1) { feExtractStatus.textContent = `Saving ${count} frames…`; feExtractStatus.className = "fe-extract-status"; }
       let saved = 0, skipped = 0, lastData = null;
       try {
         for (let i = 0; i < count; i++) {
+          if (_feStopExtraction) break;
           if (i > 0) await _feLoadFrame(_feCurrentFrame + 1);
+          if (_feStopExtraction) break;
           const base64 = await _feCaptureCurrent();
           if (!base64) break;
           const res  = await fetch("/dlc/project/save-frame", {
@@ -1900,8 +1916,16 @@
           saved++; lastData = data;
           _feExtracted = data.frame_count;
           feExtractCount.textContent = `${_feExtracted} frame${_feExtracted !== 1 ? "s" : ""} saved`;
+          if (count > 1) feExtractStatus.textContent = `Saving… ${i + 1}/${count} frames`;
         }
-        if (saved > 0) {
+        if (_feStopExtraction && saved > 0) {
+          const skipNote = skipped > 0 ? `, ${skipped} duplicate${skipped !== 1 ? "s" : ""} skipped` : "";
+          feExtractStatus.textContent = `Stopped — saved ${saved} frame${saved !== 1 ? "s" : ""}${skipNote} → ${lastData.abs_path}`;
+          feExtractStatus.className = "fe-extract-status";
+        } else if (_feStopExtraction) {
+          feExtractStatus.textContent = "Stopped — no frames saved";
+          feExtractStatus.className = "fe-extract-status";
+        } else if (saved > 0) {
           const skipNote = skipped > 0 ? `, ${skipped} duplicate${skipped !== 1 ? "s" : ""} skipped` : "";
           feExtractStatus.textContent = `Saved ${saved} frame${saved !== 1 ? "s" : ""}${skipNote} → ${lastData.abs_path}`;
           feExtractStatus.className = "fe-extract-status ok";
@@ -1914,6 +1938,9 @@
         feExtractStatus.className = "fe-extract-status err";
       } finally {
         feBtnExtract.disabled = false;
+        feBtnStopExtract.classList.add("hidden");
+        feBtnStopExtract.disabled = false;
+        _feStopExtraction = false;
         _feUpdateFrameDisplay();
       }
     }
@@ -1982,7 +2009,11 @@
           const winEnd = Math.min(_feFrameCount - 1, run.startFrame + a);
           if (onSegClick) onSegClick(thisIdx);
           await _feLoadFrame(nav);
-          if (e.shiftKey) _feSaveFrames(winEnd - nav + 1);
+          if (e.shiftKey) {
+            const total = winEnd - nav + 1;
+            const n = await _feConfirmWindowExtract(total, nav, winEnd);
+            if (n > 0) _feSaveFrames(n);
+          }
         });
         container.appendChild(seg);
       });
@@ -2090,6 +2121,41 @@
     }
 
     feBtnExtract.addEventListener("click", () => _feSaveFrames(1));
+
+    feBtnStopExtract.addEventListener("click", () => { _feStopExtraction = true; feBtnStopExtract.disabled = true; });
+
+    // ── Window-extract confirmation dialog ───────────────────────
+    function _feConfirmWindowExtract(totalFrames, winStart, winEnd) {
+      return new Promise(resolve => {
+        feDialogMsg.textContent = `Extract ${totalFrames} frame${totalFrames !== 1 ? "s" : ""} from window ${winStart}–${winEnd}?`;
+        feDialogCustomWrap.style.display = "none";
+        feDialogCustomInput.value = totalFrames;
+        feDialogConfirm.textContent = `Extract all ${totalFrames}`;
+        feDialogCustomBtn.classList.remove("hidden");
+
+        function cleanup() { feExtractDialog.close(); }
+
+        feDialogConfirm.onclick = () => { cleanup(); resolve(totalFrames); };
+        feDialogCancel.onclick  = () => { cleanup(); resolve(0); };
+        feDialogCustomBtn.onclick = () => {
+          feDialogCustomWrap.style.display = "block";
+          feDialogCustomInput.max = totalFrames;
+          feDialogCustomInput.value = Math.min(totalFrames, 10);
+          feDialogCustomBtn.classList.add("hidden");
+          feDialogConfirm.textContent = "Extract";
+          feDialogConfirm.onclick = () => {
+            const n = Math.max(1, Math.min(parseInt(feDialogCustomInput.value) || 1, totalFrames));
+            cleanup(); resolve(n);
+          };
+          feDialogCustomInput.focus();
+        };
+        feDialogCustomInput.onkeydown = e => {
+          if (e.key === "Enter") { const n = Math.max(1, Math.min(parseInt(feDialogCustomInput.value) || 1, totalFrames)); cleanup(); resolve(n); }
+          if (e.key === "Escape") { cleanup(); resolve(0); }
+        };
+        feExtractDialog.showModal();
+      });
+    }
 
     feStatusApply.addEventListener("click", () => { if (_feReRenderStatus) _feReRenderStatus(); });
     feNoteApply.addEventListener("click",   () => { if (_feReRenderNote)   _feReRenderNote();   });
@@ -4146,6 +4212,7 @@
     const anvBtnPrev        = document.getElementById("anv-btn-prev");
     const anvBtnNext        = document.getElementById("anv-btn-next");
     const anvFrameCounter   = document.getElementById("anv-frame-counter");
+    const anvFrameJump      = document.getElementById("anv-frame-jump");
     const anvTimeDisplay    = document.getElementById("anv-time-display");
     const anvSeek           = document.getElementById("anv-seek");
     const anvCsvBars        = document.getElementById("anv-csv-bars");
@@ -4153,22 +4220,6 @@
     const anvNoteBarWrap    = document.getElementById("anv-note-bar-wrap");
     const anvStatusBar      = document.getElementById("anv-status-bar");
     const anvNoteBar        = document.getElementById("anv-note-bar");
-    const anvStatusBefore   = document.getElementById("anv-status-before");
-    const anvStatusAfter    = document.getElementById("anv-status-after");
-    const anvStatusApply    = document.getElementById("anv-status-apply");
-    const anvStatusTags     = document.getElementById("anv-status-tags");
-    const anvStatusNav      = document.getElementById("anv-status-nav");
-    const anvStatusPrev     = document.getElementById("anv-status-prev");
-    const anvStatusNext     = document.getElementById("anv-status-next");
-    const anvStatusNavInfo  = document.getElementById("anv-status-nav-info");
-    const anvNoteBefore     = document.getElementById("anv-note-before");
-    const anvNoteAfter      = document.getElementById("anv-note-after");
-    const anvNoteApply      = document.getElementById("anv-note-apply");
-    const anvNoteTags       = document.getElementById("anv-note-tags");
-    const anvNoteNav        = document.getElementById("anv-note-nav");
-    const anvNotePrev       = document.getElementById("anv-note-prev");
-    const anvNoteNext       = document.getElementById("anv-note-next");
-    const anvNoteNavInfo    = document.getElementById("anv-note-nav-info");
     const anvCsvSection     = document.getElementById("anv-csv-section");
     const anvCsvNone        = document.getElementById("anv-csv-none");
     const anvCsvLoaded      = document.getElementById("anv-csv-loaded");
@@ -4200,19 +4251,6 @@
     let _anvCsvPath       = null;
     let _anvCsvRows       = [];       // {frame_number, timestamp, frame_line_status, note}
     let _anvUserTags      = [];       // user-defined tags (note values), populated from CSV + user input
-    let _anvStatusRuns          = [];
-    let _anvNoteRuns            = [];
-    let _anvStatusEffectiveRuns = [];
-    let _anvNoteEffectiveRuns   = [];
-    let _anvStatusColorMap = {};
-    let _anvNoteColorMap   = {};
-    let _anvStatusActiveTag = null;
-    let _anvNoteActiveTag   = null;
-    let _anvStatusSegIdx    = 0;
-    let _anvNoteSegIdx      = 0;
-    let _anvReRenderStatus  = null;
-    let _anvReRenderNote    = null;
-
     const _anvCsvPalette = ["#6ee7b7","#60a5fa","#f472b6","#fbbf24","#a78bfa","#34d399","#fb923c","#e879f9"];
 
     // ── Viewer sizing (can break out of card borders like VA card) ──
@@ -4244,12 +4282,6 @@
       _anvVideoPath = null; _anvFps = 30; _anvFrameCount = 0;
       _anvCurrentFrame = 0; _anvFrameBusy = false; _anvSeekDragging = false;
       _anvCsvPath = null; _anvCsvRows = []; _anvUserTags = [];
-      _anvStatusRuns = []; _anvNoteRuns = [];
-      _anvStatusEffectiveRuns = []; _anvNoteEffectiveRuns = [];
-      _anvStatusColorMap = {}; _anvNoteColorMap = {};
-      _anvStatusActiveTag = null; _anvNoteActiveTag = null;
-      _anvStatusSegIdx = 0; _anvNoteSegIdx = 0;
-      _anvReRenderStatus = null; _anvReRenderNote = null;
       anvPlayIcon.classList.remove("hidden"); anvPauseIcon.classList.add("hidden");
       anvFrameImg.onload = null; anvFrameImg.onerror = null;
       if (anvFrameImg.src && anvFrameImg.src.startsWith("blob:")) URL.revokeObjectURL(anvFrameImg.src);
@@ -4261,8 +4293,6 @@
       anvStatusBarWrap.classList.add("hidden");
       anvNoteBarWrap.classList.add("hidden");
       anvAnnotationPanel.classList.add("hidden");
-      anvStatusNav.classList.add("hidden");
-      anvNoteNav.classList.add("hidden");
       anvLoadStatus.textContent = "";
       anvLoadStatus.className = "fe-extract-status";
     }
@@ -4272,14 +4302,49 @@
       return `/annotate/video-frame/${n}?path=${encodeURIComponent(_anvVideoPath)}`;
     }
 
-    // ── Display update ──────────────────────────────────────────
+    // ── Frame counter — text node kept separate from the jump input ──
+    [...anvFrameCounter.childNodes].forEach(n => { if (n.nodeType === Node.TEXT_NODE) n.remove(); });
+    const _anvCounterText = document.createTextNode("");
+    anvFrameCounter.insertBefore(_anvCounterText, anvFrameJump);
+
     function _anvUpdateDisplay() {
-      anvFrameCounter.textContent = `Frame ${_anvCurrentFrame} / ${_anvFrameCount}`;
-      anvTimeDisplay.textContent  = `${(_anvCurrentFrame / _anvFps).toFixed(3)} s`;
+      _anvCounterText.nodeValue = `Frame ${_anvCurrentFrame} / ${_anvFrameCount}`;
+      anvTimeDisplay.textContent = `${(_anvCurrentFrame / _anvFps).toFixed(3)} s`;
       if (!_anvSeekDragging)
         anvSeek.value = Math.round((_anvCurrentFrame / Math.max(_anvFrameCount - 1, 1)) * 1000);
       _anvSyncAnnotationPanel();
     }
+
+    // ── Double-click frame counter to jump ───────────────────────
+    anvFrameCounter.addEventListener("dblclick", () => {
+      anvFrameCounter.classList.add("editing");
+      anvFrameJump.classList.remove("hidden");
+      anvFrameJump.max   = String(_anvFrameCount - 1);
+      anvFrameJump.value = String(_anvCurrentFrame);
+      anvFrameJump.select();
+    });
+
+    function _anvCommitJump() {
+      const n = parseInt(anvFrameJump.value);
+      anvFrameJump.classList.add("hidden");
+      anvFrameCounter.classList.remove("editing");
+      if (!isNaN(n)) _anvLoadFrame(n);
+    }
+
+    let _anvJumpEscaped = false;
+    anvFrameJump.addEventListener("keydown", e => {
+      if (e.key === "Enter")  { e.preventDefault(); _anvCommitJump(); }
+      if (e.key === "Escape") {
+        _anvJumpEscaped = true;
+        anvFrameJump.classList.add("hidden");
+        anvFrameCounter.classList.remove("editing");
+        anvFrameJump.blur();
+      }
+    });
+    anvFrameJump.addEventListener("blur", () => {
+      if (_anvJumpEscaped) { _anvJumpEscaped = false; return; }
+      _anvCommitJump();
+    });
 
     // ── Load a frame ────────────────────────────────────────────
     async function _anvLoadFrame(n) {
@@ -4335,8 +4400,8 @@
     anvSeek.addEventListener("touchstart", () => { _anvSeekDragging = true; });
     anvSeek.addEventListener("input", () => {
       _anvCurrentFrame = Math.round((anvSeek.value / 1000) * Math.max(_anvFrameCount - 1, 0));
-      anvFrameCounter.textContent = `Frame ${_anvCurrentFrame} / ${_anvFrameCount}`;
-      anvTimeDisplay.textContent  = `${(_anvCurrentFrame / _anvFps).toFixed(3)} s`;
+      _anvCounterText.nodeValue  = `Frame ${_anvCurrentFrame} / ${_anvFrameCount}`;
+      anvTimeDisplay.textContent = `${(_anvCurrentFrame / _anvFps).toFixed(3)} s`;
     });
     anvSeek.addEventListener("change", () => { _anvSeekDragging = false; _anvLoadFrame(_anvCurrentFrame); });
 
@@ -4347,178 +4412,56 @@
       if (e.key === "ArrowRight") { e.preventDefault(); _anvLoadFrame(_anvCurrentFrame + 1); }
     });
 
-    // ── CSV bar helpers (same logic as Frame Extractor) ─────────
-    function _anvComputeRuns(rows, field) {
-      const vals = [...new Set(rows.map(r => r[field]).filter(v => v))];
-      const colorMap = {};
-      vals.forEach((v, i) => { colorMap[v] = _anvCsvPalette[i % _anvCsvPalette.length]; });
-      const runs = [];
-      rows.forEach(row => {
-        const val = row[field];
-        if (!val) return;
-        const last = runs[runs.length - 1];
-        if (last && last.value === val) { last.endFrame = row.frame_number; }
-        else runs.push({ value: val, startFrame: row.frame_number, endFrame: row.frame_number });
-      });
-      return { runs, colorMap };
-    }
-
-    function _anvMergeRuns(runs, ignoreFrames) {
-      if (!ignoreFrames) return runs;
-      const merged = [], lastSeenStart = {};
-      runs.forEach(run => {
-        const prev = lastSeenStart[run.value];
-        lastSeenStart[run.value] = run.startFrame;
-        if (prev !== undefined && run.startFrame - prev <= ignoreFrames) return;
-        merged.push({ ...run });
-      });
-      return merged;
-    }
-
-    function _anvRenderCsvBar(container, runs, colorMap, beforeInput, afterInput, activeTag, onSegClick) {
-      container.innerHTML = "";
-      const total = Math.max(_anvFrameCount, 1);
-      runs.forEach(run => {
-        if (activeTag !== null && run.value !== activeTag) return;
-        const thisIdx  = runs.indexOf(run);
-        const visStart = Math.max(0, run.startFrame - (parseInt(beforeInput.value) || 0));
-        const visEnd   = Math.min(_anvFrameCount - 1, run.startFrame + (parseInt(afterInput.value) || 0));
-        const startPct = (visStart / total) * 100;
-        const widthPct = Math.max(((visEnd + 1) / total) * 100 - startPct, 0.3);
-        const color    = colorMap[run.value];
-        const seg = document.createElement("div");
-        seg.className = "fe-timeline-seg";
-        seg.style.cssText = `left:${startPct}%;width:${widthPct}%;background:${color}40;border-color:${color};color:${color}`;
-        seg.textContent = run.value;
-        seg.title = `${run.value}  (frames ${run.startFrame}–${run.endFrame})\nClick → frame ${visStart}`;
-        seg.addEventListener("click", async () => {
-          if (onSegClick) onSegClick(thisIdx);
-          await _anvLoadFrame(visStart);
-        });
-        container.appendChild(seg);
-      });
-    }
-
-    function _anvRenderTagFilter(tagContainer, runs, colorMap, activeTag, onTagClick) {
-      tagContainer.innerHTML = "";
-      const vals = [...new Set(runs.map(r => r.value))];
-      if (vals.length < 2) return;
-      vals.forEach(val => {
-        const chip = document.createElement("span");
-        chip.className = "fe-tag-chip" + (activeTag === val ? " active" : "");
-        chip.style.setProperty("--chip-color", colorMap[val]);
-        chip.textContent = val;
-        chip.addEventListener("click", () => onTagClick(val));
-        tagContainer.appendChild(chip);
-      });
-    }
-
-    function _anvUpdateSegNav(navEl, infoEl, runs, activeTag, idx) {
-      if (!activeTag) { navEl.classList.add("hidden"); return; }
-      const filtered = runs.filter(r => r.value === activeTag);
-      if (!filtered.length) { navEl.classList.add("hidden"); return; }
-      navEl.classList.remove("hidden");
-      infoEl.textContent = `${idx + 1} / ${filtered.length}`;
-    }
-
-    function _anvGoToSeg(runs, beforeInput, idx) {
-      const run = runs[idx];
-      if (!run) return;
-      _anvLoadFrame(Math.max(0, run.startFrame - (parseInt(beforeInput.value) || 0)));
-    }
-
-    // ── Build CSV bars from loaded rows ──────────────────────────
+    // ── Build CSV bars — one segment per annotated frame ─────────
     function _anvBuildCsvBars() {
-      anvCsvBars.classList.add("hidden");
-      anvStatusBarWrap.classList.add("hidden");
-      anvNoteBarWrap.classList.add("hidden");
-      _anvReRenderStatus = null; _anvReRenderNote = null;
-      _anvNoteActiveTag = null; _anvStatusActiveTag = null;
-      _anvNoteSegIdx = 0; _anvStatusSegIdx = 0;
-
-      const hasStatus = _anvCsvRows.some(r => r.frame_line_status && r.frame_line_status !== "0");
+      const total     = Math.max(_anvFrameCount, 1);
       const hasNote   = _anvCsvRows.some(r => r.note);
-      if (!hasStatus && !hasNote) return;
-      anvCsvBars.classList.remove("hidden");
+      const hasStatus = _anvCsvRows.some(r => r.frame_line_status && r.frame_line_status !== "0");
 
-      if (hasStatus) {
-        ({ runs: _anvStatusRuns, colorMap: _anvStatusColorMap } = _anvComputeRuns(_anvCsvRows, "frame_line_status"));
-        const onStatusTag = val => {
-          _anvStatusActiveTag = (_anvStatusActiveTag === val) ? null : val;
-          _anvStatusSegIdx = 0;
-          _anvStatusEffectiveRuns = _anvMergeRuns(_anvStatusRuns, 0);
-          _anvRenderCsvBar(anvStatusBar, _anvStatusEffectiveRuns, _anvStatusColorMap, anvStatusBefore, anvStatusAfter, _anvStatusActiveTag,
-            idx => { _anvStatusSegIdx = idx; _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx); });
-          _anvRenderTagFilter(anvStatusTags, _anvStatusRuns, _anvStatusColorMap, _anvStatusActiveTag, onStatusTag);
-          _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx);
-          if (_anvStatusActiveTag) _anvGoToSeg(_anvStatusEffectiveRuns.filter(r => r.value === _anvStatusActiveTag), anvStatusBefore, 0);
-        };
-        _anvReRenderStatus = () => {
-          _anvStatusEffectiveRuns = _anvMergeRuns(_anvStatusRuns, 0);
-          _anvRenderCsvBar(anvStatusBar, _anvStatusEffectiveRuns, _anvStatusColorMap, anvStatusBefore, anvStatusAfter, _anvStatusActiveTag,
-            idx => { _anvStatusSegIdx = idx; _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx); });
-          _anvRenderTagFilter(anvStatusTags, _anvStatusRuns, _anvStatusColorMap, _anvStatusActiveTag, onStatusTag);
-          _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx);
-        };
-        _anvReRenderStatus();
-        anvStatusBarWrap.classList.remove("hidden");
+      anvCsvBars.classList.toggle("hidden", !hasNote && !hasStatus);
+
+      // Note bar
+      anvNoteBarWrap.classList.toggle("hidden", !hasNote);
+      anvNoteBar.innerHTML = "";
+      if (hasNote) {
+        const vals = [...new Set(_anvCsvRows.filter(r => r.note).map(r => r.note))];
+        const colorMap = {};
+        vals.forEach((v, i) => { colorMap[v] = _anvCsvPalette[i % _anvCsvPalette.length]; });
+        _anvCsvRows.forEach(row => {
+          if (!row.note) return;
+          const fn    = Number(row.frame_number);
+          const color = colorMap[row.note];
+          const seg   = document.createElement("div");
+          seg.className = "fe-timeline-seg";
+          seg.style.cssText = `left:${(fn / total) * 100}%;width:max(0.5%,3px);background:${color}40;border-color:${color};color:${color}`;
+          seg.textContent = row.note;
+          seg.title = `${row.note}  (frame ${fn})`;
+          seg.addEventListener("click", () => _anvLoadFrame(fn));
+          anvNoteBar.appendChild(seg);
+        });
       }
 
-      if (hasNote) {
-        ({ runs: _anvNoteRuns, colorMap: _anvNoteColorMap } = _anvComputeRuns(_anvCsvRows, "note"));
-        const onNoteTag = val => {
-          _anvNoteActiveTag = (_anvNoteActiveTag === val) ? null : val;
-          _anvNoteSegIdx = 0;
-          _anvNoteEffectiveRuns = _anvMergeRuns(_anvNoteRuns, 0);
-          _anvRenderCsvBar(anvNoteBar, _anvNoteEffectiveRuns, _anvNoteColorMap, anvNoteBefore, anvNoteAfter, _anvNoteActiveTag,
-            idx => { _anvNoteSegIdx = idx; _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx); });
-          _anvRenderTagFilter(anvNoteTags, _anvNoteRuns, _anvNoteColorMap, _anvNoteActiveTag, onNoteTag);
-          _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx);
-          if (_anvNoteActiveTag) _anvGoToSeg(_anvNoteEffectiveRuns.filter(r => r.value === _anvNoteActiveTag), anvNoteBefore, 0);
-        };
-        _anvReRenderNote = () => {
-          _anvNoteEffectiveRuns = _anvMergeRuns(_anvNoteRuns, 0);
-          _anvRenderCsvBar(anvNoteBar, _anvNoteEffectiveRuns, _anvNoteColorMap, anvNoteBefore, anvNoteAfter, _anvNoteActiveTag,
-            idx => { _anvNoteSegIdx = idx; _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx); });
-          _anvRenderTagFilter(anvNoteTags, _anvNoteRuns, _anvNoteColorMap, _anvNoteActiveTag, onNoteTag);
-          _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx);
-        };
-        _anvReRenderNote();
-        anvNoteBarWrap.classList.remove("hidden");
+      // Status bar
+      anvStatusBarWrap.classList.toggle("hidden", !hasStatus);
+      anvStatusBar.innerHTML = "";
+      if (hasStatus) {
+        const vals = [...new Set(_anvCsvRows.filter(r => r.frame_line_status && r.frame_line_status !== "0").map(r => r.frame_line_status))];
+        const colorMap = {};
+        vals.forEach((v, i) => { colorMap[v] = _anvCsvPalette[i % _anvCsvPalette.length]; });
+        _anvCsvRows.forEach(row => {
+          if (!row.frame_line_status || row.frame_line_status === "0") return;
+          const fn    = Number(row.frame_number);
+          const color = colorMap[row.frame_line_status];
+          const seg   = document.createElement("div");
+          seg.className = "fe-timeline-seg";
+          seg.style.cssText = `left:${(fn / total) * 100}%;width:max(0.5%,3px);background:${color}40;border-color:${color};color:${color}`;
+          seg.textContent = row.frame_line_status;
+          seg.title = `${row.frame_line_status}  (frame ${fn})`;
+          seg.addEventListener("click", () => _anvLoadFrame(fn));
+          anvStatusBar.appendChild(seg);
+        });
       }
     }
-
-    anvStatusApply.addEventListener("click", () => { if (_anvReRenderStatus) _anvReRenderStatus(); });
-    anvNoteApply.addEventListener("click",   () => { if (_anvReRenderNote)   _anvReRenderNote();   });
-
-    anvStatusPrev.addEventListener("click", () => {
-      if (!_anvStatusActiveTag) return;
-      const n = _anvStatusEffectiveRuns.filter(r => r.value === _anvStatusActiveTag).length;
-      _anvStatusSegIdx = (_anvStatusSegIdx - 1 + n) % n;
-      _anvGoToSeg(_anvStatusEffectiveRuns.filter(r => r.value === _anvStatusActiveTag), anvStatusBefore, _anvStatusSegIdx);
-      _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx);
-    });
-    anvStatusNext.addEventListener("click", () => {
-      if (!_anvStatusActiveTag) return;
-      const n = _anvStatusEffectiveRuns.filter(r => r.value === _anvStatusActiveTag).length;
-      _anvStatusSegIdx = (_anvStatusSegIdx + 1) % n;
-      _anvGoToSeg(_anvStatusEffectiveRuns.filter(r => r.value === _anvStatusActiveTag), anvStatusBefore, _anvStatusSegIdx);
-      _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx);
-    });
-    anvNotePrev.addEventListener("click", () => {
-      if (!_anvNoteActiveTag) return;
-      const n = _anvNoteEffectiveRuns.filter(r => r.value === _anvNoteActiveTag).length;
-      _anvNoteSegIdx = (_anvNoteSegIdx - 1 + n) % n;
-      _anvGoToSeg(_anvNoteEffectiveRuns.filter(r => r.value === _anvNoteActiveTag), anvNoteBefore, _anvNoteSegIdx);
-      _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx);
-    });
-    anvNoteNext.addEventListener("click", () => {
-      if (!_anvNoteActiveTag) return;
-      const n = _anvNoteEffectiveRuns.filter(r => r.value === _anvNoteActiveTag).length;
-      _anvNoteSegIdx = (_anvNoteSegIdx + 1) % n;
-      _anvGoToSeg(_anvNoteEffectiveRuns.filter(r => r.value === _anvNoteActiveTag), anvNoteBefore, _anvNoteSegIdx);
-      _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx);
-    });
 
     // ── Sync annotation panel to current frame ───────────────────
     function _anvSyncAnnotationPanel() {

@@ -354,9 +354,27 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
             Extract Frame
           </button>
+          <button id="fe-btn-stop-extract" class="btn-sm btn-danger hidden" style="flex-shrink:0;padding:.5rem .9rem">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+            Stop
+          </button>
           <span id="fe-extract-count" class="fe-extract-count">0 frames saved</span>
         </div>
         <span id="fe-extract-status" class="fe-extract-status"></span>
+
+        <!-- Window-extract confirmation dialog -->
+        <dialog id="fe-extract-dialog" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.25rem 1.5rem;color:var(--text);max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.45)">
+          <p id="fe-dialog-msg" style="margin:0 0 .9rem;font-size:.9rem;line-height:1.4"></p>
+          <div id="fe-dialog-custom-wrap" style="display:none;margin-bottom:.85rem">
+            <label style="font-size:.82rem;display:block;margin-bottom:.35rem;opacity:.75">Frames to extract (from window start):</label>
+            <input id="fe-dialog-custom-input" type="number" min="1" style="width:100%;padding:.35rem .55rem;background:var(--input-bg,var(--surface));border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:.88rem;box-sizing:border-box">
+          </div>
+          <div style="display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap">
+            <button id="fe-dialog-cancel" class="btn-sm">Cancel</button>
+            <button id="fe-dialog-custom-btn" class="btn-sm">Custom amount…</button>
+            <button id="fe-dialog-confirm" class="btn-sm btn-create">Extract all</button>
+          </div>
+        </dialog>
 
         <!-- Hidden canvas for frame capture -->
         <canvas id="fe-canvas" style="display:none"></canvas>
@@ -955,7 +973,7 @@
           <button id="anv-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (→)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
           </button>
-          <span class="fe-frame-counter" id="anv-frame-counter">Frame 0 / 0</span>
+          <span class="fe-frame-counter" id="anv-frame-counter" title="Double-click to jump to frame">Frame 0 / 0<input id="anv-frame-jump" class="fe-frame-jump hidden" type="number" min="0" step="1" /></span>
           <span class="fe-time-display" id="anv-time-display">0.000 s</span>
         </div>
 
@@ -975,45 +993,15 @@
           </button>
         </div>
 
-        <!-- ── CSV annotation bars (same as Frame Extractor) ─── -->
+        <!-- ── CSV annotation bars ───────────────────────────── -->
         <div id="anv-csv-bars" class="hidden">
           <div id="anv-status-bar-wrap" class="hidden">
             <div class="fe-csv-bar-label">Status</div>
             <div id="anv-status-bar" class="fe-timeline-bar"></div>
-            <div class="fe-bar-controls">
-              <div class="fe-window-controls">
-                <span class="fe-window-label">Window:</span>
-                <label class="fe-window-input-label"><input type="number" id="anv-status-before" min="0" value="200" class="fe-window-input"> before</label>
-                <label class="fe-window-input-label"><input type="number" id="anv-status-after"  min="0" value="800" class="fe-window-input"> after</label>
-                <button id="anv-status-apply" class="btn-sm fe-window-apply">Apply</button>
-                <span class="fe-window-hint">frames · click=navigate to window start</span>
-              </div>
-              <div id="anv-status-tags" class="fe-tag-filter"></div>
-              <div id="anv-status-nav" class="fe-seg-nav hidden">
-                <button id="anv-status-prev" class="btn-sm fe-seg-nav-btn">&#8592; Prev</button>
-                <span id="anv-status-nav-info" class="fe-seg-nav-info"></span>
-                <button id="anv-status-next" class="btn-sm fe-seg-nav-btn">Next &#8594;</button>
-              </div>
-            </div>
           </div>
           <div id="anv-note-bar-wrap" class="hidden">
             <div class="fe-csv-bar-label">Notes</div>
             <div id="anv-note-bar" class="fe-timeline-bar"></div>
-            <div class="fe-bar-controls">
-              <div class="fe-window-controls">
-                <span class="fe-window-label">Window:</span>
-                <label class="fe-window-input-label"><input type="number" id="anv-note-before" min="0" value="200" class="fe-window-input"> before</label>
-                <label class="fe-window-input-label"><input type="number" id="anv-note-after"  min="0" value="800" class="fe-window-input"> after</label>
-                <button id="anv-note-apply" class="btn-sm fe-window-apply">Apply</button>
-                <span class="fe-window-hint">frames · click=navigate to window start</span>
-              </div>
-              <div id="anv-note-tags" class="fe-tag-filter"></div>
-              <div id="anv-note-nav" class="fe-seg-nav hidden">
-                <button id="anv-note-prev" class="btn-sm fe-seg-nav-btn">&#8592; Prev</button>
-                <span id="anv-note-nav-info" class="fe-seg-nav-info"></span>
-                <button id="anv-note-next" class="btn-sm fe-seg-nav-btn">Next &#8594;</button>
-              </div>
-            </div>
           </div>
         </div>
 
