@@ -4126,6 +4126,676 @@
     });
   })();
 
+  // ── Video Annotator ───────────────────────────────────────────
+  (() => {
+    const anvCard           = document.getElementById("annotate-video-card");
+    const anvOpenBtn        = document.getElementById("btn-open-annotate-video");
+    const anvCloseBtn       = document.getElementById("btn-close-annotate-video");
+    const anvVideoPath      = document.getElementById("anv-video-path");
+    const anvBrowseBtn      = document.getElementById("anv-browse-btn");
+    const anvLoadBtn        = document.getElementById("anv-load-btn");
+    const anvBrowser        = document.getElementById("anv-browser");
+    const anvLoadStatus     = document.getElementById("anv-load-status");
+    const anvPlayerSec      = document.getElementById("anv-player-section");
+    const anvVideoWrap      = document.getElementById("anv-video-wrap");
+    const anvFrameImg       = document.getElementById("anv-frame-img");
+    const anvFrameSpinner   = document.getElementById("anv-frame-spinner");
+    const anvBtnPlay        = document.getElementById("anv-btn-play");
+    const anvPlayIcon       = document.getElementById("anv-play-icon");
+    const anvPauseIcon      = document.getElementById("anv-pause-icon");
+    const anvBtnPrev        = document.getElementById("anv-btn-prev");
+    const anvBtnNext        = document.getElementById("anv-btn-next");
+    const anvFrameCounter   = document.getElementById("anv-frame-counter");
+    const anvTimeDisplay    = document.getElementById("anv-time-display");
+    const anvSeek           = document.getElementById("anv-seek");
+    const anvCsvBars        = document.getElementById("anv-csv-bars");
+    const anvStatusBarWrap  = document.getElementById("anv-status-bar-wrap");
+    const anvNoteBarWrap    = document.getElementById("anv-note-bar-wrap");
+    const anvStatusBar      = document.getElementById("anv-status-bar");
+    const anvNoteBar        = document.getElementById("anv-note-bar");
+    const anvStatusBefore   = document.getElementById("anv-status-before");
+    const anvStatusAfter    = document.getElementById("anv-status-after");
+    const anvStatusIgnore   = document.getElementById("anv-status-ignore");
+    const anvStatusApply    = document.getElementById("anv-status-apply");
+    const anvStatusTags     = document.getElementById("anv-status-tags");
+    const anvStatusNav      = document.getElementById("anv-status-nav");
+    const anvStatusPrev     = document.getElementById("anv-status-prev");
+    const anvStatusNext     = document.getElementById("anv-status-next");
+    const anvStatusNavInfo  = document.getElementById("anv-status-nav-info");
+    const anvNoteBefore     = document.getElementById("anv-note-before");
+    const anvNoteAfter      = document.getElementById("anv-note-after");
+    const anvNoteIgnore     = document.getElementById("anv-note-ignore");
+    const anvNoteApply      = document.getElementById("anv-note-apply");
+    const anvNoteTags       = document.getElementById("anv-note-tags");
+    const anvNoteNav        = document.getElementById("anv-note-nav");
+    const anvNotePrev       = document.getElementById("anv-note-prev");
+    const anvNoteNext       = document.getElementById("anv-note-next");
+    const anvNoteNavInfo    = document.getElementById("anv-note-nav-info");
+    const anvCsvSection     = document.getElementById("anv-csv-section");
+    const anvCsvNone        = document.getElementById("anv-csv-none");
+    const anvCsvLoaded      = document.getElementById("anv-csv-loaded");
+    const anvCsvPathDisplay = document.getElementById("anv-csv-path-display");
+    const anvCreateCsvBtn   = document.getElementById("anv-create-csv-btn");
+    const anvCsvCreateStatus= document.getElementById("anv-csv-create-status");
+    const anvAnnotationPanel= document.getElementById("anv-annotation-panel");
+    const anvAnnotateFrameNum= document.getElementById("anv-annotate-frame-num");
+    const anvNoteInput      = document.getElementById("anv-note-input");
+    const anvStatusInput    = document.getElementById("anv-status-input");
+    const anvSaveAnnotationBtn = document.getElementById("anv-save-annotation-btn");
+    const anvSaveStatus     = document.getElementById("anv-save-status");
+    const anvTagChips       = document.getElementById("anv-tag-chips");
+    const anvNewTagInput    = document.getElementById("anv-new-tag-input");
+    const anvAddTagBtn      = document.getElementById("anv-add-tag-btn");
+    const anvZoomInput      = document.getElementById("anv-zoom");
+    const anvZoomVal        = document.getElementById("anv-zoom-val");
+    const anvRefreshCsvBtn  = document.getElementById("anv-refresh-csv-btn");
+
+    // ── State ───────────────────────────────────────────────────
+    let _anvZoom          = 100;
+    let _anvVideoPath     = null;
+    let _anvFps           = 30;
+    let _anvFrameCount    = 0;
+    let _anvCurrentFrame  = 0;
+    let _anvFrameBusy     = false;
+    let _anvSeekDragging  = false;
+    let _anvPlayTimer     = null;
+    let _anvCsvPath       = null;
+    let _anvCsvRows       = [];       // {frame_number, timestamp, frame_line_status, note}
+    let _anvUserTags      = [];       // user-defined tags (note values), populated from CSV + user input
+    let _anvStatusRuns          = [];
+    let _anvNoteRuns            = [];
+    let _anvStatusEffectiveRuns = [];
+    let _anvNoteEffectiveRuns   = [];
+    let _anvStatusColorMap = {};
+    let _anvNoteColorMap   = {};
+    let _anvStatusActiveTag = null;
+    let _anvNoteActiveTag   = null;
+    let _anvStatusSegIdx    = 0;
+    let _anvNoteSegIdx      = 0;
+    let _anvReRenderStatus  = null;
+    let _anvReRenderNote    = null;
+
+    const _anvCsvPalette = ["#6ee7b7","#60a5fa","#f472b6","#fbbf24","#a78bfa","#34d399","#fb923c","#e879f9"];
+
+    // ── Viewer sizing (can break out of card borders like VA card) ──
+    function _anvFitViewer() {
+      if (!anvFrameImg.naturalWidth) return;
+      const cs      = getComputedStyle(anvCard);
+      const padL    = parseFloat(cs.paddingLeft)  || 0;
+      const padR    = parseFloat(cs.paddingRight) || 0;
+      const baseW   = anvCard.clientWidth - padL - padR;
+      const maxW    = Math.max(baseW, window.innerWidth - 32);
+      const targetW = Math.min(Math.round(baseW * (_anvZoom / 100)), Math.floor(maxW));
+      const extra   = targetW - baseW;
+      anvVideoWrap.style.width      = targetW + "px";
+      anvVideoWrap.style.marginLeft = extra > 0 ? `-${extra / 2}px` : "";
+    }
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(() => { if (anvFrameImg.naturalWidth) _anvFitViewer(); }).observe(anvCard);
+    }
+    anvZoomInput.addEventListener("input", () => {
+      _anvZoom = parseInt(anvZoomInput.value, 10);
+      anvZoomVal.textContent = _anvZoom + " %";
+      _anvFitViewer();
+    });
+
+    // ── Reset ───────────────────────────────────────────────────
+    function _anvReset() {
+      if (_anvPlayTimer) { clearInterval(_anvPlayTimer); _anvPlayTimer = null; }
+      _anvZoom = 100; anvZoomInput.value = "100"; anvZoomVal.textContent = "100 %";
+      _anvVideoPath = null; _anvFps = 30; _anvFrameCount = 0;
+      _anvCurrentFrame = 0; _anvFrameBusy = false; _anvSeekDragging = false;
+      _anvCsvPath = null; _anvCsvRows = []; _anvUserTags = [];
+      _anvStatusRuns = []; _anvNoteRuns = [];
+      _anvStatusEffectiveRuns = []; _anvNoteEffectiveRuns = [];
+      _anvStatusColorMap = {}; _anvNoteColorMap = {};
+      _anvStatusActiveTag = null; _anvNoteActiveTag = null;
+      _anvStatusSegIdx = 0; _anvNoteSegIdx = 0;
+      _anvReRenderStatus = null; _anvReRenderNote = null;
+      anvPlayIcon.classList.remove("hidden"); anvPauseIcon.classList.add("hidden");
+      anvFrameImg.onload = null; anvFrameImg.onerror = null;
+      if (anvFrameImg.src && anvFrameImg.src.startsWith("blob:")) URL.revokeObjectURL(anvFrameImg.src);
+      anvFrameImg.removeAttribute("src");
+      anvVideoWrap.style.width = ""; anvVideoWrap.style.marginLeft = "";
+      anvFrameSpinner.classList.add("hidden");
+      anvPlayerSec.classList.add("hidden");
+      anvCsvBars.classList.add("hidden");
+      anvStatusBarWrap.classList.add("hidden");
+      anvNoteBarWrap.classList.add("hidden");
+      anvAnnotationPanel.classList.add("hidden");
+      anvStatusNav.classList.add("hidden");
+      anvNoteNav.classList.add("hidden");
+      anvLoadStatus.textContent = "";
+      anvLoadStatus.className = "fe-extract-status";
+    }
+
+    // ── Frame URL ───────────────────────────────────────────────
+    function _anvFrameUrl(n) {
+      return `/annotate/video-frame/${n}?path=${encodeURIComponent(_anvVideoPath)}`;
+    }
+
+    // ── Display update ──────────────────────────────────────────
+    function _anvUpdateDisplay() {
+      anvFrameCounter.textContent = `Frame ${_anvCurrentFrame} / ${_anvFrameCount}`;
+      anvTimeDisplay.textContent  = `${(_anvCurrentFrame / _anvFps).toFixed(3)} s`;
+      if (!_anvSeekDragging)
+        anvSeek.value = Math.round((_anvCurrentFrame / Math.max(_anvFrameCount - 1, 1)) * 1000);
+      _anvSyncAnnotationPanel();
+    }
+
+    // ── Load a frame ────────────────────────────────────────────
+    async function _anvLoadFrame(n) {
+      if (_anvFrameBusy) return;
+      _anvFrameBusy = true;
+      n = Math.max(0, Math.min(n, Math.max(_anvFrameCount - 1, 0)));
+      _anvCurrentFrame = n;
+      anvFrameSpinner.classList.remove("hidden");
+      try {
+        const resp = await fetch(_anvFrameUrl(n));
+        if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.error || `HTTP ${resp.status}`); }
+        const blob    = await resp.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        await new Promise((resolve, reject) => {
+          anvFrameImg.onload  = resolve;
+          anvFrameImg.onerror = reject;
+          const prev = anvFrameImg.src;
+          anvFrameImg.src = blobUrl;
+          if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+        });
+        _anvFitViewer();
+        _anvUpdateDisplay();
+      } catch (err) {
+        anvLoadStatus.textContent = `Frame load error: ${err.message}`;
+        anvLoadStatus.className   = "fe-extract-status err";
+      } finally {
+        _anvFrameBusy = false;
+        anvFrameSpinner.classList.add("hidden");
+      }
+    }
+
+    // ── Controls ────────────────────────────────────────────────
+    anvBtnPlay.addEventListener("click", () => {
+      if (_anvPlayTimer) {
+        clearInterval(_anvPlayTimer); _anvPlayTimer = null;
+        anvPlayIcon.classList.remove("hidden"); anvPauseIcon.classList.add("hidden");
+      } else {
+        anvPlayIcon.classList.add("hidden"); anvPauseIcon.classList.remove("hidden");
+        _anvPlayTimer = setInterval(async () => {
+          if (_anvCurrentFrame >= _anvFrameCount - 1) {
+            clearInterval(_anvPlayTimer); _anvPlayTimer = null;
+            anvPlayIcon.classList.remove("hidden"); anvPauseIcon.classList.add("hidden");
+            return;
+          }
+          await _anvLoadFrame(_anvCurrentFrame + 1);
+        }, 1000 / _anvFps);
+      }
+    });
+    anvBtnPrev.addEventListener("click", () => _anvLoadFrame(_anvCurrentFrame - 1));
+    anvBtnNext.addEventListener("click", () => _anvLoadFrame(_anvCurrentFrame + 1));
+
+    anvSeek.addEventListener("mousedown",  () => { _anvSeekDragging = true; });
+    anvSeek.addEventListener("touchstart", () => { _anvSeekDragging = true; });
+    anvSeek.addEventListener("input", () => {
+      _anvCurrentFrame = Math.round((anvSeek.value / 1000) * Math.max(_anvFrameCount - 1, 0));
+      anvFrameCounter.textContent = `Frame ${_anvCurrentFrame} / ${_anvFrameCount}`;
+      anvTimeDisplay.textContent  = `${(_anvCurrentFrame / _anvFps).toFixed(3)} s`;
+    });
+    anvSeek.addEventListener("change", () => { _anvSeekDragging = false; _anvLoadFrame(_anvCurrentFrame); });
+
+    anvCard.addEventListener("keydown", (e) => {
+      if (anvPlayerSec.classList.contains("hidden")) return;
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.key === "ArrowLeft")  { e.preventDefault(); _anvLoadFrame(_anvCurrentFrame - 1); }
+      if (e.key === "ArrowRight") { e.preventDefault(); _anvLoadFrame(_anvCurrentFrame + 1); }
+    });
+
+    // ── CSV bar helpers (same logic as Frame Extractor) ─────────
+    function _anvComputeRuns(rows, field) {
+      const vals = [...new Set(rows.map(r => r[field]).filter(v => v))];
+      const colorMap = {};
+      vals.forEach((v, i) => { colorMap[v] = _anvCsvPalette[i % _anvCsvPalette.length]; });
+      const runs = [];
+      rows.forEach(row => {
+        const val = row[field];
+        if (!val) return;
+        const last = runs[runs.length - 1];
+        if (last && last.value === val) { last.endFrame = row.frame_number; }
+        else runs.push({ value: val, startFrame: row.frame_number, endFrame: row.frame_number });
+      });
+      return { runs, colorMap };
+    }
+
+    function _anvMergeRuns(runs, ignoreFrames) {
+      if (!ignoreFrames) return runs;
+      const merged = [], lastSeenStart = {};
+      runs.forEach(run => {
+        const prev = lastSeenStart[run.value];
+        lastSeenStart[run.value] = run.startFrame;
+        if (prev !== undefined && run.startFrame - prev <= ignoreFrames) return;
+        merged.push({ ...run });
+      });
+      return merged;
+    }
+
+    function _anvRenderCsvBar(container, runs, colorMap, beforeInput, afterInput, activeTag, onSegClick) {
+      container.innerHTML = "";
+      const total = Math.max(_anvFrameCount, 1);
+      runs.forEach(run => {
+        if (activeTag !== null && run.value !== activeTag) return;
+        const thisIdx  = runs.indexOf(run);
+        const visStart = Math.max(0, run.startFrame - (parseInt(beforeInput.value) || 0));
+        const visEnd   = Math.min(_anvFrameCount - 1, run.startFrame + (parseInt(afterInput.value) || 0));
+        const startPct = (visStart / total) * 100;
+        const widthPct = Math.max(((visEnd + 1) / total) * 100 - startPct, 0.3);
+        const color    = colorMap[run.value];
+        const seg = document.createElement("div");
+        seg.className = "fe-timeline-seg";
+        seg.style.cssText = `left:${startPct}%;width:${widthPct}%;background:${color}40;border-color:${color};color:${color}`;
+        seg.textContent = run.value;
+        seg.title = `${run.value}  (frames ${run.startFrame}–${run.endFrame})\nClick → frame ${visStart}`;
+        seg.addEventListener("click", async () => {
+          if (onSegClick) onSegClick(thisIdx);
+          await _anvLoadFrame(visStart);
+        });
+        container.appendChild(seg);
+      });
+    }
+
+    function _anvRenderTagFilter(tagContainer, runs, colorMap, activeTag, onTagClick) {
+      tagContainer.innerHTML = "";
+      const vals = [...new Set(runs.map(r => r.value))];
+      if (vals.length < 2) return;
+      vals.forEach(val => {
+        const chip = document.createElement("span");
+        chip.className = "fe-tag-chip" + (activeTag === val ? " active" : "");
+        chip.style.setProperty("--chip-color", colorMap[val]);
+        chip.textContent = val;
+        chip.addEventListener("click", () => onTagClick(val));
+        tagContainer.appendChild(chip);
+      });
+    }
+
+    function _anvUpdateSegNav(navEl, infoEl, runs, activeTag, idx) {
+      if (!activeTag) { navEl.classList.add("hidden"); return; }
+      const filtered = runs.filter(r => r.value === activeTag);
+      if (!filtered.length) { navEl.classList.add("hidden"); return; }
+      navEl.classList.remove("hidden");
+      infoEl.textContent = `${idx + 1} / ${filtered.length}`;
+    }
+
+    function _anvGoToSeg(runs, beforeInput, idx) {
+      const run = runs[idx];
+      if (!run) return;
+      _anvLoadFrame(Math.max(0, run.startFrame - (parseInt(beforeInput.value) || 0)));
+    }
+
+    // ── Build CSV bars from loaded rows ──────────────────────────
+    function _anvBuildCsvBars() {
+      anvCsvBars.classList.add("hidden");
+      anvStatusBarWrap.classList.add("hidden");
+      anvNoteBarWrap.classList.add("hidden");
+      _anvReRenderStatus = null; _anvReRenderNote = null;
+
+      const hasStatus = _anvCsvRows.some(r => r.frame_line_status);
+      const hasNote   = _anvCsvRows.some(r => r.note);
+      if (!hasStatus && !hasNote) return;
+      anvCsvBars.classList.remove("hidden");
+
+      if (hasStatus) {
+        ({ runs: _anvStatusRuns, colorMap: _anvStatusColorMap } = _anvComputeRuns(_anvCsvRows, "frame_line_status"));
+        const onStatusTag = val => {
+          _anvStatusActiveTag = (_anvStatusActiveTag === val) ? null : val;
+          _anvStatusSegIdx = 0;
+          _anvStatusEffectiveRuns = _anvMergeRuns(_anvStatusRuns, parseInt(anvStatusIgnore.value) || 0);
+          _anvRenderCsvBar(anvStatusBar, _anvStatusEffectiveRuns, _anvStatusColorMap, anvStatusBefore, anvStatusAfter, _anvStatusActiveTag,
+            idx => { _anvStatusSegIdx = idx; _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx); });
+          _anvRenderTagFilter(anvStatusTags, _anvStatusRuns, _anvStatusColorMap, _anvStatusActiveTag, onStatusTag);
+          _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx);
+          if (_anvStatusActiveTag) _anvGoToSeg(_anvStatusEffectiveRuns.filter(r => r.value === _anvStatusActiveTag), anvStatusBefore, 0);
+        };
+        _anvReRenderStatus = () => {
+          _anvStatusEffectiveRuns = _anvMergeRuns(_anvStatusRuns, parseInt(anvStatusIgnore.value) || 0);
+          _anvRenderCsvBar(anvStatusBar, _anvStatusEffectiveRuns, _anvStatusColorMap, anvStatusBefore, anvStatusAfter, _anvStatusActiveTag,
+            idx => { _anvStatusSegIdx = idx; _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx); });
+          _anvRenderTagFilter(anvStatusTags, _anvStatusRuns, _anvStatusColorMap, _anvStatusActiveTag, onStatusTag);
+          _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx);
+        };
+        _anvReRenderStatus();
+        anvStatusBarWrap.classList.remove("hidden");
+      }
+
+      if (hasNote) {
+        ({ runs: _anvNoteRuns, colorMap: _anvNoteColorMap } = _anvComputeRuns(_anvCsvRows, "note"));
+        const onNoteTag = val => {
+          _anvNoteActiveTag = (_anvNoteActiveTag === val) ? null : val;
+          _anvNoteSegIdx = 0;
+          _anvNoteEffectiveRuns = _anvMergeRuns(_anvNoteRuns, parseInt(anvNoteIgnore.value) || 0);
+          _anvRenderCsvBar(anvNoteBar, _anvNoteEffectiveRuns, _anvNoteColorMap, anvNoteBefore, anvNoteAfter, _anvNoteActiveTag,
+            idx => { _anvNoteSegIdx = idx; _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx); });
+          _anvRenderTagFilter(anvNoteTags, _anvNoteRuns, _anvNoteColorMap, _anvNoteActiveTag, onNoteTag);
+          _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx);
+          if (_anvNoteActiveTag) _anvGoToSeg(_anvNoteEffectiveRuns.filter(r => r.value === _anvNoteActiveTag), anvNoteBefore, 0);
+        };
+        _anvReRenderNote = () => {
+          _anvNoteEffectiveRuns = _anvMergeRuns(_anvNoteRuns, parseInt(anvNoteIgnore.value) || 0);
+          _anvRenderCsvBar(anvNoteBar, _anvNoteEffectiveRuns, _anvNoteColorMap, anvNoteBefore, anvNoteAfter, _anvNoteActiveTag,
+            idx => { _anvNoteSegIdx = idx; _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx); });
+          _anvRenderTagFilter(anvNoteTags, _anvNoteRuns, _anvNoteColorMap, _anvNoteActiveTag, onNoteTag);
+          _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx);
+        };
+        _anvReRenderNote();
+        anvNoteBarWrap.classList.remove("hidden");
+      }
+    }
+
+    anvStatusApply.addEventListener("click", () => { if (_anvReRenderStatus) _anvReRenderStatus(); });
+    anvNoteApply.addEventListener("click",   () => { if (_anvReRenderNote)   _anvReRenderNote();   });
+
+    anvStatusPrev.addEventListener("click", () => {
+      if (!_anvStatusActiveTag) return;
+      const n = _anvStatusEffectiveRuns.filter(r => r.value === _anvStatusActiveTag).length;
+      _anvStatusSegIdx = (_anvStatusSegIdx - 1 + n) % n;
+      _anvGoToSeg(_anvStatusEffectiveRuns.filter(r => r.value === _anvStatusActiveTag), anvStatusBefore, _anvStatusSegIdx);
+      _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx);
+    });
+    anvStatusNext.addEventListener("click", () => {
+      if (!_anvStatusActiveTag) return;
+      const n = _anvStatusEffectiveRuns.filter(r => r.value === _anvStatusActiveTag).length;
+      _anvStatusSegIdx = (_anvStatusSegIdx + 1) % n;
+      _anvGoToSeg(_anvStatusEffectiveRuns.filter(r => r.value === _anvStatusActiveTag), anvStatusBefore, _anvStatusSegIdx);
+      _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx);
+    });
+    anvNotePrev.addEventListener("click", () => {
+      if (!_anvNoteActiveTag) return;
+      const n = _anvNoteEffectiveRuns.filter(r => r.value === _anvNoteActiveTag).length;
+      _anvNoteSegIdx = (_anvNoteSegIdx - 1 + n) % n;
+      _anvGoToSeg(_anvNoteEffectiveRuns.filter(r => r.value === _anvNoteActiveTag), anvNoteBefore, _anvNoteSegIdx);
+      _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx);
+    });
+    anvNoteNext.addEventListener("click", () => {
+      if (!_anvNoteActiveTag) return;
+      const n = _anvNoteEffectiveRuns.filter(r => r.value === _anvNoteActiveTag).length;
+      _anvNoteSegIdx = (_anvNoteSegIdx + 1) % n;
+      _anvGoToSeg(_anvNoteEffectiveRuns.filter(r => r.value === _anvNoteActiveTag), anvNoteBefore, _anvNoteSegIdx);
+      _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx);
+    });
+
+    // ── Sync annotation panel to current frame ───────────────────
+    function _anvSyncAnnotationPanel() {
+      if (!_anvCsvPath) return;
+      anvAnnotateFrameNum.textContent = _anvCurrentFrame;
+      const row = _anvCsvRows.find(r => r.frame_number === _anvCurrentFrame);
+      anvNoteInput.value    = row ? (row.note || "") : "";
+      anvStatusInput.value  = row ? (row.frame_line_status || "0") : "0";
+    }
+
+    // ── Apply CSV rows to state and UI ───────────────────────────
+    function _anvApplyCsvRows(rows, csvPath) {
+      _anvCsvPath  = csvPath;
+      _anvCsvRows  = rows;
+
+      // Collect unique note tags
+      const noteVals = [...new Set(rows.map(r => r.note).filter(v => v))];
+      _anvUserTags  = [...new Set([..._anvUserTags, ...noteVals])];
+
+      // Show CSV status
+      anvCsvNone.classList.add("hidden");
+      anvCsvLoaded.classList.remove("hidden");
+      anvCsvPathDisplay.textContent = csvPath;
+      anvCsvPathDisplay.title       = csvPath;
+
+      // Show annotation panel
+      anvAnnotationPanel.classList.remove("hidden");
+
+      // Build CSV bars
+      _anvBuildCsvBars();
+
+      // Render tag chips
+      _anvRenderTagChips();
+
+      // Sync to current frame
+      _anvSyncAnnotationPanel();
+    }
+
+    // ── Render clickable note tag chips ──────────────────────────
+    function _anvRenderTagChips() {
+      anvTagChips.innerHTML = "";
+      _anvUserTags.forEach(tag => {
+        const chip = document.createElement("span");
+        chip.className = "fe-tag-chip";
+        chip.textContent = tag;
+        chip.style.setProperty("--chip-color", "#6ee7b7");
+        chip.title = `Click to annotate frame ${_anvCurrentFrame} with note "${tag}"`;
+        chip.addEventListener("click", () => _anvApplyTag(tag));
+        anvTagChips.appendChild(chip);
+      });
+    }
+
+    // ── Apply a note tag to the current frame ────────────────────
+    async function _anvApplyTag(tag) {
+      if (!_anvCsvPath) return;
+      anvNoteInput.value = tag;
+      await _anvSaveAnnotation();
+    }
+
+    // ── Save annotation for current frame ────────────────────────
+    async function _anvSaveAnnotation() {
+      if (!_anvCsvPath) return;
+      anvSaveStatus.textContent = "Saving…";
+      anvSaveStatus.className   = "fe-extract-status";
+      try {
+        const res  = await fetch("/annotate/save-row", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            csv_path:          _anvCsvPath,
+            frame_number:      _anvCurrentFrame,
+            note:              anvNoteInput.value.trim(),
+            frame_line_status: anvStatusInput.value || "0",
+            fps:               _anvFps,
+          }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        _anvApplyCsvRows(data.rows, _anvCsvPath);
+        anvSaveStatus.textContent = "Saved";
+        anvSaveStatus.className   = "fe-extract-status ok";
+        setTimeout(() => { if (anvSaveStatus.textContent === "Saved") anvSaveStatus.textContent = ""; }, 2000);
+      } catch (err) {
+        anvSaveStatus.textContent = `Error: ${err.message}`;
+        anvSaveStatus.className   = "fe-extract-status err";
+      }
+    }
+
+    anvSaveAnnotationBtn.addEventListener("click", _anvSaveAnnotation);
+
+    // ── Add new tag ──────────────────────────────────────────────
+    anvAddTagBtn.addEventListener("click", () => {
+      const tag = anvNewTagInput.value.trim();
+      if (!tag) return;
+      if (!_anvUserTags.includes(tag)) {
+        _anvUserTags.push(tag);
+        _anvRenderTagChips();
+      }
+      anvNewTagInput.value = "";
+    });
+    anvNewTagInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); anvAddTagBtn.click(); }
+    });
+
+    // ── Load video ───────────────────────────────────────────────
+    async function _anvLoadVideo(path) {
+      _anvReset();
+      _anvVideoPath = path;
+      anvVideoPath.value = path;
+      anvLoadStatus.textContent = "Loading video info…";
+      anvLoadStatus.className   = "fe-extract-status";
+      try {
+        const res  = await fetch(`/annotate/video-info?path=${encodeURIComponent(path)}`);
+        const info = await res.json();
+        if (info.error) throw new Error(info.error);
+        _anvFps        = info.fps || 30;
+        _anvFrameCount = info.frame_count || 0;
+      } catch (err) {
+        anvLoadStatus.textContent = `Error: ${err.message}`;
+        anvLoadStatus.className   = "fe-extract-status err";
+        return;
+      }
+      anvLoadStatus.textContent = "";
+      anvPlayerSec.classList.remove("hidden");
+      anvCsvSection.classList.remove("hidden");
+      _anvLoadFrame(0);
+
+      // Try to load companion CSV
+      try {
+        const res  = await fetch(`/annotate/csv?path=${encodeURIComponent(path)}`);
+        const data = await res.json();
+        if (data.csv_exists) {
+          _anvApplyCsvRows(data.rows, data.csv_path);
+        } else {
+          anvCsvNone.classList.remove("hidden");
+          anvCsvLoaded.classList.add("hidden");
+        }
+      } catch (_) {
+        anvCsvNone.classList.remove("hidden");
+        anvCsvLoaded.classList.add("hidden");
+      }
+    }
+
+    anvLoadBtn.addEventListener("click", () => {
+      const path = anvVideoPath.value.trim();
+      if (!path) { anvLoadStatus.textContent = "Enter a video path first."; anvLoadStatus.className = "fe-extract-status err"; return; }
+      _anvLoadVideo(path);
+    });
+
+    // ── Create CSV ───────────────────────────────────────────────
+    anvCreateCsvBtn.addEventListener("click", async () => {
+      if (!_anvVideoPath) return;
+      anvCsvCreateStatus.textContent = `Creating CSV for ${_anvFrameCount} frames…`;
+      anvCsvCreateStatus.className   = "fe-extract-status";
+      try {
+        const res  = await fetch("/annotate/create-csv", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            video_path:  _anvVideoPath,
+            fps:         _anvFps,
+            frame_count: _anvFrameCount,
+          }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        anvCsvCreateStatus.textContent = "";
+        _anvApplyCsvRows(data.rows, data.csv_path);
+      } catch (err) {
+        anvCsvCreateStatus.textContent = `Error: ${err.message}`;
+        anvCsvCreateStatus.className   = "fe-extract-status err";
+      }
+    });
+
+    // ── Refresh CSV ──────────────────────────────────────────────
+    async function _anvRefreshCsv() {
+      if (!_anvVideoPath) return;
+      try {
+        const res  = await fetch(`/annotate/csv?path=${encodeURIComponent(_anvVideoPath)}`);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        if (data.csv_exists) {
+          _anvApplyCsvRows(data.rows, data.csv_path);
+        }
+      } catch (err) {
+        anvSaveStatus.textContent = `Refresh error: ${err.message}`;
+        anvSaveStatus.className   = "fe-extract-status err";
+      }
+    }
+    anvRefreshCsvBtn.addEventListener("click", _anvRefreshCsv);
+
+    // ── File browser ─────────────────────────────────────────────
+    const _anvVideoExts = new Set([".mp4", ".avi", ".mov", ".mkv", ".mpg", ".mpeg"]);
+    function _anvIsVideo(name) { return _anvVideoExts.has(name.slice(name.lastIndexOf(".")).toLowerCase()); }
+
+    async function _anvBrowseDir(dirPath) {
+      anvBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
+      try {
+        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
+        const data = await res.json();
+        if (data.error) { anvBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">${data.error}</span>`; return; }
+        anvBrowser.innerHTML = "";
+
+        // Header: path + Up button
+        const header = document.createElement("div");
+        header.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.15rem .2rem .3rem;border-bottom:1px solid var(--border);margin-bottom:.2rem;min-width:0";
+        const pathLabel = document.createElement("span");
+        pathLabel.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.7rem;color:var(--text-dim)";
+        pathLabel.textContent = data.path;
+        pathLabel.title = data.path;
+        header.appendChild(pathLabel);
+        if (data.parent) {
+          const upBtn = document.createElement("button");
+          upBtn.className = "btn-sm";
+          upBtn.style.cssText = "padding:.12rem .45rem;font-size:.7rem;flex-shrink:0";
+          upBtn.textContent = "↑ Up";
+          upBtn.addEventListener("click", e => { e.stopPropagation(); _anvBrowseDir(data.parent); });
+          header.appendChild(upBtn);
+        }
+        anvBrowser.appendChild(header);
+
+        const visible = data.entries.filter(e => e.type === "dir" || (e.type === "file" && _anvIsVideo(e.name)));
+        if (!visible.length) {
+          const empty = document.createElement("span");
+          empty.style.cssText = "font-size:.75rem;color:var(--text-dim);padding:.25rem;display:block";
+          empty.textContent = "(no video files here)";
+          anvBrowser.appendChild(empty);
+        } else {
+          visible.forEach(e => {
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;align-items:center;gap:.35rem;padding:.18rem .3rem;border-radius:4px;cursor:pointer;font-size:.77rem";
+            const icon = e.type === "dir"
+              ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;color:var(--text-dim)"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`
+              : `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;color:var(--text-dim)"><rect x="2" y="2" width="20" height="20" rx="3"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg>`;
+            row.innerHTML = `${icon}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">${e.name}</span>`;
+            row.addEventListener("mouseenter", () => { row.style.background = "var(--surface-3,#2a2a2a)"; });
+            row.addEventListener("mouseleave", () => { row.style.background = ""; });
+            const fullPath = data.path.replace(/\/+$/, "") + "/" + e.name;
+            if (e.type === "dir") {
+              row.addEventListener("click", () => _anvBrowseDir(fullPath));
+            } else {
+              row.addEventListener("click", () => {
+                anvVideoPath.value = fullPath;
+                anvBrowser.classList.add("hidden");
+              });
+            }
+            anvBrowser.appendChild(row);
+          });
+        }
+      } catch (err) {
+        anvBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">Error: ${err.message}</span>`;
+      }
+    }
+
+    anvBrowseBtn.addEventListener("click", () => {
+      if (anvBrowser.classList.contains("hidden")) {
+        anvBrowser.classList.remove("hidden");
+        const startPath = _userDataDir || "/";
+        _anvBrowseDir(startPath);
+      } else {
+        anvBrowser.classList.add("hidden");
+      }
+    });
+
+    // ── Open / close card ────────────────────────────────────────
+    anvOpenBtn?.addEventListener("click", () => {
+      anvCard.classList.remove("hidden");
+      anvCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+
+    anvCloseBtn?.addEventListener("click", () => {
+      anvCard.classList.add("hidden");
+      _anvReset();
+      anvBrowser.classList.add("hidden");
+    });
+  })();
+
   // ── GPU & Training Monitor ────────────────────────────────────
   (() => {
     const gmCard       = document.getElementById("gpu-monitor-card");
