@@ -2,6 +2,7 @@
 Celery Worker Tasks — Anipose & DeepLabCut (placeholder) Processing
 Runs inside the GPU-enabled worker container.
 """
+from __future__ import annotations
 
 import os
 import shutil
@@ -10,12 +11,18 @@ import time
 import traceback
 from pathlib import Path
 import deeplabcut as dlc
-from anipose_src.filter_2d_funcs import *
-from anipose_src.filter_3d_funcs import *
-from anipose_src.load_config_funcs import *
-from anipose_src.preprocessing_funcs import *
-from anipose_src.triangulate_funcs import *
-from anipose_src.calibration_funcs import *
+
+# Anipose is only installed in the PyTorch worker; TF worker skips these.
+try:
+    from anipose_src.filter_2d_funcs import *
+    from anipose_src.filter_3d_funcs import *
+    from anipose_src.load_config_funcs import *
+    from anipose_src.preprocessing_funcs import *
+    from anipose_src.triangulate_funcs import *
+    from anipose_src.calibration_funcs import *
+    _ANIPOSE_AVAILABLE = True
+except ModuleNotFoundError:
+    _ANIPOSE_AVAILABLE = False
 
 from celery import Celery, Task
 
@@ -738,6 +745,16 @@ def _dlc_train_subprocess(config_path: str, kwargs: dict, log_path: str) -> None
             import traceback as _tb
             _f.write("\n__TRAIN_ERROR__\n")
             _f.write(_tb.format_exc())
+        finally:
+            try:
+                import gc as _gc
+                _gc.collect()
+                import torch as _torch
+                if _torch.cuda.is_available():
+                    _torch.cuda.synchronize()
+                    _torch.cuda.empty_cache()
+            except Exception:
+                pass
 
 
 @celery.task(bind=True, name="tasks.dlc_train_network", acks_late=False)
@@ -899,11 +916,16 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
 
         # Reap any orphaned children the subprocess may have spawned
         # (e.g. DLC/PyTorch dataloader workers that hold GPU memory).
+        _pgid = proc.pid
         try:
             import signal as _sig
-            os.killpg(proc.pid, _sig.SIGKILL)
+            os.killpg(_pgid, _sig.SIGKILL)
         except (ProcessLookupError, OSError):
             pass  # process group already gone — that's fine
+
+        # Brief pause so the CUDA driver fully reclaims GPU resources
+        # before the next task can be dispatched to this worker.
+        time.sleep(1)
 
         _stop_emit.set()
         _emitter.join(timeout=5)
@@ -995,29 +1017,10 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
     Detects whether the target is a video file, image file, or directory,
     then calls the appropriate DLC function(s).
     """
-    import os as _os, sys, importlib, deeplabcut as _dlc
+    import os as _os, sys
     from pathlib import Path as _Path
 
     _os.setpgrp()
-
-    # DLC 3.x moved functions into pose_estimation_pytorch submodule.
-    # This helper searches submodules if the function isn't at the top level.
-    def _dlc_fn(name):
-        if hasattr(_dlc, name):
-            return getattr(_dlc, name)
-        for sub in ("deeplabcut.pose_estimation_pytorch",
-                    "deeplabcut.pose_estimation_tensorflow"):
-            try:
-                m = importlib.import_module(sub)
-                if hasattr(m, name):
-                    return getattr(m, name)
-            except ImportError:
-                pass
-        raise AttributeError(f"deeplabcut has no attribute '{name}'")
-
-    _analyze_videos           = _dlc_fn("analyze_videos")
-    _analyze_time_lapse       = _dlc_fn("analyze_time_lapse_frames")
-    _create_labeled_video     = _dlc_fn("create_labeled_video")
 
     # Ensure CUDA device numbering matches nvidia-smi (PCI bus ID order).
     _os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -1026,6 +1029,27 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
         sys.stdout = _f
         sys.stderr = _f
         try:
+            import importlib, deeplabcut as _dlc
+
+            # DLC 3.x moved functions into pose_estimation_pytorch submodule.
+            # This helper searches submodules if the function isn't at the top level.
+            def _dlc_fn(name):
+                if hasattr(_dlc, name):
+                    return getattr(_dlc, name)
+                for sub in ("deeplabcut.pose_estimation_pytorch",
+                            "deeplabcut.pose_estimation_tensorflow"):
+                    try:
+                        m = importlib.import_module(sub)
+                        if hasattr(m, name):
+                            return getattr(m, name)
+                    except Exception as _e:
+                        _f.write(f"[_dlc_fn] could not import {sub}: {_e}\n")
+                raise AttributeError(f"deeplabcut has no attribute '{name}'")
+
+            _analyze_videos       = _dlc_fn("analyze_videos")
+            _analyze_time_lapse   = _dlc_fn("analyze_time_lapse_frames")
+            _create_labeled_video = _dlc_fn("create_labeled_video")
+
             p = _Path(target_path)
             create_labeled = params.get("create_labeled", False)
             kw = {k: v for k, v in params.items()
@@ -1081,6 +1105,18 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
             import traceback as _tb
             _f.write("\n__ANALYZE_ERROR__\n")
             _f.write(_tb.format_exc())
+        finally:
+            # Release GPU memory before the process exits so the driver
+            # reclaims the CUDA context immediately rather than lazily.
+            try:
+                import gc as _gc
+                _gc.collect()
+                import torch as _torch
+                if _torch.cuda.is_available():
+                    _torch.cuda.synchronize()
+                    _torch.cuda.empty_cache()
+            except Exception:
+                pass
 
 
 @celery.task(bind=True, name="tasks.dlc_analyze", acks_late=False)
@@ -1206,11 +1242,16 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
 
         # Reap any orphaned children the subprocess may have spawned
         # (e.g. DLC/PyTorch dataloader workers that hold GPU memory).
+        _pgid = proc.pid
         try:
             import signal as _sig
-            os.killpg(proc.pid, _sig.SIGKILL)
+            os.killpg(_pgid, _sig.SIGKILL)
         except (ProcessLookupError, OSError):
             pass  # process group already gone — that's fine
+
+        # Brief pause so the CUDA driver fully reclaims GPU resources
+        # before the next task can be dispatched to this worker.
+        time.sleep(1)
 
         _stop_emit.set()
         _emitter.join(timeout=5)
@@ -1247,6 +1288,374 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
         _redis.delete(pid_key, stop_key)
         _redis.zrem(jobs_zset, task_id)
         _job_set("failed")
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+    finally:
+        try:
+            os.unlink(log_path)
+        except OSError:
+            pass
+
+
+# ── DLC Machine Label Frames ──────────────────────────────────────
+
+_ML_LABEL_PID_PREFIX = "dlc_ml_pid:"
+
+
+def _dlc_machine_label_subprocess(
+    config_path: str, labeled_data_path: str, params: dict, log_path: str
+) -> None:
+    """
+    Runs inside a child process spawned by dlc_machine_label_frames.
+    Calls analyze_time_lapse_frames on the frames folder, then converts the
+    DLC output into CollectedData_<scorer>.csv so the user can review/correct.
+    """
+    import os as _os, sys, re as _re, csv as _csv
+    from pathlib import Path as _Path
+
+    _os.setpgrp()
+    _os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+
+    with open(log_path, "a", buffering=1) as _f:
+        sys.stdout = _f
+        sys.stderr = _f
+        try:
+            import importlib, deeplabcut as _dlc, pandas as _pd
+
+            _f.write(f"config_path:       {config_path}\n")
+            _f.write(f"labeled_data_path: {labeled_data_path}\n")
+            _f.write(f"params:            {params}\n\n")
+
+            # Read scorer + bodyparts from config
+            import yaml as _yaml
+            with open(config_path) as _cf:
+                cfg = _yaml.safe_load(_cf) or {}
+            scorer    = cfg.get("scorer", "User")
+            bodyparts = list(cfg.get("bodyparts", []))
+
+            frame_dir = _Path(labeled_data_path)
+
+            # Detect frame type
+            _img_exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+            exts = {f.suffix.lower() for f in frame_dir.iterdir()
+                    if f.is_file() and not f.name.startswith(".")}
+            frametype = next((e for e in (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
+                              if e in exts), ".png")
+            _f.write(f"Detected frame type: {frametype}\n")
+
+            # Record existing .h5 files so we can identify the new output
+            existing_h5 = {str(p) for p in frame_dir.glob("*.h5")}
+
+            # Build kwargs (strip keys not accepted by analyze_time_lapse_frames)
+            _tl_keys = {"shuffle", "trainingsetindex", "gputouse",
+                        "save_as_csv", "snapshot_index"}
+            kw = {k: v for k, v in params.items()
+                  if k in _tl_keys and v is not None}
+            kw.setdefault("save_as_csv", True)
+
+            # Resolve the function (handles DLC 3.x module layout)
+            def _dlc_fn(name):
+                if hasattr(_dlc, name):
+                    return getattr(_dlc, name)
+                for sub in ("deeplabcut.pose_estimation_pytorch",
+                            "deeplabcut.pose_estimation_tensorflow"):
+                    try:
+                        m = importlib.import_module(sub)
+                        if hasattr(m, name):
+                            return getattr(m, name)
+                    except Exception:
+                        pass
+                raise AttributeError(f"deeplabcut has no attribute '{name}'")
+
+            _f.write("Running analyze_time_lapse_frames…\n\n")
+            _dlc_fn("analyze_time_lapse_frames")(
+                config_path, str(frame_dir), frametype=frametype, **kw
+            )
+
+            # Find the newly created .h5 prediction file
+            new_h5 = [p for p in frame_dir.glob("*.h5") if str(p) not in existing_h5]
+            if not new_h5:
+                all_h5 = sorted(frame_dir.glob("*.h5"), key=lambda p: p.stat().st_mtime)
+                if not all_h5:
+                    raise FileNotFoundError("No DLC prediction file (.h5) found after analysis")
+                new_h5 = [all_h5[-1]]
+            h5_path = sorted(new_h5, key=lambda p: p.stat().st_mtime)[-1]
+            _f.write(f"\nReading predictions from: {h5_path.name}\n")
+
+            df = _pd.read_hdf(str(h5_path))
+            dlc_scorer = (df.columns.get_level_values(0)[0]
+                          if hasattr(df.columns, "get_level_values") else None)
+
+            def _nat_key(s: str) -> list:
+                return [int(c) if c.isdigit() else c.lower()
+                        for c in _re.split(r"(\d+)", s)]
+
+            likelihood_threshold = float(params.get("likelihood_threshold") or 0.9)
+            _f.write(f"Likelihood threshold: {likelihood_threshold}\n")
+
+            labels: dict = {}
+            for idx in df.index:
+                img_name = _Path(str(idx[-1] if isinstance(idx, tuple) else idx)).name
+                frame_labels: dict = {}
+                for bp in bodyparts:
+                    try:
+                        if dlc_scorer:
+                            x  = float(df.loc[idx, (dlc_scorer, bp, "x")])
+                            y  = float(df.loc[idx, (dlc_scorer, bp, "y")])
+                            try:
+                                lk = float(df.loc[idx, (dlc_scorer, bp, "likelihood")])
+                            except (KeyError, TypeError, ValueError):
+                                lk = 1.0
+                        else:
+                            x  = float(df.loc[idx][(bp, "x")])
+                            y  = float(df.loc[idx][(bp, "y")])
+                            try:
+                                lk = float(df.loc[idx][(bp, "likelihood")])
+                            except (KeyError, TypeError, ValueError):
+                                lk = 1.0
+                        if _pd.isna(x) or _pd.isna(y) or lk < likelihood_threshold:
+                            frame_labels[bp] = None
+                        else:
+                            frame_labels[bp] = [round(x, 4), round(y, 4)]
+                    except (KeyError, TypeError, ValueError, IndexError):
+                        frame_labels[bp] = None
+                labels[img_name] = frame_labels
+
+            # Load existing human labels so we can preserve them
+            video_stem = frame_dir.name
+            csv_path   = frame_dir / f"CollectedData_{scorer}.csv"
+            human_labels: dict = {}
+            if csv_path.is_file():
+                try:
+                    with open(str(csv_path), newline="") as _hf:
+                        _rows = list(_csv.reader(_hf))
+                    if len(_rows) >= 4:
+                        _bp_row    = _rows[1][3:]
+                        _coord_row = _rows[2][3:]
+                        _col_pairs = list(zip(_bp_row, _coord_row))
+                        for _row in _rows[3:]:
+                            if not _row:
+                                continue
+                            _img   = _row[2]
+                            _vals  = _row[3:]
+                            _bpmap: dict = {}
+                            for (_bp, _c), _v in zip(_col_pairs, _vals):
+                                _bpmap.setdefault(_bp, {})[_c] = _v
+                            _frame: dict = {}
+                            for _bp, _cd in _bpmap.items():
+                                _xs = _cd.get("x", "")
+                                _ys = _cd.get("y", "")
+                                try:
+                                    _x = float(_xs) if _xs not in ("", "NaN", "nan") else None
+                                    _y = float(_ys) if _ys not in ("", "NaN", "nan") else None
+                                except ValueError:
+                                    _x = _y = None
+                                _frame[_bp] = [_x, _y] if _x is not None and _y is not None else None
+                            human_labels[_img] = _frame
+                    n_human = sum(1 for fv in human_labels.values()
+                                  if any(v is not None for v in fv.values()))
+                    _f.write(f"Found {n_human} existing human-labeled frame(s) — these will be preserved.\n")
+                except Exception as _e:
+                    _f.write(f"Warning: could not read existing labels ({_e}), proceeding without merge.\n")
+
+            def _frame_has_human_label(fname: str) -> bool:
+                fv = human_labels.get(fname, {})
+                return any(v is not None for v in fv.values())
+
+            # Merge: keep human labels; fill unlabeled frames with machine predictions
+            merged: dict = {}
+            for fname, machine_frame in labels.items():
+                if _frame_has_human_label(fname):
+                    merged[fname] = human_labels[fname]
+                else:
+                    merged[fname] = machine_frame
+            # Include any frames present only in human labels (not in ML output)
+            for fname, human_frame in human_labels.items():
+                if fname not in merged:
+                    merged[fname] = human_frame
+
+            # Write CollectedData CSV in DLC MultiIndex format
+            frame_names = sorted(merged.keys(), key=_nat_key)
+
+            rows_out = [
+                ["scorer",    "", ""] + [scorer] * (len(bodyparts) * 2),
+                ["bodyparts", "", ""] + [bp for bp in bodyparts for _ in range(2)],
+                ["coords",    "", ""] + ["x", "y"] * len(bodyparts),
+            ]
+            for fname in frame_names:
+                row = ["labeled-data", video_stem, fname]
+                for bp in bodyparts:
+                    pt = merged.get(fname, {}).get(bp)
+                    if pt and len(pt) == 2 and pt[0] is not None:
+                        row.extend([str(round(pt[0], 4)), str(round(pt[1], 4))])
+                    else:
+                        row.extend(["NaN", "NaN"])
+                rows_out.append(row)
+
+            with open(str(csv_path), "w", newline="") as _out:
+                _csv.writer(_out).writerows(rows_out)
+
+            n_machine = sum(
+                1 for fname, fv in merged.items()
+                if not _frame_has_human_label(fname) and any(v is not None for v in fv.values())
+            )
+            n_kept = sum(1 for fname in merged if _frame_has_human_label(fname))
+            _f.write(f"\nMachine-labeled {n_machine} frame(s), preserved {n_kept} human label(s) → {csv_path}\n")
+            _f.write("\n__ML_LABEL_COMPLETE__\n")
+
+        except Exception:
+            import traceback as _tb
+            _f.write("\n__ML_LABEL_ERROR__\n")
+            _f.write(_tb.format_exc())
+        finally:
+            try:
+                import gc as _gc
+                _gc.collect()
+                import torch as _torch
+                if _torch.cuda.is_available():
+                    _torch.cuda.synchronize()
+                    _torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+
+@celery.task(bind=True, name="tasks.dlc_machine_label_frames", acks_late=False)
+def dlc_machine_label_frames(
+    self, config_path: str, labeled_data_path: str, params: dict = None
+):
+    """
+    Run model inference on a labeled-data frames folder and save predictions
+    as CollectedData_<scorer>.csv for manual review and correction.
+    params keys: shuffle, trainingsetindex, gputouse, save_as_csv, snapshot_index
+    """
+    import multiprocessing as _mp
+    import threading as _threading
+    import tempfile
+    import redis as _redis_mod
+
+    _redis = _redis_mod.Redis.from_url(
+        os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/0"),
+        decode_responses=True,
+    )
+
+    if params is None:
+        params = {}
+
+    task_id  = self.request.id
+    pid_key  = _ML_LABEL_PID_PREFIX + task_id
+    stop_key = "dlc_ml_stop:" + task_id
+
+    _tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".log", prefix="dlc_ml_", delete=False
+    )
+    log_path = _tmp.name
+    _tmp.close()
+
+    try:
+        self.update_state(
+            state="PROGRESS",
+            meta={"progress": 5, "stage": "Preparing…", "log": ""},
+        )
+
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
+        if not os.path.isdir(labeled_data_path):
+            raise FileNotFoundError(f"Frames folder not found: {labeled_data_path}")
+
+        init_log = (
+            f"config_path:       {config_path}\n"
+            f"labeled_data_path: {labeled_data_path}\n"
+            f"params:            {params}\n\n"
+        )
+        with open(log_path, "w") as _f:
+            _f.write(init_log)
+
+        self.update_state(
+            state="PROGRESS",
+            meta={"progress": 10, "stage": "Running inference…", "log": init_log},
+        )
+
+        ctx  = _mp.get_context("spawn")
+        proc = ctx.Process(
+            target=_dlc_machine_label_subprocess,
+            args=(config_path, labeled_data_path, params, log_path),
+            daemon=False,
+        )
+        proc.start()
+        _redis.setex(pid_key, 7200, str(proc.pid))
+
+        _stop_emit   = _threading.Event()
+        _user_killed = [False]
+
+        def _emit_loop():
+            import signal as _sig
+            _progress = 12
+            while not _stop_emit.wait(3):
+                if _redis.get(stop_key):
+                    _user_killed[0] = True
+                    try:
+                        os.killpg(proc.pid, _sig.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        pass
+                    _redis.delete(stop_key, pid_key)
+                    break
+                try:
+                    with open(log_path) as _lf:
+                        _log = _lf.read()[-8000:]
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={
+                            "progress": min(_progress, 90),
+                            "stage":    "Running inference…",
+                            "log":      _log,
+                        },
+                    )
+                    _progress = min(_progress + 1, 90)
+                except Exception:
+                    pass
+
+        _emitter = _threading.Thread(target=_emit_loop, daemon=True)
+        _emitter.start()
+
+        proc.join()
+
+        _pgid = proc.pid
+        try:
+            import signal as _sig
+            os.killpg(_pgid, _sig.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+        time.sleep(1)
+
+        _stop_emit.set()
+        _emitter.join(timeout=5)
+        _redis.delete(pid_key, stop_key)
+
+        try:
+            with open(log_path) as _lf:
+                final_log = _lf.read()
+        except OSError:
+            final_log = ""
+
+        if _user_killed[0]:
+            raise RuntimeError("__USER_STOPPED__")
+
+        if proc.exitcode != 0:
+            if proc.exitcode is not None and proc.exitcode < 0:
+                raise RuntimeError(
+                    f"Machine labeling process was killed (signal {-proc.exitcode}).\n\n"
+                    + final_log[-3000:]
+                )
+            raise RuntimeError(final_log[-5000:])
+
+        return {
+            "status":    "complete",
+            "operation": "machine_label_frames",
+            "log":       final_log[-8000:] or "Machine labeling complete.",
+        }
+
+    except Exception:
+        _redis.delete(pid_key, stop_key)
         raise RuntimeError(traceback.format_exc()[-3000:])
 
     finally:
