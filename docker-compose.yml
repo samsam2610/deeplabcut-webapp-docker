@@ -58,7 +58,8 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # ── Celery Worker (GPU-enabled) ─────────────────────────────────
+  # ── Celery Worker — PyTorch (GPU-enabled) ───────────────────────
+  # Handles: anipose pipeline (celery queue) + pytorch DLC (pytorch queue)
   # Based on pytorch/pytorch:2.9.1-cuda13.0-cudnn9-runtime
   # Runs as non-root 'dlcuser' (UID/GID 1000)
   worker:
@@ -85,7 +86,50 @@ services:
       - USER_DATA_DIR=/user-data
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    command: celery -A tasks worker --loglevel=info --concurrency=1 --pool=solo
+    command: celery -A tasks worker --loglevel=info --concurrency=1 --pool=solo -Q celery,pytorch
+    depends_on:
+      redis:
+        condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ── Celery Worker — TensorFlow (GPU-enabled) ────────────────────
+  # Handles: legacy TF DLC projects (tensorflow queue)
+  # Based on tensorflow/tensorflow:2.13.0-gpu (CUDA 11.8)
+  # Runs as non-root 'dlcuser' (UID/GID 1000)
+  worker-tf:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker-tf
+      args:
+        UID: ${WORKER_UID:-1000}
+        GID: ${WORKER_GID:-1000}
+        UNAME: dlcuser
+        GNAME: dlcuser
+    volumes:
+      - ${HOST_DATA_DIR:-./data}:/app/data
+      - /home/sam/data-disk/Parra-Data:/user-data/Parra-Data/Disk
+      - /home/sam/synology/Parra-Lab-Data:/user-data/Parra-Data/Cloud
+      - /home/sam/data-mount-dir:/user-data/Martin-Data/USB
+      - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
+      # Mount src/ so all .py edits take effect after worker restart
+      - ./src:/app
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATA_DIR=/app/data
+      - USER_DATA_DIR=/user-data
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    command: celery -A tasks worker --loglevel=info --concurrency=1 --pool=solo -Q tensorflow
     depends_on:
       redis:
         condition: service_healthy

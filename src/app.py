@@ -82,6 +82,13 @@ def _get_pipeline_folders(engine: str) -> list:
     models_folder = _engine_info(engine)[0]
     return [("Models", models_folder)] + _PIPELINE_BASE_FOLDERS
 
+
+def _get_engine_queue(engine: str) -> str:
+    """Return the Celery queue name for the given engine."""
+    if (engine or "pytorch").lower() in _TF_ENGINE_ALIASES:
+        return "tensorflow"
+    return "pytorch"
+
 # ── Celery (client-side only — worker is in tasks.py) ─────────────
 celery = Celery(
     "tasks",
@@ -2769,6 +2776,7 @@ def dlc_create_training_dataset():
 
     project_data = json.loads(raw)
     config_path  = project_data.get("config_path", "")
+    engine       = project_data.get("engine", "pytorch")
     if not config_path or not Path(config_path).is_file():
         return jsonify({"error": "config.yaml not found in project."}), 404
 
@@ -2784,6 +2792,7 @@ def dlc_create_training_dataset():
     task = celery.send_task(
         "tasks.dlc_create_training_dataset",
         kwargs={"config_path": config_path, "num_shuffles": num_shuffles, "freeze_split": freeze_split},
+        queue=_get_engine_queue(engine),
     )
     return jsonify({"task_id": task.id, "operation": "create_training_dataset"}), 202
 
@@ -2795,13 +2804,16 @@ def dlc_add_datasets_to_video_list():
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
-    config_path = json.loads(raw).get("config_path", "")
+    _pd = json.loads(raw)
+    config_path = _pd.get("config_path", "")
+    engine      = _pd.get("engine", "pytorch")
     if not config_path or not Path(config_path).is_file():
         return jsonify({"error": "config.yaml not found in project."}), 404
 
     task = celery.send_task(
         "tasks.dlc_add_datasets_to_video_list",
         kwargs={"config_path": config_path},
+        queue=_get_engine_queue(engine),
     )
     return jsonify({"task_id": task.id, "status": "dispatched"}), 202
 
@@ -3018,6 +3030,7 @@ def dlc_train_network():
     task = celery.send_task(
         "tasks.dlc_train_network",
         kwargs={"config_path": config_path, "engine": engine, "params": params},
+        queue=_get_engine_queue(engine),
     )
     return jsonify({"task_id": task.id, "operation": "train_network", "engine": engine}), 202
 
@@ -3152,6 +3165,7 @@ def dlc_project_analyze():
 
     project_data = json.loads(raw)
     config_path  = project_data.get("config_path", "")
+    engine       = project_data.get("engine", "pytorch")
     if not config_path or not Path(config_path).is_file():
         return jsonify({"error": "No config.yaml in active project."}), 400
 
@@ -3181,6 +3195,7 @@ def dlc_project_analyze():
     task = celery.send_task(
         "tasks.dlc_analyze",
         kwargs={"config_path": config_path, "target_path": target_path, "params": params},
+        queue=_get_engine_queue(engine),
     )
     return jsonify({"task_id": task.id, "operation": "analyze"}), 202
 
