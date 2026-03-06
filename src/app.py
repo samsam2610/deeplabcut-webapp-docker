@@ -3592,6 +3592,9 @@ def annotate_csv():
                 row = {k.strip() if k else k: v for k, v in row.items()}
                 status = (row.get("frame_line_status") or "").strip()
                 note   = (row.get("note") or "").strip()
+                # Only return rows that carry real annotation (non-default status or non-empty note)
+                if not note and (not status or status == "0"):
+                    continue
                 try:
                     fn = int(float(row.get("frame_number", 0)))
                 except (ValueError, TypeError):
@@ -3634,7 +3637,7 @@ def annotate_create_csv():
     try:
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv_module.DictWriter(
-                f, fieldnames=["frame_number", "timestamp", "frame_line_status", "note"]
+                f, fieldnames=["timestamp", "frame_number", "frame_line_status", "note"]
             )
             writer.writeheader()
             for fn in range(1, frame_count + 1):
@@ -3646,7 +3649,8 @@ def annotate_create_csv():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
-    return jsonify({"csv_path": str(csv_path), "rows": rows})
+    # Return empty interesting-rows list — all rows are default (status=0, note='')
+    return jsonify({"csv_path": str(csv_path), "rows": []})
 
 
 @app.route("/annotate/save-row", methods=["POST"])
@@ -3702,7 +3706,7 @@ def annotate_save_row():
     try:
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv_module.DictWriter(
-                f, fieldnames=["frame_number", "timestamp", "frame_line_status", "note"]
+                f, fieldnames=["timestamp", "frame_number", "frame_line_status", "note"]
             )
             writer.writeheader()
             for fn in sorted(rows.keys()):
@@ -3710,19 +3714,8 @@ def annotate_save_row():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
-    result = sorted(
-        [
-            {
-                "frame_number":      fn,
-                "timestamp":         r["timestamp"],
-                "frame_line_status": r["frame_line_status"],
-                "note":              r["note"],
-            }
-            for fn, r in rows.items()
-        ],
-        key=lambda r: r["frame_number"],
-    )
-    return jsonify({"rows": result, "csv_path": str(csv_path)})
+    saved_row = rows[int(frame_number)]
+    return jsonify({"row": saved_row, "csv_path": str(csv_path)})
 
 
 # ── Entry point ───────────────────────────────────────────────────

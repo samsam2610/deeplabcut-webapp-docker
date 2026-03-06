@@ -4155,7 +4155,6 @@
     const anvNoteBar        = document.getElementById("anv-note-bar");
     const anvStatusBefore   = document.getElementById("anv-status-before");
     const anvStatusAfter    = document.getElementById("anv-status-after");
-    const anvStatusIgnore   = document.getElementById("anv-status-ignore");
     const anvStatusApply    = document.getElementById("anv-status-apply");
     const anvStatusTags     = document.getElementById("anv-status-tags");
     const anvStatusNav      = document.getElementById("anv-status-nav");
@@ -4164,7 +4163,6 @@
     const anvStatusNavInfo  = document.getElementById("anv-status-nav-info");
     const anvNoteBefore     = document.getElementById("anv-note-before");
     const anvNoteAfter      = document.getElementById("anv-note-after");
-    const anvNoteIgnore     = document.getElementById("anv-note-ignore");
     const anvNoteApply      = document.getElementById("anv-note-apply");
     const anvNoteTags       = document.getElementById("anv-note-tags");
     const anvNoteNav        = document.getElementById("anv-note-nav");
@@ -4435,8 +4433,10 @@
       anvStatusBarWrap.classList.add("hidden");
       anvNoteBarWrap.classList.add("hidden");
       _anvReRenderStatus = null; _anvReRenderNote = null;
+      _anvNoteActiveTag = null; _anvStatusActiveTag = null;
+      _anvNoteSegIdx = 0; _anvStatusSegIdx = 0;
 
-      const hasStatus = _anvCsvRows.some(r => r.frame_line_status);
+      const hasStatus = _anvCsvRows.some(r => r.frame_line_status && r.frame_line_status !== "0");
       const hasNote   = _anvCsvRows.some(r => r.note);
       if (!hasStatus && !hasNote) return;
       anvCsvBars.classList.remove("hidden");
@@ -4446,7 +4446,7 @@
         const onStatusTag = val => {
           _anvStatusActiveTag = (_anvStatusActiveTag === val) ? null : val;
           _anvStatusSegIdx = 0;
-          _anvStatusEffectiveRuns = _anvMergeRuns(_anvStatusRuns, parseInt(anvStatusIgnore.value) || 0);
+          _anvStatusEffectiveRuns = _anvMergeRuns(_anvStatusRuns, 0);
           _anvRenderCsvBar(anvStatusBar, _anvStatusEffectiveRuns, _anvStatusColorMap, anvStatusBefore, anvStatusAfter, _anvStatusActiveTag,
             idx => { _anvStatusSegIdx = idx; _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx); });
           _anvRenderTagFilter(anvStatusTags, _anvStatusRuns, _anvStatusColorMap, _anvStatusActiveTag, onStatusTag);
@@ -4454,7 +4454,7 @@
           if (_anvStatusActiveTag) _anvGoToSeg(_anvStatusEffectiveRuns.filter(r => r.value === _anvStatusActiveTag), anvStatusBefore, 0);
         };
         _anvReRenderStatus = () => {
-          _anvStatusEffectiveRuns = _anvMergeRuns(_anvStatusRuns, parseInt(anvStatusIgnore.value) || 0);
+          _anvStatusEffectiveRuns = _anvMergeRuns(_anvStatusRuns, 0);
           _anvRenderCsvBar(anvStatusBar, _anvStatusEffectiveRuns, _anvStatusColorMap, anvStatusBefore, anvStatusAfter, _anvStatusActiveTag,
             idx => { _anvStatusSegIdx = idx; _anvUpdateSegNav(anvStatusNav, anvStatusNavInfo, _anvStatusEffectiveRuns, _anvStatusActiveTag, _anvStatusSegIdx); });
           _anvRenderTagFilter(anvStatusTags, _anvStatusRuns, _anvStatusColorMap, _anvStatusActiveTag, onStatusTag);
@@ -4469,7 +4469,7 @@
         const onNoteTag = val => {
           _anvNoteActiveTag = (_anvNoteActiveTag === val) ? null : val;
           _anvNoteSegIdx = 0;
-          _anvNoteEffectiveRuns = _anvMergeRuns(_anvNoteRuns, parseInt(anvNoteIgnore.value) || 0);
+          _anvNoteEffectiveRuns = _anvMergeRuns(_anvNoteRuns, 0);
           _anvRenderCsvBar(anvNoteBar, _anvNoteEffectiveRuns, _anvNoteColorMap, anvNoteBefore, anvNoteAfter, _anvNoteActiveTag,
             idx => { _anvNoteSegIdx = idx; _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx); });
           _anvRenderTagFilter(anvNoteTags, _anvNoteRuns, _anvNoteColorMap, _anvNoteActiveTag, onNoteTag);
@@ -4477,7 +4477,7 @@
           if (_anvNoteActiveTag) _anvGoToSeg(_anvNoteEffectiveRuns.filter(r => r.value === _anvNoteActiveTag), anvNoteBefore, 0);
         };
         _anvReRenderNote = () => {
-          _anvNoteEffectiveRuns = _anvMergeRuns(_anvNoteRuns, parseInt(anvNoteIgnore.value) || 0);
+          _anvNoteEffectiveRuns = _anvMergeRuns(_anvNoteRuns, 0);
           _anvRenderCsvBar(anvNoteBar, _anvNoteEffectiveRuns, _anvNoteColorMap, anvNoteBefore, anvNoteAfter, _anvNoteActiveTag,
             idx => { _anvNoteSegIdx = idx; _anvUpdateSegNav(anvNoteNav, anvNoteNavInfo, _anvNoteEffectiveRuns, _anvNoteActiveTag, _anvNoteSegIdx); });
           _anvRenderTagFilter(anvNoteTags, _anvNoteRuns, _anvNoteColorMap, _anvNoteActiveTag, onNoteTag);
@@ -4583,6 +4583,8 @@
       if (!_anvCsvPath) return;
       anvSaveStatus.textContent = "Saving…";
       anvSaveStatus.className   = "fe-extract-status";
+      const note   = anvNoteInput.value.trim();
+      const status = anvStatusInput.value || "0";
       try {
         const res  = await fetch("/annotate/save-row", {
           method:  "POST",
@@ -4590,14 +4592,43 @@
           body:    JSON.stringify({
             csv_path:          _anvCsvPath,
             frame_number:      _anvCurrentFrame,
-            note:              anvNoteInput.value.trim(),
-            frame_line_status: anvStatusInput.value || "0",
+            note,
+            frame_line_status: status,
             fps:               _anvFps,
           }),
         });
         const data = await res.json();
         if (data.error) throw new Error(data.error);
-        _anvApplyCsvRows(data.rows, _anvCsvPath);
+
+        // Update _anvCsvRows in-place — only "interesting" rows are tracked
+        // (non-empty note OR status that isn't the default "0")
+        const isInteresting = note || (status && status !== "0");
+        const idx = _anvCsvRows.findIndex(r => r.frame_number === _anvCurrentFrame);
+        if (isInteresting) {
+          const savedRow = data.row || {
+            frame_number:      _anvCurrentFrame,
+            timestamp:         (_anvCurrentFrame / _anvFps).toFixed(3),
+            frame_line_status: status,
+            note,
+          };
+          if (idx >= 0) _anvCsvRows[idx] = savedRow;
+          else {
+            _anvCsvRows.push(savedRow);
+            _anvCsvRows.sort((a, b) => a.frame_number - b.frame_number);
+          }
+          // Add new note to user tags if needed
+          if (note && !_anvUserTags.includes(note)) {
+            _anvUserTags.push(note);
+            _anvRenderTagChips();
+          }
+        } else {
+          // Row is now default — remove it from the tracked list
+          if (idx >= 0) _anvCsvRows.splice(idx, 1);
+        }
+
+        // Rebuild the timeline bars to reflect the change
+        _anvBuildCsvBars();
+
         anvSaveStatus.textContent = "Saved";
         anvSaveStatus.className   = "fe-extract-status ok";
         setTimeout(() => { if (anvSaveStatus.textContent === "Saved") anvSaveStatus.textContent = ""; }, 2000);
