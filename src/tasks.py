@@ -995,10 +995,29 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
     Detects whether the target is a video file, image file, or directory,
     then calls the appropriate DLC function(s).
     """
-    import os as _os, sys, deeplabcut as _dlc
+    import os as _os, sys, importlib, deeplabcut as _dlc
     from pathlib import Path as _Path
 
     _os.setpgrp()
+
+    # DLC 3.x moved functions into pose_estimation_pytorch submodule.
+    # This helper searches submodules if the function isn't at the top level.
+    def _dlc_fn(name):
+        if hasattr(_dlc, name):
+            return getattr(_dlc, name)
+        for sub in ("deeplabcut.pose_estimation_pytorch",
+                    "deeplabcut.pose_estimation_tensorflow"):
+            try:
+                m = importlib.import_module(sub)
+                if hasattr(m, name):
+                    return getattr(m, name)
+            except ImportError:
+                pass
+        raise AttributeError(f"deeplabcut has no attribute '{name}'")
+
+    _analyze_videos           = _dlc_fn("analyze_videos")
+    _analyze_time_lapse       = _dlc_fn("analyze_time_lapse_frames")
+    _create_labeled_video     = _dlc_fn("create_labeled_video")
 
     # Ensure CUDA device numbering matches nvidia-smi (PCI bus ID order).
     _os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -1018,16 +1037,16 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
                 ext = p.suffix.lower()
                 if ext in {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"}:
                     _f.write(f"Analyzing video file: {p}\n\n")
-                    _dlc.analyze_videos(config_path, [str(p)], **kw)
+                    _analyze_videos(config_path, [str(p)], **kw)
                     if create_labeled:
                         _f.write(f"\nCreating labeled video: {p}\n\n")
-                        _dlc.create_labeled_video(config_path, [str(p)], **label_kw)
+                        _create_labeled_video(config_path, [str(p)], **label_kw)
                 elif ext in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}:
                     _f.write(f"Analyzing image directory (selected frame): {p.parent}\n\n")
-                    _dlc.analyze_time_lapse_frames(config_path, str(p.parent), **kw)
+                    _analyze_time_lapse(config_path, str(p.parent), **kw)
                     if create_labeled:
                         _f.write(f"\nCreating labeled frames in: {p.parent}\n\n")
-                        _dlc.create_labeled_video(config_path, [str(p.parent)], save_frames=True, **label_kw)
+                        _create_labeled_video(config_path, [str(p.parent)], save_frames=True, **label_kw)
                 else:
                     raise ValueError(f"Unsupported file type: {ext}")
 
@@ -1042,17 +1061,17 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
                 if video_files:
                     video_paths = [str(v) for v in sorted(video_files)]
                     _f.write(f"Analyzing {len(video_files)} video(s) in: {p}\n\n")
-                    _dlc.analyze_videos(config_path, video_paths, **kw)
+                    _analyze_videos(config_path, video_paths, **kw)
                     if create_labeled:
                         _f.write(f"\nCreating labeled video(s)...\n\n")
-                        _dlc.create_labeled_video(config_path, video_paths, **label_kw)
+                        _create_labeled_video(config_path, video_paths, **label_kw)
 
                 if image_files:
                     _f.write(f"\nAnalyzing {len(image_files)} image(s) in: {p}\n\n")
-                    _dlc.analyze_time_lapse_frames(config_path, str(p), **kw)
+                    _analyze_time_lapse(config_path, str(p), **kw)
                     if create_labeled:
                         _f.write(f"\nCreating labeled frames in: {p}\n\n")
-                        _dlc.create_labeled_video(config_path, [str(p)], save_frames=True, **label_kw)
+                        _create_labeled_video(config_path, [str(p)], save_frames=True, **label_kw)
 
             else:
                 raise FileNotFoundError(f"Target not found: {target_path}")
