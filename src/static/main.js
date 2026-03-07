@@ -1593,8 +1593,11 @@
     const feNoteBarWrap   = document.getElementById("fe-note-bar-wrap");
     const feStatusBar     = document.getElementById("fe-status-bar");
     const feNoteBar       = document.getElementById("fe-note-bar");
+    const feVideoWrap     = document.getElementById("fe-video-wrap");
     const feFrameImg      = document.getElementById("fe-frame-img");
     const feFrameSpinner  = document.getElementById("fe-frame-spinner");
+    const feZoomInput     = document.getElementById("fe-zoom");
+    const feZoomVal       = document.getElementById("fe-zoom-val");
     const feStatusBefore   = document.getElementById("fe-status-before");
     const feStatusAfter    = document.getElementById("fe-status-after");
     const feStatusApply    = document.getElementById("fe-status-apply");
@@ -1612,6 +1615,7 @@
     const feNoteNextBtn    = document.getElementById("fe-note-next");
     const feNoteNavInfo    = document.getElementById("fe-note-nav-info");
 
+    let _feZoom         = 100;
     let _feFps          = 30;
     let _feCsvRows      = [];
     let _feFrameCount   = 0;
@@ -1634,6 +1638,28 @@
     let _feFrameBusy    = false;
     let _fePlayTimer    = null;
     let _feStopExtraction = false;
+
+    // ── Viewer sizing (can break out of card borders) ─────────────
+    function _feFitViewer() {
+      if (!feFrameImg.naturalWidth) return;
+      const cs      = getComputedStyle(feCard);
+      const padL    = parseFloat(cs.paddingLeft)  || 0;
+      const padR    = parseFloat(cs.paddingRight) || 0;
+      const baseW   = feCard.clientWidth - padL - padR;
+      const maxW    = Math.max(baseW, window.innerWidth - 32);
+      const targetW = Math.min(Math.round(baseW * (_feZoom / 100)), Math.floor(maxW));
+      const extra   = targetW - baseW;
+      feVideoWrap.style.width      = targetW + "px";
+      feVideoWrap.style.marginLeft = extra > 0 ? `-${extra / 2}px` : "";
+    }
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(() => { if (feFrameImg.naturalWidth) _feFitViewer(); }).observe(feCard);
+    }
+    feZoomInput.addEventListener("input", () => {
+      _feZoom = parseInt(feZoomInput.value, 10);
+      feZoomVal.textContent = _feZoom + " %";
+      _feFitViewer();
+    });
 
     function _feFrameUrl(n) {
       return `/dlc/project/video-frame/${encodeURIComponent(_feCurrentVideo)}/${n}`;
@@ -1681,6 +1707,8 @@
       feCsvBars.classList.add("hidden");
       feStatusBarWrap.classList.add("hidden");
       feNoteBarWrap.classList.add("hidden");
+      _feZoom = 100; feZoomInput.value = "100"; feZoomVal.textContent = "100 %";
+      feVideoWrap.style.width = ""; feVideoWrap.style.marginLeft = "";
     }
 
     // ── Source toggle ─────────────────────────────────────────────
@@ -1831,6 +1859,7 @@
           feFrameImg.src = blobUrl;
           if (prev.startsWith("blob:")) URL.revokeObjectURL(prev);
         });
+        _feFitViewer();
         _feUpdateFrameDisplay();
         _fePrefetch([n + 1, n + 2]);
       } catch (err) {
@@ -2264,6 +2293,7 @@
     let _flMarkerRadius   = 4;
     let _flShowNames      = true;
     let _flCursorInCanvas = false;
+    let _flHoverBp        = null;   // bodypart marker the cursor is near
     let _flZoom           = 100;
     let _flHidden         = {};  // {frame_name: {bp: bool}} — visibility-toggled markers  // percent of container width (100 = fit to card)
 
@@ -2653,6 +2683,7 @@
       _flUpdateLabelCount();
 
       // Load frame image
+      _flHoverBp   = null;
       _flImgLoaded = false;
       flCanvasLoading.classList.remove("hidden");
       const img   = new Image();
@@ -2725,6 +2756,15 @@
         const cy    = pt[1] * scaleY;
         const color = _flColor(i);
 
+        // Selection ring for the active bodypart
+        if (bp === _flSelectedBp) {
+          flCtx.beginPath();
+          flCtx.arc(cx, cy, r + 3.5, 0, Math.PI * 2);
+          flCtx.strokeStyle = "rgba(255,255,255,0.85)";
+          flCtx.lineWidth   = 2;
+          flCtx.stroke();
+        }
+
         // Filled circle with a thin dark outline for contrast
         flCtx.beginPath();
         flCtx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -2734,7 +2774,7 @@
         flCtx.lineWidth   = 1.2;
         flCtx.stroke();
 
-        if (_flShowNames) {
+        if (_flShowNames || bp === _flHoverBp) {
           flCtx.font = "bold 11px 'JetBrains Mono', monospace";
           const tw = flCtx.measureText(bp).width;
           const tx = cx + r + 4;
@@ -2748,17 +2788,43 @@
     }
 
     // ── Canvas interaction ───────────────────────────────────────
-    flCanvas.addEventListener("click", e => {
-      if (!_flSelectedBp || !_flImgLoaded || !_flVideoStem) return;
-      const rect   = flCanvas.getBoundingClientRect();
+    function _flHitTest(cx, cy, fname) {
+      const frameLabels = _flLabels[fname] || {};
       const scaleX = flCanvas.width  / _flImg.naturalWidth;
       const scaleY = flCanvas.height / _flImg.naturalHeight;
-      const ix     = (e.clientX - rect.left)  / scaleX;
-      const iy     = (e.clientY - rect.top)   / scaleY;
+      const hitR   = _flMarkerRadius + 6;
+      let hit = null;
+      _flBodyparts.forEach(bp => {
+        const pt = frameLabels[bp];
+        if (!pt) return;
+        if (_flHidden[fname] && _flHidden[fname][bp]) return;
+        const dx = pt[0] * scaleX - cx;
+        const dy = pt[1] * scaleY - cy;
+        if (Math.sqrt(dx * dx + dy * dy) <= hitR) hit = bp;
+      });
+      return hit;
+    }
 
+    flCanvas.addEventListener("click", e => {
+      if (!_flImgLoaded || !_flVideoStem) return;
+      const rect = flCanvas.getBoundingClientRect();
+      const cx   = e.clientX - rect.left;
+      const cy   = e.clientY - rect.top;
       const fname = _flFrames[_flFrameIdx];
+
+      // Click near an existing marker → select it
+      const hit = _flHitTest(cx, cy, fname);
+      if (hit) {
+        _flSelectBp(hit);
+        return;
+      }
+
+      // Click on empty space → place point for selected bp
+      if (!_flSelectedBp) return;
+      const scaleX = flCanvas.width  / _flImg.naturalWidth;
+      const scaleY = flCanvas.height / _flImg.naturalHeight;
       if (!_flLabels[fname]) _flLabels[fname] = {};
-      _flLabels[fname][_flSelectedBp] = [ix, iy];
+      _flLabels[fname][_flSelectedBp] = [cx / scaleX, cy / scaleY];
       _flDraw();
       _flUpdateBpChipStatus();
       _flUpdateLabelCount();
@@ -2772,8 +2838,26 @@
       _flRemoveBpLabel(_flSelectedBp);
     });
 
+    flCanvas.addEventListener("mousemove", e => {
+      if (!_flImgLoaded) return;
+      const rect  = flCanvas.getBoundingClientRect();
+      const cx    = e.clientX - rect.left;
+      const cy    = e.clientY - rect.top;
+      const fname = _flFrames[_flFrameIdx];
+      const found = _flHitTest(cx, cy, fname);
+      if (found !== _flHoverBp) {
+        _flHoverBp = found;
+        _flDraw();
+      }
+      flCanvas.style.cursor = found ? "pointer" : (_flSelectedBp ? "crosshair" : "default");
+    });
+
     flCanvas.addEventListener("mouseenter", () => { _flCursorInCanvas = true; });
-    flCanvas.addEventListener("mouseleave", () => { _flCursorInCanvas = false; });
+    flCanvas.addEventListener("mouseleave", () => {
+      _flCursorInCanvas = false;
+      if (_flHoverBp) { _flHoverBp = null; _flDraw(); }
+      flCanvas.style.cursor = _flSelectedBp ? "crosshair" : "default";
+    });
 
     function _flRemoveBpLabel(bp) {
       const fname = _flFrames[_flFrameIdx];
