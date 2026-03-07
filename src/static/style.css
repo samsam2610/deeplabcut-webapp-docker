@@ -1612,20 +1612,10 @@ footer {
 
 .fe-video-wrap {
   position: relative;
-  width: 100%;
   background: #000;
   border-radius: 8px;
-  overflow: hidden;
   margin-bottom: .75rem;
   border: 1px solid var(--border);
-}
-
-#fe-frame-img {
-  width: 100%;
-  max-height: 320px;
-  display: block;
-  object-fit: contain;
-  user-select: none;
 }
 
 .fe-frame-spinner {
