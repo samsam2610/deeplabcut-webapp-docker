@@ -280,8 +280,8 @@
 
       <!-- ── Video player (shown after selection) ───────────── -->
       <div id="fe-player-section" class="hidden">
-        <div class="fe-video-wrap">
-          <img id="fe-frame-img" alt="" draggable="false" />
+        <div id="fe-video-wrap" class="fe-video-wrap">
+          <img id="fe-frame-img" alt="" draggable="false" style="width:100%;display:block;height:auto;user-select:none" />
           <div id="fe-frame-spinner" class="fe-frame-spinner hidden"></div>
         </div>
 
@@ -303,6 +303,15 @@
 
         <!-- Seek slider -->
         <input type="range" id="fe-seek" class="fe-seek" min="0" max="1000" value="0" step="1" />
+
+        <!-- Viewer size control -->
+        <div style="display:flex;align-items:center;gap:1.2rem;margin-top:.4rem;margin-bottom:.2rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Viewer size
+            <input type="range" id="fe-zoom" min="50" max="300" value="100" step="25" style="width:80px;accent-color:var(--accent)">
+            <span id="fe-zoom-val" style="min-width:2.5rem;text-align:right;color:var(--text)">100 %</span>
+          </label>
+        </div>
 
         <!-- CSV annotation bars (visible only when companion CSV exists) -->
         <div id="fe-csv-bars" class="hidden">

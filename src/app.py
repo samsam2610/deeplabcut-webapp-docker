@@ -19,8 +19,9 @@ try:
 except ImportError:
     _yaml = None
 
+import secrets
 import redis as _redis
-from flask import Flask, request, jsonify, render_template, send_from_directory, send_file, Response
+from flask import Flask, request, jsonify, render_template, send_from_directory, send_file, Response, session as flask_session
 from celery import Celery
 from celery.result import AsyncResult
 from werkzeug.utils import secure_filename
@@ -41,19 +42,32 @@ app = Flask(
     template_folder="templates",
 )
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2 GB max upload
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
 # ── Redis (direct client for session storage) ─────────────────────
 _REDIS_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
 _redis_client = _redis.Redis.from_url(_REDIS_URL, decode_responses=True)
-_SESSION_KEY     = "webapp:session"
-_DLC_PROJECT_KEY = "webapp:dlc_project"
 
-# Persistent VideoCapture cache for the frame-server endpoint
+# ── Per-browser session identity ───────────────────────────────────
+def _user_id() -> str:
+    """Return a stable browser-session identifier, creating one if absent."""
+    if "uid" not in flask_session:
+        flask_session["uid"] = uuid.uuid4().hex
+    return flask_session["uid"]
+
+def _session_key() -> str:
+    return f"webapp:session:{_user_id()}"
+
+def _dlc_key() -> str:
+    return f"webapp:dlc_project:{_user_id()}"
+
+# ── Per-session VideoCapture cache ────────────────────────────────
 import threading as _threading
-_fe_vcap_lock = _threading.Lock()
-_fe_vcap      = None   # cv2.VideoCapture kept open between requests
-_fe_vcap_path = None   # absolute path string of the currently-open capture
-_fe_vcap_pos  = -1     # frame index that was just read (for sequential-read optimisation)
+import collections as _collections
+
+_FE_VCAP_MAX        = 20   # max concurrent per-session captures
+_fe_vcap_cache: dict = _collections.OrderedDict()  # uid → {vcap, path, pos, lock}
+_fe_vcap_cache_lock = _threading.Lock()             # protects the dict itself
 
 # Engine aliases
 _TF_ENGINE_ALIASES = {"tensorflow", "tf"}
@@ -319,7 +333,7 @@ def create_anipose_session():
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "initializing",
         }
-        _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+        _redis_client.set(_session_key(), json.dumps(session_data))
         return jsonify(session_data), 201
 
     except Exception as exc:
@@ -330,7 +344,7 @@ def create_anipose_session():
 @app.route("/session", methods=["GET"])
 def get_session():
     """Return current session state, refreshing status from the Celery backend."""
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return jsonify({"status": "none"}), 200
 
@@ -348,7 +362,7 @@ def get_session():
         session_data["status"] = "initializing"
 
     # Persist the refreshed status
-    _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+    _redis_client.set(_session_key(), json.dumps(session_data))
     return jsonify(session_data), 200
 
 
@@ -362,7 +376,7 @@ def clear_session():
 @app.route("/session/config", methods=["GET"])
 def get_session_config():
     """Return the raw text of the active session's config.toml."""
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return jsonify({"error": "No active session."}), 400
     config_path = Path(json.loads(raw).get("config_path", ""))
@@ -374,7 +388,7 @@ def get_session_config():
 @app.route("/session/config", methods=["POST"])
 def save_session_config():
     """Overwrite the active session's config.toml with new content."""
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return jsonify({"error": "No active session."}), 400
     config_path = Path(json.loads(raw).get("config_path", ""))
@@ -394,7 +408,7 @@ def upload_dlc_config():
     Upload a DeepLabCut config.yaml and attach its path to the active session.
     Stores the file alongside config.toml in the session directory.
     """
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return jsonify({"error": "No active session."}), 400
 
@@ -414,7 +428,7 @@ def upload_dlc_config():
 
     session_data["dlc_config_path"] = str(dlc_config_path)
     session_data["dlc_config_name"] = secure_filename(config_file.filename)
-    _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+    _redis_client.set(_session_key(), json.dumps(session_data))
 
     return jsonify({
         "dlc_config_path": str(dlc_config_path),
@@ -425,7 +439,7 @@ def upload_dlc_config():
 @app.route("/session/dlc-config", methods=["GET"])
 def get_dlc_config():
     """Return the raw text of the active session's DLC config.yaml."""
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return jsonify({"error": "No active session."}), 400
 
@@ -448,7 +462,7 @@ def get_dlc_config():
 @app.route("/session/dlc-config", methods=["PATCH"])
 def save_dlc_config():
     """Save edited DLC config.yaml content back to disk."""
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return jsonify({"error": "No active session."}), 400
 
@@ -473,13 +487,13 @@ def save_dlc_config():
 @app.route("/session/dlc-config", methods=["DELETE"])
 def clear_dlc_config():
     """Remove DLC config association from the active session (file stays on disk)."""
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return jsonify({"error": "No active session."}), 400
     session_data = json.loads(raw)
     session_data.pop("dlc_config_path", None)
     session_data.pop("dlc_config_name", None)
-    _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+    _redis_client.set(_session_key(), json.dumps(session_data))
     return jsonify({"status": "cleared"})
 
 
@@ -490,7 +504,7 @@ def load_dlc_config_from_path():
     The file is copied into the session directory.
     Body: { "config_path": "<absolute_server_path>" }
     """
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return jsonify({"error": "No active session."}), 400
 
@@ -521,7 +535,7 @@ def load_dlc_config_from_path():
 
     session_data["dlc_config_path"] = str(dlc_config_path)
     session_data["dlc_config_name"] = config_path.name
-    _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+    _redis_client.set(_session_key(), json.dumps(session_data))
 
     return jsonify({
         "dlc_config_path": str(dlc_config_path),
@@ -617,7 +631,7 @@ def create_session_from_server_path():
             "status":      "initializing",
             "source_path": str(config_path),
         }
-        _redis_client.set(_SESSION_KEY, json.dumps(session_data))
+        _redis_client.set(_session_key(), json.dumps(session_data))
         return jsonify(session_data), 201
 
     except Exception as exc:
@@ -670,7 +684,7 @@ def detect_frame_dims(project_id: str):
 
 def _clear_session_data():
     """Helper: revoke pending init task, delete config dir, remove Redis key."""
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return
     session_data = json.loads(raw)
@@ -678,7 +692,7 @@ def _clear_session_data():
     config_path = Path(session_data.get("config_path", ""))
     if config_path.parent.exists() and config_path.parent.name.startswith("session_"):
         shutil.rmtree(str(config_path.parent), ignore_errors=True)
-    _redis_client.delete(_SESSION_KEY)
+    _redis_client.delete(_session_key())
 
 
 # ── Session pipeline operations ───────────────────────────────────
@@ -736,7 +750,7 @@ def run_operation():
     if not project_dir.is_dir():
         return jsonify({"error": f"Project folder not found: '{project_id}'."}), 400
 
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return jsonify({"error": "No active session. Create a session first."}), 400
 
@@ -773,7 +787,7 @@ def get_pipeline_structure():
     Parse the [pipeline] section of the active session's config.toml and return
     a deduplicated, ordered list of {key, folder} objects.
     """
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return jsonify({"error": "No active session."}), 400
     config_path = Path(json.loads(raw).get("config_path", ""))
@@ -797,7 +811,7 @@ def browse_project(project_id: str):
     exist under <root>/<project_id>/<folder>/ (root defaults to DATA_DIR).
     Query param: root=<absolute_path>  (optional)
     """
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if not raw:
         return jsonify({"error": "No active session."}), 400
     config_path = Path(json.loads(raw).get("config_path", ""))
@@ -920,7 +934,7 @@ def _dlc_project_security_check(p: Path) -> bool:
 @app.route("/dlc/project", methods=["GET"])
 def get_dlc_project():
     """Return the current DLC project state."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"status": "none"}), 200
     return jsonify(json.loads(raw)), 200
@@ -989,21 +1003,21 @@ def set_dlc_project():
         "config_path":  config_path,
         "engine":       engine,
     }
-    _redis_client.set(_DLC_PROJECT_KEY, json.dumps(project_data))
+    _redis_client.set(_dlc_key(), json.dumps(project_data))
     return jsonify(project_data), 200
 
 
 @app.route("/dlc/project", methods=["DELETE"])
 def clear_dlc_project():
     """Clear the active DLC project session."""
-    _redis_client.delete(_DLC_PROJECT_KEY)
+    _redis_client.delete(_dlc_key())
     return jsonify({"status": "cleared"}), 200
 
 
 @app.route("/dlc/project/browse")
 def browse_dlc_project():
     """List files in each DLC pipeline folder for the active DLC project."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1081,7 +1095,7 @@ def fs_ls():
 @app.route("/dlc/project/config", methods=["GET"])
 def get_dlc_project_config():
     """Return the raw text of the active DLC project's config.yaml."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
     project_data = json.loads(raw)
@@ -1094,7 +1108,7 @@ def get_dlc_project_config():
 @app.route("/dlc/project/config", methods=["PATCH"])
 def save_dlc_project_config():
     """Overwrite the active DLC project's config.yaml."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
     project_data = json.loads(raw)
@@ -1116,7 +1130,7 @@ def dlc_project_upload():
     Upload files into a DLC pipeline folder of the active project.
     Form fields: folder (one of the DLC pipeline folders), files[]
     """
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1151,7 +1165,7 @@ def dlc_project_upload():
 @app.route("/dlc/project/file", methods=["DELETE"])
 def dlc_project_delete_file():
     """Delete a file anywhere inside the active DLC project. Body: { rel_path }"""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1182,7 +1196,7 @@ def dlc_project_delete_file():
 @app.route("/dlc/project/file", methods=["PATCH"])
 def dlc_project_rename_file():
     """Rename a file anywhere inside the active DLC project. Body: { rel_path, new_name }"""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1222,7 +1236,7 @@ def dlc_project_download():
     Download a DLC pipeline folder (or the whole project) as a ZIP.
     Query param: folder=<dlc_folder_name>  (optional; downloads all if omitted)
     """
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1259,7 +1273,7 @@ def dlc_project_download():
 @app.route("/dlc/project/videos")
 def dlc_list_videos():
     """List video files in the active DLC project's videos folder."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1285,7 +1299,7 @@ def dlc_video_info(filename: str):
     """Return FPS, frame count, width, height for a video in the videos folder."""
     import cv2
 
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1318,7 +1332,7 @@ def dlc_video_csv(filename: str):
     """Return CSV annotation rows for a video (same stem, .csv extension in videos/ folder)."""
     import csv as csv_module
 
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1367,7 +1381,7 @@ def dlc_video_csv(filename: str):
 @app.route("/dlc/project/video-stream/<path:filename>")
 def dlc_video_stream(filename: str):
     """Stream a video file from the active DLC project's videos folder."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1448,7 +1462,7 @@ def dlc_video_frame(filename: str, frame_number: int):
     """Decode and return a single frame as JPEG using OpenCV (for AVI / fallback mode)."""
     import cv2
 
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1464,26 +1478,37 @@ def dlc_video_frame(filename: str, frame_number: int):
     if not video_path.is_file():
         return jsonify({"error": "Video not found."}), 404
 
-    global _fe_vcap, _fe_vcap_path, _fe_vcap_pos
-
+    uid   = _user_id()
     vpath = str(video_path)
-    with _fe_vcap_lock:
+
+    # Get or create a per-session cache entry (LRU, capped at _FE_VCAP_MAX)
+    with _fe_vcap_cache_lock:
+        if uid not in _fe_vcap_cache:
+            if len(_fe_vcap_cache) >= _FE_VCAP_MAX:
+                _, evicted = _fe_vcap_cache.popitem(last=False)
+                evicted["vcap"].release()
+            _fe_vcap_cache[uid] = {"vcap": None, "path": None, "pos": -1,
+                                   "lock": _threading.Lock()}
+        _fe_vcap_cache.move_to_end(uid)
+        entry = _fe_vcap_cache[uid]
+
+    with entry["lock"]:
         # Re-open only when the video file changes
-        if _fe_vcap is None or _fe_vcap_path != vpath or not _fe_vcap.isOpened():
-            if _fe_vcap is not None:
-                _fe_vcap.release()
-            _fe_vcap = cv2.VideoCapture(vpath)
-            _fe_vcap_path = vpath
-            _fe_vcap_pos  = -1
-            if not _fe_vcap.isOpened():
+        if entry["vcap"] is None or entry["path"] != vpath or not entry["vcap"].isOpened():
+            if entry["vcap"] is not None:
+                entry["vcap"].release()
+            entry["vcap"] = cv2.VideoCapture(vpath)
+            entry["path"] = vpath
+            entry["pos"]  = -1
+            if not entry["vcap"].isOpened():
                 return jsonify({"error": "Could not open video."}), 400
 
         # Sequential read: if this is exactly the next frame, skip the seek
-        if frame_number != _fe_vcap_pos + 1:
-            _fe_vcap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        if frame_number != entry["pos"] + 1:
+            entry["vcap"].set(cv2.CAP_PROP_POS_FRAMES, frame_number)
 
-        ret, frame = _fe_vcap.read()
-        _fe_vcap_pos = frame_number if ret else -1
+        ret, frame = entry["vcap"].read()
+        entry["pos"] = frame_number if ret else -1
 
     if not ret:
         return jsonify({"error": "Could not read frame."}), 404
@@ -1506,7 +1531,7 @@ def dlc_video_frame(filename: str, frame_number: int):
 @app.route("/dlc/project/video-upload", methods=["POST"])
 def dlc_video_upload():
     """Upload a video into the active DLC project's videos folder."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1544,7 +1569,7 @@ def dlc_save_frame():
     import cv2
     import numpy as np
 
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -1637,7 +1662,7 @@ def _parse_dlc_yaml(config_path: Path) -> dict:
 
 def _get_dlc_project_and_config():
     """Return (project_data, config_dict, error_response) for the active DLC project."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return None, None, (jsonify({"error": "No active DLC project."}), 400)
     project_data = json.loads(raw)
@@ -1666,7 +1691,7 @@ def dlc_get_bodyparts():
 @app.route("/dlc/project/labeled-frames")
 def dlc_list_labeled_frames():
     """List video stems and their PNG frames inside labeled-data/."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
     project_data = json.loads(raw)
@@ -1697,7 +1722,7 @@ def dlc_list_labeled_frames():
 @app.route("/dlc/project/frame-image/<path:video_stem>/<filename>")
 def dlc_serve_frame_image(video_stem: str, filename: str):
     """Serve a PNG frame from labeled-data/<video_stem>/."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
     project_data = json.loads(raw)
@@ -1867,7 +1892,7 @@ def _get_config_for_project(project_id: str, root: str = "") -> dict:
     if local_config.is_file():
         return toml.load(str(local_config))
 
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     if raw:
         config_path = Path(json.loads(raw).get("config_path", ""))
         if config_path.is_file():
@@ -1899,7 +1924,7 @@ def create_project():
         return jsonify({"error": f"Project '{safe_name}' already exists."}), 409
 
     # Collect unique pipeline folder names from the active session config
-    raw = _redis_client.get(_SESSION_KEY)
+    raw = _redis_client.get(_session_key())
     pipeline_folders: list[str] = []
     if raw:
         config_path = Path(json.loads(raw).get("config_path", ""))
@@ -2819,7 +2844,7 @@ def inspector_update_behavior():
 @app.route("/dlc/project/create-training-dataset", methods=["POST"])
 def dlc_create_training_dataset():
     """Dispatch a Celery task to run deeplabcut.create_training_dataset()."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -2849,7 +2874,7 @@ def dlc_create_training_dataset():
 @app.route("/dlc/project/add-datasets-to-video-list", methods=["POST"])
 def dlc_add_datasets_to_video_list():
     """Call deeplabcut.adddatasetstovideolistandviceversa() on the active project."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -2870,7 +2895,7 @@ def dlc_add_datasets_to_video_list():
 @app.route("/dlc/project/pytorch-configs", methods=["GET"])
 def list_dlc_pytorch_configs():
     """List all pytorch_config.yaml files found in the active DLC project."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -2897,7 +2922,7 @@ def list_dlc_pytorch_configs():
 @app.route("/dlc/project/pytorch-config", methods=["GET"])
 def get_dlc_pytorch_config():
     """Return the content of a pytorch_config.yaml. Query param: rel_path (optional)."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -2936,7 +2961,7 @@ def get_dlc_pytorch_config():
 @app.route("/dlc/project/pytorch-config", methods=["PATCH"])
 def save_dlc_pytorch_config():
     """Save edited pytorch_config.yaml. Body: { content, rel_path (optional) }."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -2984,7 +3009,7 @@ def get_dlc_project_engine():
     Returns { "engine": "pytorch" | "tensorflow" }.
     Defaults to "pytorch" when the field is absent.
     """
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -3026,7 +3051,7 @@ def dlc_train_network():
       detector_epochs      : int | null
       detector_batch_size  : int | null
     """
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -3127,7 +3152,7 @@ def dlc_project_snapshots():
     List available model snapshots in the active DLC project.
     Returns engine-appropriate snapshot files from the models folder.
     """
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -3220,7 +3245,7 @@ def dlc_project_analyze():
       create_labeled  : bool (default false)
       snapshot_index  : int  (optional; None = latest from config)
     """
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
@@ -3290,7 +3315,7 @@ def dlc_project_analyze_stop():
 @app.route("/dlc/project/labeled-content")
 def dlc_labeled_content():
     """List labeled videos and frame folders produced by create_labeled_video."""
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
     project_data = json.loads(raw)
@@ -3341,7 +3366,7 @@ def dlc_project_machine_label_frames():
     and save predictions as CollectedData_<scorer>.csv.
     Body (JSON): { video_stem, shuffle, trainingsetindex, gputouse, snapshot_index }
     """
-    raw = _redis_client.get(_DLC_PROJECT_KEY)
+    raw = _redis_client.get(_dlc_key())
     if not raw:
         return jsonify({"error": "No active DLC project."}), 400
 
