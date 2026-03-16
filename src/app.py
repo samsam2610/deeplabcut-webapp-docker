@@ -84,7 +84,7 @@ celery.conf.update(
 )
 
 # ── DLC sub-modules ───────────────────────────────────────────────
-import dlc_ctx as _dlc_ctx
+from dlc import ctx as _dlc_ctx
 from dlc import utils as _dlc_utils
 
 # Re-export so existing tests can still access via app module
@@ -159,8 +159,8 @@ from anipose.pipeline import bp as _anipose_pipeline_bp
 from anipose.projects import bp as _anipose_projects_bp
 from anipose.visualization import bp as _anipose_visualization_bp
 from anipose.inspector import bp as _anipose_inspector_bp
-from annotate import bp as _annotate_bp
-from custom_script import bp as _custom_script_bp
+from routes.annotate import bp as _annotate_bp
+from routes.custom_script import bp as _custom_script_bp
 
 app.register_blueprint(_anipose_session_bp)
 app.register_blueprint(_anipose_pipeline_bp)

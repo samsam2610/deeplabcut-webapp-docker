@@ -2,12 +2,12 @@
 Celery worker entry point.
 Run with: celery -A tasks worker --loglevel=info
 
-All task implementations live in anipose_tasks.py and dlc_tasks.py.
+All task implementations live in anipose/tasks.py and dlc/tasks.py.
 This module imports them so Celery can discover them by their registered names.
 """
 from celery_app import celery  # noqa: F401 — re-export for `celery -A tasks`
 
-from anipose_tasks import (  # noqa: F401
+from anipose.tasks import (  # noqa: F401
     process_calibrate,
     process_filter_2d,
     process_triangulate,
@@ -19,7 +19,7 @@ from anipose_tasks import (  # noqa: F401
     init_anipose_session,
 )
 
-from dlc_tasks import (  # noqa: F401
+from dlc.tasks import (  # noqa: F401
     dlc_create_training_dataset,
     dlc_add_datasets_to_video_list,
     dlc_convert_labels_to_h5,

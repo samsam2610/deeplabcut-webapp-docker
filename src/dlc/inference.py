@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from flask import Blueprint, request, jsonify, session as flask_session
 from celery.result import AsyncResult
-import dlc_ctx as _ctx
+from . import ctx as _ctx
 from dlc.utils import (
     _get_engine_queue,
     _dlc_project_security_check,

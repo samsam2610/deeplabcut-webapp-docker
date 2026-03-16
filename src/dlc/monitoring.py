@@ -18,7 +18,7 @@ from pathlib import Path
 from flask import Blueprint, request, jsonify, session as flask_session
 from celery.result import AsyncResult
 from werkzeug.utils import secure_filename
-import dlc_ctx as _ctx
+from . import ctx as _ctx
 from dlc.utils import _get_engine_queue, _dlc_project_security_check
 
 bp = Blueprint("dlc_monitoring", __name__)

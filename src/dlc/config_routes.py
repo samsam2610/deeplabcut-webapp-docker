@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from flask import Blueprint, request, jsonify, session as flask_session
 from werkzeug.utils import secure_filename
-import dlc_ctx as _ctx
+from . import ctx as _ctx
 from dlc.utils import (
     _engine_info,
     _dlc_project_security_check,

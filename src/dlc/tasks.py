@@ -1686,7 +1686,7 @@ def run_processing(self, project_id: str, task_type: str = "anipose"):
     """
     Dispatcher task.  Routes to the correct pipeline based on `task_type`.
     """
-    from anipose_tasks import _run_anipose, _run_deeplabcut
+    from anipose.tasks import _run_anipose, _run_deeplabcut
 
     DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
     project_dir = str(DATA_DIR / project_id)

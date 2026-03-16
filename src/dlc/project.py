@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from flask import Blueprint, request, jsonify, send_file, session as flask_session
 from werkzeug.utils import secure_filename
-import dlc_ctx as _ctx
+from . import ctx as _ctx
 from dlc.utils import (
     _engine_info, _get_pipeline_folders, _get_engine_queue,
     _walk_dir, _dir_has_media, _dlc_project_security_check,
