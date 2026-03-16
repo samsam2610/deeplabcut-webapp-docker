@@ -1,0 +1,9 @@
+flask==3.0.*
+gunicorn==21.*
+celery[redis]==5.3.*
+redis==5.*
+toml
+pyyaml
+numpy
+pandas
+opencv-python-headless

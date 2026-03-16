@@ -1,0 +1,5 @@
+__pycache__/
+*.cpython-*.pyc
+*.cpython-*.pyo
+.env
+*.pickle
