@@ -225,6 +225,12 @@
           </svg>
           <span>Annotate Video</span>
         </button>
+        <button id="btn-open-custom-script" class="inspect-btn" style="width:100%;gap:.55rem">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
+          </svg>
+          <span>Run Custom Script</span>
+        </button>
         <button id="btn-open-gpu-monitor" class="inspect-btn" style="width:100%;gap:.55rem">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/><line x1="12" y1="17" x2="12" y2="21"/>
@@ -258,6 +264,10 @@
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
             Upload
           </button>
+          <button class="btn-source" id="fe-btn-server">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            Browse Server
+          </button>
         </div>
 
         <!-- From Project: video list -->
@@ -275,6 +285,15 @@
           </label>
           <input type="file" id="fe-video-file-input" accept=".mp4,.avi,.mov,.mkv,.mpg,.mpeg" style="display:none" />
           <span id="fe-upload-status" style="font-size:.82rem;color:var(--text-dim);margin-left:.6rem"></span>
+        </div>
+
+        <!-- Browse Server: directory browser -->
+        <div id="fe-server-section" class="hidden" style="margin-bottom:.8rem">
+          <div id="fe-server-browser"
+            style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.3rem .4rem;font-size:.77rem;margin-bottom:.4rem">
+            <p class="explorer-empty">Loading…</p>
+          </div>
+          <span id="fe-server-status" style="font-size:.82rem;color:var(--text-dim)"></span>
         </div>
       </div>
 
@@ -461,9 +480,18 @@
             </select>
           </div>
           <!-- Likelihood threshold -->
-          <div class="scorer-row" style="margin-bottom:.7rem">
+          <div class="scorer-row" style="margin-bottom:.55rem">
             <label for="fl-ml-likelihood" title="Predictions below this confidence score will be discarded">Likelihood threshold</label>
             <input type="number" id="fl-ml-likelihood" value="0.9" min="0" max="1" step="0.05" style="width:5rem" />
+          </div>
+          <!-- Update Threshold (shown only when raw predictions exist for current stem) -->
+          <div id="fl-ml-update-wrap" class="hidden" style="margin-bottom:.7rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+            <button id="fl-ml-update-btn" class="btn-sm btn-server-pick" style="gap:.4rem">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              Update Threshold
+            </button>
+            <span style="font-size:.75rem;color:var(--text-dim)">raw predictions saved — no re-run needed</span>
+            <span id="fl-ml-update-status" class="fe-extract-status" style="margin-left:auto"></span>
           </div>
           <!-- Run / Stop -->
           <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.3rem">
@@ -549,10 +577,14 @@
         </div>
 
         <!-- Save row -->
-        <div style="display:flex;align-items:center;gap:.8rem;margin-top:1rem">
-          <button id="fl-btn-save" class="btn-sm btn-create" style="flex:1;justify-content:center;padding:.5rem 1rem">
+        <div style="display:flex;align-items:center;gap:.8rem;margin-top:1rem;flex-wrap:wrap">
+          <button id="fl-btn-save" class="btn-sm btn-create" style="justify-content:center;padding:.5rem 1rem">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             Save Labels
+          </button>
+          <button id="fl-btn-save-h5" class="btn-sm" style="justify-content:center;padding:.5rem 1rem" title="Save current CSV labels then convert all labeled-data folders to HDF5 via DeepLabCut">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Save all to H5
           </button>
           <button id="fl-btn-clear-frame" class="btn-sm" title="Double-click to erase all markers on this frame"
             style="padding:.5rem .8rem;border-color:var(--danger);color:var(--danger);opacity:.75">
@@ -873,14 +905,31 @@
       </div>
       <p class="subtitle">Browse and play labeled videos or frame-by-frame labeled image folders produced by the analysis step.</p>
 
-      <!-- Content list -->
-      <div style="margin-bottom:.7rem">
+      <!-- Source tabs -->
+      <div style="display:flex;gap:.4rem;margin-bottom:.6rem">
+        <button id="va-tab-project" class="btn-sm active" style="padding:.2rem .65rem;font-size:.75rem">Project Content</button>
+        <button id="va-tab-browse" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Browse Folders</button>
+      </div>
+
+      <!-- Tab: Project Content -->
+      <div id="va-tab-project-panel">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
           <label style="font-size:.78rem;color:var(--text-dim)">Labeled content</label>
           <button class="btn-sm" id="va-refresh-btn" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
         </div>
         <div id="va-content-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
-          <p class="explorer-empty" id="va-content-empty">Loading…</p>
+          <p class="explorer-empty">Loading…</p>
+        </div>
+      </div>
+
+      <!-- Tab: Browse Folders -->
+      <div id="va-tab-browse-panel" class="hidden">
+        <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem;flex-wrap:wrap">
+          <span id="va-browse-breadcrumb" style="font-size:.75rem;color:var(--text-dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+          <button class="btn-sm" id="va-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
+        </div>
+        <div id="va-browse-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
+          <p class="explorer-empty">Loading…</p>
         </div>
       </div>
 
@@ -1131,6 +1180,97 @@
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
           Save config.yaml
         </button>
+      </div>
+    </section>
+
+    <!-- ─── Custom Script Runner card ────────────────────────── -->
+    <section class="card dlc-theme hidden" id="custom-script-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>Run Custom Script</h2>
+        <button class="btn-sm" id="btn-close-custom-script" title="Close">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Run a custom Python analysis script on CSV data. The script must define a <code style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">run(input_paths, output_dir)</code> function. Output is saved to a timestamped folder — existing files are never overwritten.</p>
+
+      <div style="margin-bottom:.85rem">
+        <a href="/static/script_template.py" download class="btn-sm" style="text-decoration:none;display:inline-flex;align-items:center;gap:.35rem">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="5 12 12 19 19 12"/></svg>
+          Download Script Template
+        </a>
+      </div>
+
+      <!-- ── Python script picker ─────────────────────────────── -->
+      <div style="margin-bottom:1rem">
+        <label style="display:block;font-size:.78rem;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.4rem">Python Script</label>
+        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem">
+          <button class="btn-sm btn-server-pick" id="cs-script-browse-btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Browse
+          </button>
+          <span id="cs-script-path-display" style="font-size:.8rem;color:var(--text-dim);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">No script selected</span>
+        </div>
+        <div id="cs-script-nav" class="userdata-nav hidden">
+          <div id="cs-script-breadcrumb" class="userdata-breadcrumb"></div>
+          <div id="cs-script-entries" class="userdata-subfolders"></div>
+          <p style="font-size:.75rem;color:var(--text-dim);margin-top:.3rem">Click folders to navigate &nbsp;·&nbsp; <strong>Double-click</strong> a <code style="font-family:var(--mono);font-size:.73rem">.py</code> file to select it</p>
+        </div>
+      </div>
+
+      <!-- ── Input CSV selector ──────────────────────────────── -->
+      <div style="margin-bottom:1rem">
+        <label style="display:block;font-size:.78rem;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.4rem">Input CSV</label>
+        <div class="source-btn-row" style="margin-bottom:.5rem">
+          <button class="btn-source active" id="cs-input-mode-file">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+            Single CSV File
+          </button>
+          <button class="btn-source" id="cs-input-mode-folder">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            All CSVs in Folder
+          </button>
+        </div>
+        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.4rem">
+          <button class="btn-sm btn-server-pick" id="cs-input-browse-btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            Browse
+          </button>
+          <span id="cs-input-path-display" style="font-size:.8rem;color:var(--text-dim);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">No input selected</span>
+        </div>
+        <div id="cs-input-nav" class="userdata-nav hidden">
+          <div id="cs-input-breadcrumb" class="userdata-breadcrumb"></div>
+          <div id="cs-input-entries" class="userdata-subfolders"></div>
+          <p id="cs-input-nav-hint" style="font-size:.75rem;color:var(--text-dim);margin-top:.3rem">Click folders to navigate &nbsp;·&nbsp; <strong>Double-click</strong> a <code style="font-family:var(--mono);font-size:.73rem">.csv</code> file to select it</p>
+        </div>
+      </div>
+
+      <!-- ── Run / abort ─────────────────────────────────────── -->
+      <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:.75rem">
+        <button id="cs-run-btn" class="btn-sm btn-create" style="padding:.45rem 1.1rem">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Run Script
+        </button>
+        <button id="cs-abort-btn" class="btn-sm btn-danger hidden">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+          Abort
+        </button>
+        <span id="cs-run-status" style="font-size:.82rem;color:var(--text-dim)"></span>
+      </div>
+
+      <!-- ── Output ──────────────────────────────────────────── -->
+      <div id="cs-output-section" class="hidden">
+        <div style="display:flex;align-items:baseline;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap">
+          <span style="font-size:.78rem;color:var(--text-dim);white-space:nowrap">Output directory:</span>
+          <code id="cs-output-dir" style="font-family:var(--mono);font-size:.76rem;background:var(--surface-2);border:1px solid var(--border);border-radius:4px;padding:.1rem .4rem;word-break:break-all;color:var(--accent)"></code>
+        </div>
+        <div class="log-panel">
+          <div class="log-title">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            Script Output
+          </div>
+          <pre id="cs-log-output" style="max-height:320px;overflow-y:auto">Waiting for output…</pre>
+        </div>
       </div>
     </section>
 

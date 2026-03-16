@@ -7,10 +7,12 @@ import csv
 import io
 import os
 import re
+import sys as _sys
 import uuid
 import json
 import shutil
 import zipfile
+import subprocess as _subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -18,6 +20,14 @@ try:
     import yaml as _yaml
 except ImportError:
     _yaml = None
+
+try:
+    import ruamel.yaml as _ruamel_yaml
+    _ruamel_yaml_instance = _ruamel_yaml.YAML()
+    _ruamel_yaml_instance.preserve_quotes = True
+except ImportError:
+    _ruamel_yaml = None
+    _ruamel_yaml_instance = None
 
 import secrets
 import redis as _redis
@@ -1378,6 +1388,51 @@ def dlc_video_csv(filename: str):
     return jsonify({"rows": rows})
 
 
+@app.route("/dlc/project/video-csv-ext")
+def dlc_video_csv_ext():
+    """Return CSV annotation rows for an external (absolute-path) video.
+    The CSV is expected alongside the video file with the same stem.
+    Query param: path (absolute path to the video file).
+    """
+    import csv as csv_module
+
+    abs_path = request.args.get("path", "").strip()
+    if not abs_path:
+        return jsonify({"error": "path parameter required."}), 400
+
+    video_path = Path(abs_path)
+    csv_path   = video_path.with_suffix(".csv")
+    if not csv_path.is_file():
+        return jsonify({"rows": []})
+
+    rows = []
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv_module.DictReader(f, skipinitialspace=True)
+            if reader.fieldnames:
+                reader.fieldnames = [n.strip() for n in reader.fieldnames]
+            for row in reader:
+                row = {k.strip() if k else k: v for k, v in row.items()}
+                status = (row.get("frame_line_status") or "").strip()
+                note   = (row.get("note") or "").strip()
+                if status or note:
+                    try:
+                        fn = int(float(row.get("frame_number", 0)))
+                    except (ValueError, TypeError):
+                        fn = 0
+                    rows.append({
+                        "timestamp":         (row.get("timestamp") or "").strip(),
+                        "frame_number":      fn,
+                        "frame_line_status": status,
+                        "note":              note,
+                    })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    rows.sort(key=lambda r: r["frame_number"])
+    return jsonify({"rows": rows})
+
+
 @app.route("/dlc/project/video-stream/<path:filename>")
 def dlc_video_stream(filename: str):
     """Stream a video file from the active DLC project's videos folder."""
@@ -1557,6 +1612,168 @@ def dlc_video_upload():
     return jsonify({"saved": safe_name}), 201
 
 
+@app.route("/dlc/project/add-video", methods=["POST"])
+def dlc_add_video():
+    """Register an external video with the active DLC project (mirrors add_new_videos)."""
+    import cv2
+
+    raw = _redis_client.get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    body = request.get_json(force=True) or {}
+    video_path_str = (body.get("video_path") or "").strip()
+    if not video_path_str:
+        return jsonify({"error": "video_path required."}), 400
+
+    p = Path(video_path_str).resolve()
+    if not _dlc_project_security_check(p.parent):
+        return jsonify({"error": "Access denied: path not in an allowed location."}), 403
+    if not p.is_file():
+        return jsonify({"error": "Video file not found."}), 404
+    if p.suffix.lower() not in ALLOWED_VIDEO_EXT:
+        return jsonify({"error": "Unsupported video format."}), 400
+    if "_labeled." in p.name:
+        return jsonify({"error": "Labeled videos (DLC output overlays) cannot be added to video_sets."}), 400
+
+    # Read video dimensions for the crop entry DLC expects in video_sets
+    cap = cv2.VideoCapture(str(p))
+    if not cap.isOpened():
+        return jsonify({"error": "Could not open video to read dimensions."}), 400
+    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+
+    config_file = project_path / "config.yaml"
+    if not config_file.is_file():
+        return jsonify({"error": "config.yaml not found in project."}), 404
+
+    if _ruamel_yaml_instance is None and _yaml is None:
+        return jsonify({"error": "No YAML library available on this server."}), 500
+
+    try:
+        if _ruamel_yaml_instance is not None:
+            # Use ruamel.yaml to preserve key order and comments
+            cfg = _ruamel_yaml_instance.load(config_file) or {}
+            if "video_sets" not in cfg or cfg["video_sets"] is None:
+                cfg["video_sets"] = _ruamel_yaml.comments.CommentedMap()
+            cfg["video_sets"][str(p)] = {"crop": f"0, {width}, 0, {height}"}
+            with open(config_file, "w") as _f:
+                _ruamel_yaml_instance.dump(cfg, _f)
+        else:
+            cfg = _yaml.safe_load(config_file.read_text()) or {}
+            if "video_sets" not in cfg or cfg["video_sets"] is None:
+                cfg["video_sets"] = {}
+            cfg["video_sets"][str(p)] = {"crop": f"0, {width}, 0, {height}"}
+            config_file.write_text(_yaml.dump(cfg, default_flow_style=False, allow_unicode=True))
+    except Exception as exc:
+        return jsonify({"error": f"Failed to update config.yaml: {exc}"}), 500
+
+    return jsonify({"abs_path": str(p), "name": p.name}), 200
+
+
+@app.route("/dlc/project/video-info-ext")
+def dlc_video_info_ext():
+    """Return FPS / frame count for an external (absolute-path) video."""
+    import cv2
+
+    raw = _redis_client.get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    video_path_str = request.args.get("path", "").strip()
+    if not video_path_str:
+        return jsonify({"error": "path required."}), 400
+
+    p = Path(video_path_str).resolve()
+    if not _dlc_project_security_check(p.parent):
+        return jsonify({"error": "Access denied."}), 403
+    if not p.is_file():
+        return jsonify({"error": "Video not found."}), 404
+
+    cap = cv2.VideoCapture(str(p))
+    if not cap.isOpened():
+        return jsonify({"error": "Could not open video."}), 400
+
+    fps         = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width       = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+
+    return jsonify({"fps": fps, "frame_count": frame_count, "width": width, "height": height})
+
+
+@app.route("/dlc/project/video-frame-ext/<int:frame_number>")
+def dlc_video_frame_ext(frame_number: int):
+    """Decode and return a single frame as JPEG for an external (absolute-path) video."""
+    import cv2
+
+    raw = _redis_client.get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    video_path_str = request.args.get("path", "").strip()
+    if not video_path_str:
+        return jsonify({"error": "path required."}), 400
+
+    p = Path(video_path_str).resolve()
+    if not _dlc_project_security_check(p.parent):
+        return jsonify({"error": "Access denied."}), 403
+    if not p.is_file():
+        return jsonify({"error": "Video not found."}), 404
+
+    uid   = _user_id()
+    vpath = str(p)
+
+    with _fe_vcap_cache_lock:
+        if uid not in _fe_vcap_cache:
+            if len(_fe_vcap_cache) >= _FE_VCAP_MAX:
+                _, evicted = _fe_vcap_cache.popitem(last=False)
+                evicted["vcap"].release()
+            _fe_vcap_cache[uid] = {"vcap": None, "path": None, "pos": -1,
+                                   "lock": _threading.Lock()}
+        _fe_vcap_cache.move_to_end(uid)
+        entry = _fe_vcap_cache[uid]
+
+    with entry["lock"]:
+        if entry["vcap"] is None or entry["path"] != vpath or not entry["vcap"].isOpened():
+            if entry["vcap"] is not None:
+                entry["vcap"].release()
+            entry["vcap"] = cv2.VideoCapture(vpath)
+            entry["path"] = vpath
+            entry["pos"]  = -1
+            if not entry["vcap"].isOpened():
+                return jsonify({"error": "Could not open video."}), 400
+
+        if frame_number != entry["pos"] + 1:
+            entry["vcap"].set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+
+        ret, frame = entry["vcap"].read()
+        entry["pos"] = frame_number if ret else -1
+
+    if not ret:
+        return jsonify({"error": "Could not read frame."}), 404
+
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    if not ok:
+        return jsonify({"error": "Encoding failed."}), 500
+
+    etag = f"ext-{vpath}-{frame_number}"
+    if request.headers.get("If-None-Match") == etag:
+        return Response(status=304)
+
+    resp = Response(buf.tobytes(), mimetype="image/jpeg")
+    resp.headers["ETag"]          = etag
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
+
+
 @app.route("/dlc/project/save-frame", methods=["POST"])
 def dlc_save_frame():
     """
@@ -1610,7 +1827,7 @@ def dlc_save_frame():
     if not ok:
         return jsonify({"error": "Could not encode frame as PNG."}), 500
 
-    video_stem  = Path(secure_filename(video_name)).stem
+    video_stem  = Path(secure_filename(Path(video_name).name)).stem
     labeled_dir = project_path / "labeled-data" / video_stem
     labeled_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1847,9 +2064,34 @@ def dlc_save_labels(video_stem: str):
     try:
         with open(str(csv_path), "w", newline="") as f:
             csv.writer(f).writerows(rows)
-        return jsonify({"status": "saved", "csv_path": str(csv_path), "scorer": scorer})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+    return jsonify({"status": "saved", "csv_path": str(csv_path), "scorer": scorer})
+
+
+@app.route("/dlc/project/labels/convert-to-h5", methods=["POST"])
+def dlc_convert_labels_to_h5():
+    """Dispatch a Celery task to run deeplabcut.convertcsv2h5 on the active project."""
+    project_data, cfg, err = _get_dlc_project_and_config()
+    if err:
+        return err
+
+    config_path  = project_data.get("config_path", "")
+    engine       = project_data.get("engine", "pytorch")
+    project_path = Path(project_data.get("project_path", ""))
+    if not config_path or not Path(config_path).is_file():
+        return jsonify({"error": "config.yaml not found in project."}), 400
+    if not _dlc_project_security_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    scorer = cfg.get("scorer", "User")
+    task   = celery.send_task(
+        "tasks.dlc_convert_labels_to_h5",
+        kwargs={"config_path": config_path, "scorer": scorer},
+        queue=_get_engine_queue(engine),
+    )
+    return jsonify({"task_id": task.id, "operation": "convert_labels_to_h5"}), 202
 
 
 # ── Visualization helpers ─────────────────────────────────────────
@@ -3275,7 +3517,7 @@ def dlc_project_analyze():
         "gputouse":         _int_or_none("gputouse"),
         "save_as_csv":      bool(body.get("save_as_csv", False)),
         "create_labeled":   bool(body.get("create_labeled", False)),
-        "snapshot_index":   _int_or_none("snapshot_index"),
+        "snapshot_path":    (body.get("snapshot_path") or "").strip() or None,
     }
 
     task = celery.send_task(
@@ -3405,7 +3647,7 @@ def dlc_project_machine_label_frames():
         "trainingsetindex":     _int_or_none("trainingsetindex") if _int_or_none("trainingsetindex") is not None else 0,
         "gputouse":             _int_or_none("gputouse"),
         "save_as_csv":          True,
-        "snapshot_index":       _int_or_none("snapshot_index"),
+        "snapshot_path":        (body.get("snapshot_path") or "").strip() or None,
         "likelihood_threshold": _float_or("likelihood_threshold", 0.9),
     }
 
@@ -3438,17 +3680,105 @@ def dlc_project_machine_label_frames_stop():
     return jsonify({"status": "stop_requested", "task_id": task_id}), 200
 
 
+@app.route("/dlc/project/machine-label-raw")
+def dlc_machine_label_raw_exists():
+    """Return whether _machine_predictions_raw.h5 exists for a labeled-data stem."""
+    raw = _redis_client.get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+
+    video_stem = request.args.get("video_stem", "").strip()
+    if not video_stem:
+        return jsonify({"error": "video_stem required."}), 400
+
+    stem_dir   = project_path / "labeled-data" / secure_filename(video_stem)
+    raw_h5     = stem_dir / "_machine_predictions_raw.h5"
+    meta_file  = stem_dir / "_ml_frames.json"
+    return jsonify({
+        "exists":    raw_h5.is_file(),
+        "has_meta":  meta_file.is_file(),
+    })
+
+
+@app.route("/dlc/project/machine-label-reapply", methods=["POST"])
+def dlc_machine_label_reapply():
+    """
+    Dispatch a Celery task to re-apply a new likelihood threshold to the saved
+    raw machine predictions without re-running the model.
+    Body: { video_stem, likelihood_threshold }
+    Returns: { task_id, operation }
+    """
+    raw = _redis_client.get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data, cfg, err = _get_dlc_project_and_config()
+    if err:
+        return err
+
+    project_path = Path(project_data.get("project_path", ""))
+    scorer       = cfg.get("scorer", "User")
+    bodyparts    = list(cfg.get("bodyparts", []))
+
+    body       = request.get_json(force=True) or {}
+    video_stem = (body.get("video_stem") or "").strip()
+    threshold  = float(body.get("likelihood_threshold") or 0.9)
+
+    if not video_stem:
+        return jsonify({"error": "video_stem required."}), 400
+
+    stem_dir = project_path / "labeled-data" / secure_filename(video_stem)
+    raw_h5   = stem_dir / "_machine_predictions_raw.h5"
+    if not raw_h5.is_file():
+        return jsonify({"error": "No saved raw predictions found for this stem."}), 404
+
+    engine = project_data.get("engine", "pytorch")
+    task = celery.send_task(
+        "tasks.dlc_machine_label_reapply",
+        kwargs={
+            "stem_dir":   str(stem_dir),
+            "video_stem": video_stem,
+            "scorer":     scorer,
+            "bodyparts":  bodyparts,
+            "threshold":  threshold,
+        },
+        queue=_get_engine_queue(engine),
+    )
+    return jsonify({"task_id": task.id, "operation": "machine_label_reapply"}), 202
+
+
 @app.route("/dlc/training/jobs")
 def dlc_training_jobs():
-    """Return all training and analyze jobs (running + recent) stored in Redis."""
+    """Return all training and analyze jobs (running + recent) stored in Redis.
+
+    Jobs marked 'running' are cross-checked against Celery. If the Celery task
+    is no longer active (e.g. after a container restart), the Redis record is
+    updated to 'dead' so the UI unblocks automatically.
+    """
+    _LIVE_CELERY_STATES = {"PENDING", "RECEIVED", "STARTED", "RETRY"}
+
+    def _reconcile(redis_key: str, jid: str) -> dict | None:
+        job = _redis_client.hgetall(redis_key)
+        if not job:
+            return None
+        if job.get("status") == "running":
+            celery_state = AsyncResult(jid, app=celery).state
+            if celery_state not in _LIVE_CELERY_STATES:
+                _redis_client.hset(redis_key, "status", "dead")
+                job["status"] = "dead"
+        return job
+
     jobs = []
     for jid in _redis_client.zrevrange("dlc_train_jobs", 0, 49):
-        job = _redis_client.hgetall("dlc_train_job:" + jid)
+        job = _reconcile("dlc_train_job:" + jid, jid)
         if job:
             job.setdefault("operation", "train")
             jobs.append(job)
     for jid in _redis_client.zrevrange("dlc_analyze_jobs", 0, 49):
-        job = _redis_client.hgetall("dlc_analyze_job:" + jid)
+        job = _reconcile("dlc_analyze_job:" + jid, jid)
         if job:
             jobs.append(job)
 
@@ -3741,6 +4071,142 @@ def annotate_save_row():
 
     saved_row = rows[int(frame_number)]
     return jsonify({"row": saved_row, "csv_path": str(csv_path)})
+
+
+# ── Custom Script Runner ──────────────────────────────────────────
+# In-memory job store (per-process; jobs are lost on restart, which is fine)
+_script_jobs: dict = {}
+_script_jobs_lock = _threading.Lock()
+
+_CS_TIMEOUT   = 600   # 10-minute hard limit per script run
+_CS_ALLOWED   = {".py"}
+_CS_INPUT_EXT = {".csv"}
+
+
+def _cs_allowed_root(p: Path) -> bool:
+    """Return True if *p* is inside USER_DATA_DIR or DATA_DIR."""
+    roots = [DATA_DIR.resolve()]
+    if USER_DATA_DIR.is_dir():
+        roots.append(USER_DATA_DIR.resolve())
+    try:
+        return any(p.is_relative_to(r) for r in roots)
+    except Exception:
+        return False
+
+
+@app.route("/custom-script/run", methods=["POST"])
+def custom_script_run():
+    """
+    Launch a user-supplied Python script in an isolated subprocess.
+
+    Expected JSON body:
+      script_path : absolute path to a .py file inside user-data / data dir
+      input_mode  : "file" | "folder"
+      input_path  : absolute path to a single CSV  OR  a folder of CSVs
+    """
+    body        = request.get_json(force=True) or {}
+    script_path = (body.get("script_path") or "").strip()
+    input_mode  = (body.get("input_mode")  or "file").strip()
+    input_path  = (body.get("input_path")  or "").strip()
+
+    # ── Validate script ───────────────────────────────────────────
+    if not script_path:
+        return jsonify({"error": "script_path required"}), 400
+    sp = Path(script_path).resolve()
+    if not sp.is_file():
+        return jsonify({"error": "Script file not found"}), 404
+    if sp.suffix.lower() not in _CS_ALLOWED:
+        return jsonify({"error": "Script must be a .py file"}), 400
+    if not _cs_allowed_root(sp):
+        return jsonify({"error": "Script must be inside user-data or data directory"}), 403
+
+    # ── Collect input CSV paths ───────────────────────────────────
+    if not input_path:
+        return jsonify({"error": "input_path required"}), 400
+    ip = Path(input_path).resolve()
+    if not _cs_allowed_root(ip):
+        return jsonify({"error": "Input path must be inside user-data or data directory"}), 403
+
+    input_csvs: list[str] = []
+    if input_mode == "folder":
+        if not ip.is_dir():
+            return jsonify({"error": "Input folder not found"}), 404
+        input_csvs = sorted(
+            str(f) for f in ip.iterdir()
+            if f.is_file() and f.suffix.lower() in _CS_INPUT_EXT
+        )
+        if not input_csvs:
+            return jsonify({"error": "No CSV files found in the selected folder"}), 400
+    else:
+        if not ip.is_file():
+            return jsonify({"error": "Input CSV file not found"}), 404
+        if ip.suffix.lower() not in _CS_INPUT_EXT:
+            return jsonify({"error": "Input must be a .csv file"}), 400
+        input_csvs = [str(ip)]
+
+    # ── Create timestamped output directory ───────────────────────
+    ts      = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    out_dir = DATA_DIR / "script_outputs" / f"{ts}_{sp.stem[:24]}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    job_id = uuid.uuid4().hex[:12]
+    with _script_jobs_lock:
+        _script_jobs[job_id] = {
+            "status":     "running",
+            "output":     "",
+            "error":      None,
+            "output_dir": str(out_dir),
+        }
+
+    # ── Spawn subprocess ──────────────────────────────────────────
+    wrapper = (
+        "import importlib.util as _ilu\n"
+        f"_spec = _ilu.spec_from_file_location('_user_script', {repr(str(sp))})\n"
+        "_mod  = _ilu.module_from_spec(_spec)\n"
+        "_spec.loader.exec_module(_mod)\n"
+        f"_mod.run({repr(input_csvs)}, {repr(str(out_dir))})\n"
+    )
+
+    def _run_job():
+        try:
+            result = _subprocess.run(
+                [_sys.executable, "-c", wrapper],
+                capture_output=True,
+                text=True,
+                timeout=_CS_TIMEOUT,
+            )
+            combined = result.stdout
+            if result.stderr:
+                combined += "\n[stderr]\n" + result.stderr
+            with _script_jobs_lock:
+                _script_jobs[job_id]["output"] = combined
+                if result.returncode == 0:
+                    _script_jobs[job_id]["status"] = "done"
+                else:
+                    _script_jobs[job_id]["status"] = "error"
+                    _script_jobs[job_id]["error"]  = f"Exit code {result.returncode}"
+        except _subprocess.TimeoutExpired:
+            with _script_jobs_lock:
+                _script_jobs[job_id]["status"] = "error"
+                _script_jobs[job_id]["error"]  = f"Script timed out ({_CS_TIMEOUT}s limit)"
+        except Exception as exc:
+            with _script_jobs_lock:
+                _script_jobs[job_id]["status"] = "error"
+                _script_jobs[job_id]["error"]  = str(exc)
+
+    _threading.Thread(target=_run_job, daemon=True).start()
+
+    return jsonify({"job_id": job_id, "output_dir": str(out_dir)})
+
+
+@app.route("/custom-script/status/<job_id>")
+def custom_script_status(job_id: str):
+    """Poll the status of a running custom script job."""
+    with _script_jobs_lock:
+        job = _script_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify(job)
 
 
 # ── Entry point ───────────────────────────────────────────────────
