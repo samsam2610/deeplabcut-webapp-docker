@@ -989,9 +989,22 @@ def _dlc_machine_label_subprocess(
             _f.write(f"params:            {params}\n\n")
 
             # Read scorer + bodyparts from config
-            import yaml as _yaml
-            with open(config_path) as _cf:
-                cfg = _yaml.safe_load(_cf) or {}
+            import yaml as _yaml, re as _re
+            _config_text = _Path(config_path).read_text()
+            try:
+                cfg = _yaml.safe_load(_config_text) or {}
+            except Exception:
+                # Regex fallback for broken YAML (e.g. video path with trailing space)
+                cfg = {}
+                _m = _re.search(r'^scorer\s*:\s*(.+)$', _config_text, _re.MULTILINE)
+                if _m:
+                    cfg["scorer"] = _m.group(1).strip().strip("\"'")
+                _m = _re.search(r'^bodyparts\s*:\s*\n((?:[ \t]*-[ \t]*.+\n?)+)', _config_text, _re.MULTILINE)
+                if _m:
+                    cfg["bodyparts"] = [
+                        item.strip().strip("\"'")
+                        for item in _re.findall(r'^[ \t]*-[ \t]*(.+)$', _m.group(1), _re.MULTILINE)
+                    ]
             scorer    = cfg.get("scorer", "User")
             bodyparts = list(cfg.get("bodyparts", []))
 
