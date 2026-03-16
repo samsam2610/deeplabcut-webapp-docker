@@ -45,12 +45,21 @@ def _natural_keys(text: str) -> list:
 
 
 def _parse_dlc_yaml(config_path: Path) -> dict:
-    """Parse a DLC config.yaml and return the relevant fields."""
+    """Parse a DLC config.yaml and return the relevant fields.
+
+    Falls back to a regex parser if yaml.safe_load fails (e.g. a video_sets
+    entry whose file path contains a space wraps onto the next line, creating
+    an invalid YAML multi-line key).  The regex is sufficient for the fields
+    actually needed by the webapp (bodyparts, scorer).
+    """
     _yaml = _ctx.yaml_lib()
     text = config_path.read_text()
     if _yaml is not None:
-        return _yaml.safe_load(text) or {}
-    # Fallback: naive regex parser for bodyparts + scorer
+        try:
+            return _yaml.safe_load(text) or {}
+        except Exception:
+            pass  # fall through to regex parser below
+    # Regex fallback — extracts bodyparts + scorer without a full YAML parse
     result = {}
     m = re.search(r'^scorer\s*:\s*(.+)$', text, re.MULTILINE)
     if m:
