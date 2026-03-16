@@ -185,6 +185,7 @@
         sourceBtnUserData.disabled = false;
         sourceBtnUserData.title    = `User data volume: ${cfgData.user_data_dir}`;
       }
+      if (cfgData.data_dir) _dataDir = cfgData.data_dir;
     } catch (err) {
       console.error("Config pre-fetch error:", err);
     }
@@ -969,6 +970,7 @@
 
   let _currentRoot = "";   // "" = DATA_DIR; non-empty = current browse path
   let _userDataDir = null; // base mount path, populated from /config
+  let _dataDir     = null; // server DATA_DIR, populated from /config
 
   async function loadProjects(root) {
     try {
@@ -1561,11 +1563,15 @@
     const feCloseBtn      = document.getElementById("btn-close-frame-extractor");
     const feBtnProject    = document.getElementById("fe-btn-from-project");
     const feBtnUpload     = document.getElementById("fe-btn-upload");
+    const feBtnServer     = document.getElementById("fe-btn-server");
     const feProjectVids   = document.getElementById("fe-project-videos");
     const feVideoList     = document.getElementById("fe-video-list");
     const feUploadSec     = document.getElementById("fe-upload-section");
     const feFileInput     = document.getElementById("fe-video-file-input");
     const feUploadStatus  = document.getElementById("fe-upload-status");
+    const feServerSec     = document.getElementById("fe-server-section");
+    const feServerBrowser = document.getElementById("fe-server-browser");
+    const feServerStatus  = document.getElementById("fe-server-status");
     const fePlayerSec     = document.getElementById("fe-player-section");
     const feCanvas        = document.getElementById("fe-canvas");
     const feBtnPlay       = document.getElementById("fe-btn-play");
@@ -1631,7 +1637,8 @@
     let _feNoteSegIdx      = 0;
     let _feReRenderStatus = null;
     let _feReRenderNote   = null;
-    let _feCurrentVideo = null;
+    let _feCurrentVideo    = null;
+    let _feCurrentVideoExt = false;  // true when video is an external abs path
     let _feExtracted    = 0;
     let _feSeekDragging = false;
     let _feCurrentFrame = 0;
@@ -1662,6 +1669,8 @@
     });
 
     function _feFrameUrl(n) {
+      if (_feCurrentVideoExt)
+        return `/dlc/project/video-frame-ext/${n}?path=${encodeURIComponent(_feCurrentVideo)}`;
       return `/dlc/project/video-frame/${encodeURIComponent(_feCurrentVideo)}/${n}`;
     }
 
@@ -1684,7 +1693,8 @@
     });
 
     function _feReset() {
-      _feCurrentVideo = null;
+      _feCurrentVideo    = null;
+      _feCurrentVideoExt = false;
       _feCurrentFrame = 0;
       _feFrameBusy    = false;
       _feCsvRows      = [];
@@ -1712,15 +1722,26 @@
     }
 
     // ── Source toggle ─────────────────────────────────────────────
+    function _feShowSource(active) {
+      [feBtnProject, feBtnUpload, feBtnServer].forEach(b => b.classList.remove("active"));
+      [feProjectVids, feUploadSec, feServerSec].forEach(s => s.classList.add("hidden"));
+      active.btn.classList.add("active");
+      active.sec.classList.remove("hidden");
+    }
+
     feBtnProject.addEventListener("click", () => {
-      feBtnProject.classList.add("active"); feBtnUpload.classList.remove("active");
-      feProjectVids.classList.remove("hidden"); feUploadSec.classList.add("hidden");
+      _feShowSource({ btn: feBtnProject, sec: feProjectVids });
       _feLoadProjectVideos();
     });
 
     feBtnUpload.addEventListener("click", () => {
-      feBtnUpload.classList.add("active"); feBtnProject.classList.remove("active");
-      feUploadSec.classList.remove("hidden"); feProjectVids.classList.add("hidden");
+      _feShowSource({ btn: feBtnUpload, sec: feUploadSec });
+    });
+
+    feBtnServer.addEventListener("click", () => {
+      _feShowSource({ btn: feBtnServer, sec: feServerSec });
+      const startPath = _userDataDir || "/";
+      _feBrowseServerDir(startPath);
     });
 
     // ── List project videos ───────────────────────────────────────
@@ -1770,6 +1791,104 @@
       feVideoList.querySelectorAll(".fe-video-item").forEach(el => el.classList.remove("active"));
       itemEl.classList.add("active");
       await _feSelectVideo(filename);
+    }
+
+    // ── External (server browse) video ────────────────────────────
+    async function _feSelectExtVideo(absPath) {
+      _feReset();
+      _feCurrentVideo    = absPath;
+      _feCurrentVideoExt = true;
+      feExtractCount.textContent  = "0 frames saved";
+      feExtractStatus.textContent = "";
+      feExtractStatus.className   = "fe-extract-status";
+      try {
+        const res  = await fetch(`/dlc/project/video-info-ext?path=${encodeURIComponent(absPath)}`);
+        const info = await res.json();
+        if (info.error) throw new Error(info.error);
+        _feFps        = info.fps || 30;
+        _feFrameCount = info.frame_count || 0;
+      } catch (_) { _feFps = 30; _feFrameCount = 0; }
+      fePlayerSec.classList.remove("hidden");
+      _feLoadCsvData(absPath);
+      _feLoadFrame(0);
+    }
+
+    // ── Server directory browser ──────────────────────────────────
+    const _feVideoExts = new Set([".mp4", ".avi", ".mov", ".mkv", ".mpg", ".mpeg"]);
+    function _feIsVideo(name) { return _feVideoExts.has(name.slice(name.lastIndexOf(".")).toLowerCase()); }
+
+    async function _feBrowseServerDir(dirPath) {
+      feServerBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
+      try {
+        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
+        const data = await res.json();
+        if (data.error) {
+          feServerBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">${data.error}</span>`;
+          return;
+        }
+        feServerBrowser.innerHTML = "";
+
+        // Header row: current path + Up button
+        const header = document.createElement("div");
+        header.style.cssText = "display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem;flex-wrap:wrap";
+        const pathLabel = document.createElement("span");
+        pathLabel.style.cssText = "font-size:.7rem;color:var(--text-dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono)";
+        pathLabel.textContent = data.path;
+        header.appendChild(pathLabel);
+        if (data.parent) {
+          const upBtn = document.createElement("button");
+          upBtn.className = "btn-sm";
+          upBtn.style.cssText = "padding:.12rem .45rem;font-size:.7rem;flex-shrink:0";
+          upBtn.textContent = "↑ Up";
+          upBtn.addEventListener("click", e => { e.stopPropagation(); _feBrowseServerDir(data.parent); });
+          header.appendChild(upBtn);
+        }
+        feServerBrowser.appendChild(header);
+
+        const visible = data.entries.filter(e => e.type === "dir" || (e.type === "file" && _feIsVideo(e.name)));
+        if (!visible.length) {
+          const empty = document.createElement("span");
+          empty.style.cssText = "font-size:.75rem;color:var(--text-dim);padding:.25rem;display:block";
+          empty.textContent = "(no video files here)";
+          feServerBrowser.appendChild(empty);
+        } else {
+          visible.forEach(e => {
+            const row = document.createElement("div");
+            row.className = "fe-video-item";
+            const fullPath = data.path.replace(/\/+$/, "") + "/" + e.name;
+            if (e.type === "dir") {
+              row.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.name}/</span>`;
+              row.style.cursor = "pointer";
+              row.addEventListener("click", () => _feBrowseServerDir(fullPath));
+            } else {
+              row.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><rect x="2" y="2" width="20" height="20" rx="3"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">${e.name}</span>`;
+              row.style.cursor = "pointer";
+              row.addEventListener("click", async () => {
+                if (!confirm(`Add this video to the project?\n\n${fullPath}\n\nThe path will be registered in config.yaml (no copy is made).`)) return;
+                feServerBrowser.querySelectorAll(".fe-video-item").forEach(r => r.classList.remove("active"));
+                row.classList.add("active");
+                feServerStatus.textContent = "Registering video with project…";
+                try {
+                  const res2 = await fetch("/dlc/project/add-video", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ video_path: fullPath }),
+                  });
+                  const data2 = await res2.json();
+                  if (data2.error) { feServerStatus.textContent = `Error: ${data2.error}`; return; }
+                  feServerStatus.textContent = `Added: ${data2.name}`;
+                  await _feSelectExtVideo(data2.abs_path);
+                } catch (err) {
+                  feServerStatus.textContent = `Error: ${err.message}`;
+                }
+              });
+            }
+            feServerBrowser.appendChild(row);
+          });
+        }
+      } catch (err) {
+        feServerBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">Error: ${err.message}</span>`;
+      }
     }
 
     // ── File upload ───────────────────────────────────────────────
@@ -2064,7 +2183,10 @@
       feStatusBarWrap.classList.add("hidden");
       feNoteBarWrap.classList.add("hidden");
       try {
-        const res  = await fetch(`/dlc/project/video-csv/${encodeURIComponent(filename)}`);
+        const url = _feCurrentVideoExt
+          ? `/dlc/project/video-csv-ext?path=${encodeURIComponent(filename)}`
+          : `/dlc/project/video-csv/${encodeURIComponent(filename)}`;
+        const res  = await fetch(url);
         const data = await res.json();
         _feCsvRows = data.rows || [];
         if (!_feCsvRows.length) return;
@@ -2254,6 +2376,7 @@
     const flBodypartList = document.getElementById("fl-bodypart-list");
     const flBpHint       = document.getElementById("fl-bp-hint");
     const flBtnSave        = document.getElementById("fl-btn-save");
+    const flBtnSaveH5      = document.getElementById("fl-btn-save-h5");
     const flSaveStatus     = document.getElementById("fl-save-status");
     const flLabelCount     = document.getElementById("fl-label-count");
     const flScorerFilename = document.getElementById("fl-scorer-filename");
@@ -2272,6 +2395,9 @@
     const flMlLikelihood   = document.getElementById("fl-ml-likelihood");
     const flMlStopBtn      = document.getElementById("fl-ml-stop-btn");
     const flMlStatus       = document.getElementById("fl-ml-status");
+    const flMlUpdateWrap   = document.getElementById("fl-ml-update-wrap");
+    const flMlUpdateBtn    = document.getElementById("fl-ml-update-btn");
+    const flMlUpdateStatus = document.getElementById("fl-ml-update-status");
     const flMlProgress     = document.getElementById("fl-ml-progress");
     const flMlTaskId       = document.getElementById("fl-ml-task-id");
     const flMlProgressBar  = document.getElementById("fl-ml-progress-bar");
@@ -2287,6 +2413,7 @@
     let _flFrames      = [];      // array of filenames
     let _flFrameIdx    = 0;
     let _flLabels      = {};      // {frame_name: {bp: [x, y] | null}}
+    let _flDirty       = false;  // unsaved changes since last save/load
     let _flSelectedBp  = null;
     let _flImg         = new Image();
     let _flImgLoaded   = false;
@@ -2329,7 +2456,7 @@
         flMlSnapshot.appendChild(latestOpt);
         (data.snapshots || []).forEach(s => {
           const opt = document.createElement("option");
-          opt.value = String(s.index);
+          opt.value = s.rel_path;
           opt.textContent = `${s.label}${s.iteration != null ? "  ·  iter " + s.iteration.toLocaleString() : ""}`;
           flMlSnapshot.appendChild(opt);
         });
@@ -2348,6 +2475,7 @@
       flMlStopBtn.classList.toggle("hidden",  !running);
       flMlRunBtn.disabled    = running;
       flMlRunAllBtn.disabled = running;
+      if (running) flMlUpdateWrap.classList.add("hidden");
     }
 
     function _flMlQueueLabel() {
@@ -2430,7 +2558,7 @@
         trainingsetindex:     parseInt(document.getElementById("fl-ml-tsidx").value) ?? 0,
         gputouse:             document.getElementById("fl-ml-gpu").value !== ""
                                 ? parseInt(document.getElementById("fl-ml-gpu").value) : null,
-        snapshot_index:       snapVal !== "-1" ? parseInt(snapVal) : null,
+        snapshot_path:        snapVal !== "-1" ? snapVal : null,
         likelihood_threshold: parseFloat(flMlLikelihood.value) || 0.9,
       };
     }
@@ -2615,6 +2743,7 @@
       _flVideoStem = stem;
       _flFrames    = frames;
       _flFrameIdx  = 0;
+      _flDirty     = false;
 
       // Fetch existing labels
       try {
@@ -2627,10 +2756,73 @@
         }
       } catch (_) { _flLabels = {}; }
 
+      // Show "Update Threshold" button only when raw predictions exist
+      flMlUpdateWrap.classList.add("hidden");
+      flMlUpdateStatus.textContent = "";
+      try {
+        const r = await fetch(`/dlc/project/machine-label-raw?video_stem=${encodeURIComponent(stem)}`);
+        const d = await r.json();
+        if (d.exists) flMlUpdateWrap.classList.remove("hidden");
+      } catch (_) {}
+
       flPlayerSec.classList.remove("hidden");
       _flUpdateLabelCount();
       _flShowFrame(0);
     }
+
+    // ── Update Threshold ─────────────────────────────────────────
+    flMlUpdateBtn.addEventListener("click", async () => {
+      if (!_flVideoStem) return;
+      flMlUpdateBtn.disabled       = true;
+      flMlUpdateStatus.textContent = "Dispatching…";
+      flMlUpdateStatus.className   = "fe-extract-status";
+      try {
+        const res  = await fetch("/dlc/project/machine-label-reapply", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            video_stem:           _flVideoStem,
+            likelihood_threshold: parseFloat(flMlLikelihood.value) || 0.9,
+          }),
+        });
+        const dispatched = await res.json();
+        if (!res.ok || dispatched.error) {
+          flMlUpdateStatus.textContent = `Error: ${dispatched.error || "unknown"}`;
+          flMlUpdateStatus.className   = "fe-extract-status err";
+          flMlUpdateBtn.disabled = false;
+          return;
+        }
+
+        // Poll until the worker finishes
+        const taskId = dispatched.task_id;
+        flMlUpdateStatus.textContent = "Applying…";
+        let data = null;
+        while (true) {
+          await new Promise(r => setTimeout(r, 1000));
+          const sr = await fetch(`/status/${taskId}`);
+          const s  = await sr.json();
+          if (s.state === "SUCCESS") {
+            data = s.result;
+            break;
+          } else if (s.state === "FAILURE") {
+            throw new Error(s.error || "Worker task failed");
+          }
+          // PENDING / PROGRESS — keep polling
+        }
+
+        flMlUpdateStatus.textContent =
+          `Done — ${data.n_machine} machine label(s), ${data.n_human} human preserved`;
+        flMlUpdateStatus.className = "fe-extract-status ok";
+        // Reload labels so the labeler reflects the new threshold immediately
+        const found = _flStemData.find(s => s.video_stem === _flVideoStem);
+        if (found) await _flSelectStem(found.video_stem, found.frames);
+      } catch (err) {
+        flMlUpdateStatus.textContent = `Error: ${err.message}`;
+        flMlUpdateStatus.className   = "fe-extract-status err";
+      } finally {
+        flMlUpdateBtn.disabled = false;
+      }
+    });
 
     // ── Render body-part chip list ───────────────────────────────
     function _flRenderBodypartList() {
@@ -2670,9 +2862,21 @@
       });
     }
 
+    // ── Silent auto-save (fire-and-forget) ──────────────────────
+    function _flAutoSave() {
+      if (!_flVideoStem) return;
+      fetch(`/dlc/project/labels/${encodeURIComponent(_flVideoStem)}`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ labels: _flLabels }),
+      }).catch(() => {});  // silent — user can always use Save button
+    }
+
     // ── Frame display ────────────────────────────────────────────
     function _flShowFrame(idx) {
       if (!_flFrames.length) return;
+      // Auto-save unsaved changes before switching frames
+      if (_flDirty) { _flDirty = false; _flAutoSave(); }
       idx = Math.max(0, Math.min(idx, _flFrames.length - 1));
       _flFrameIdx = idx;
       const fname = _flFrames[idx];
@@ -2825,6 +3029,7 @@
       const scaleY = flCanvas.height / _flImg.naturalHeight;
       if (!_flLabels[fname]) _flLabels[fname] = {};
       _flLabels[fname][_flSelectedBp] = [cx / scaleX, cy / scaleY];
+      _flDirty = true;
       _flDraw();
       _flUpdateBpChipStatus();
       _flUpdateLabelCount();
@@ -2865,6 +3070,7 @@
       _flLabels[fname][bp] = null;
       // Also clear hidden state when marker is deleted
       if (_flHidden[fname]) delete _flHidden[fname][bp];
+      _flDirty = true;
       _flDraw();
       _flUpdateBpChipStatus();
       _flUpdateLabelCount();
@@ -2886,6 +3092,7 @@
       if (!_flLabels[fname]) _flLabels[fname] = {};
       _flBodyparts.forEach(bp => { _flLabels[fname][bp] = null; });
       delete _flHidden[fname];
+      _flDirty = true;
       _flDraw();
       _flUpdateBpChipStatus();
       _flUpdateLabelCount();
@@ -2957,6 +3164,7 @@
           x = Math.max(0, Math.min(x, _flImg.naturalWidth  - 1));
           y = Math.max(0, Math.min(y, _flImg.naturalHeight - 1));
           _flLabels[fname][_flSelectedBp] = [x, y];
+          _flDirty = true;
           _flDraw();
           return;
         }
@@ -3012,7 +3220,9 @@
         });
         const data = await res.json();
         if (res.ok) {
-          flSaveStatus.textContent = "Saved ✓";
+          _flDirty = false;
+          const h5note = data.h5_warning ? ` (H5 warning: ${data.h5_warning})` : (data.h5_path ? " + H5" : "");
+          flSaveStatus.textContent = `Saved ✓${h5note}`;
           flSaveStatus.className   = "fl-save-status ok";
         } else {
           flSaveStatus.textContent = data.error || "Error saving";
@@ -3027,6 +3237,83 @@
         flSaveStatus.textContent = "";
         flSaveStatus.className   = "fl-save-status";
       }, 4000);
+    });
+
+    // ── Save all to H5 ───────────────────────────────────────────
+    flBtnSaveH5.addEventListener("click", async () => {
+      if (!_flVideoStem) return;
+
+      // First flush current frame's CSV
+      flBtnSaveH5.disabled     = true;
+      flSaveStatus.textContent = "Saving CSV…";
+      flSaveStatus.className   = "fl-save-status";
+      try {
+        const csvRes = await fetch(`/dlc/project/labels/${encodeURIComponent(_flVideoStem)}`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ labels: _flLabels }),
+        });
+        if (!csvRes.ok) {
+          const d = await csvRes.json();
+          flSaveStatus.textContent = d.error || "CSV save failed";
+          flSaveStatus.className   = "fl-save-status err";
+          flBtnSaveH5.disabled = false;
+          return;
+        }
+        _flDirty = false;
+      } catch (err) {
+        flSaveStatus.textContent = `Network error: ${err.message}`;
+        flSaveStatus.className   = "fl-save-status err";
+        flBtnSaveH5.disabled = false;
+        return;
+      }
+
+      // Dispatch Celery task for the full convertcsv2h5
+      flSaveStatus.textContent = "Converting to H5…";
+      try {
+        const res  = await fetch("/dlc/project/labels/convert-to-h5", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) {
+          flSaveStatus.textContent = data.error || "Failed to dispatch H5 conversion";
+          flSaveStatus.className   = "fl-save-status err";
+          flBtnSaveH5.disabled = false;
+          return;
+        }
+
+        // Poll until done
+        const taskId = data.task_id;
+        const poll = setInterval(async () => {
+          try {
+            const tr   = await fetch(`/status/${taskId}`);
+            const td   = await tr.json();
+            if (td.state === "SUCCESS") {
+              clearInterval(poll);
+              const r   = td.result || {};
+              const cnt = (r.converted || []).length;
+              const sk  = (r.skipped  || []).length;
+              const note = sk > 0 ? `, ${sk} skipped` : "";
+              flSaveStatus.textContent = `Saved ✓ CSV + H5 (${cnt} folder${cnt !== 1 ? "s" : ""}${note})`;
+              flSaveStatus.className   = "fl-save-status ok";
+              flBtnSaveH5.disabled = false;
+              setTimeout(() => { flSaveStatus.textContent = ""; flSaveStatus.className = "fl-save-status"; }, 6000);
+            } else if (td.state === "FAILURE" || td.state === "REVOKED") {
+              clearInterval(poll);
+              const errFull = td.error || td.state || "";
+              // Show the last non-empty line (most specific part of the traceback)
+              const lines   = errFull.split("\n").map(l => l.trim()).filter(Boolean);
+              const errLine = lines[lines.length - 1] || errFull;
+              flSaveStatus.textContent = "H5 failed: " + errLine;
+              flSaveStatus.title       = errFull;   // full traceback on hover
+              flSaveStatus.className   = "fl-save-status err";
+              console.error("H5 conversion traceback:\n", errFull);
+              flBtnSaveH5.disabled = false;
+            }
+          } catch (_) {}
+        }, 1500);
+      } catch (err) {
+        flSaveStatus.textContent = `Network error: ${err.message}`;
+        flSaveStatus.className   = "fl-save-status err";
+        flBtnSaveH5.disabled = false;
+      }
     });
 
     // ── Redraw on resize ─────────────────────────────────────────
@@ -3676,7 +3963,7 @@
         // Individual snapshots (ascending by iteration)
         (data.snapshots || []).forEach(s => {
           const opt = document.createElement("option");
-          opt.value = String(s.index);
+          opt.value = s.rel_path;
           const iterStr = s.iteration != null
             ? `  ·  iter ${s.iteration.toLocaleString()}`
             : "";
@@ -3929,7 +4216,6 @@
       avRunStatus.className   = "fe-extract-status";
 
       const snapshotVal = avSnapshot.value;
-      const snapshotIndex = snapshotVal === "-1" ? null : snapshotVal;
 
       const body = {
         target_path:      target,
@@ -3940,7 +4226,7 @@
                             : null,
         save_as_csv:      document.getElementById("av-save-csv").checked,
         create_labeled:   document.getElementById("av-create-labeled").checked,
-        snapshot_index:   snapshotIndex !== null ? parseInt(snapshotIndex) : null,
+        snapshot_path:    snapshotVal !== "-1" ? snapshotVal : null,
       };
 
       try {
@@ -4007,9 +4293,17 @@
     const vaTimeDisplay  = document.getElementById("va-time-display");
     const vaSeek         = document.getElementById("va-seek");
     const vaStatus       = document.getElementById("va-status");
+    // Browse-tab elements
+    const vaTabProject      = document.getElementById("va-tab-project");
+    const vaTabBrowse       = document.getElementById("va-tab-browse");
+    const vaTabProjectPanel = document.getElementById("va-tab-project-panel");
+    const vaTabBrowsePanel  = document.getElementById("va-tab-browse-panel");
+    const vaBrowseBreadcrumb = document.getElementById("va-browse-breadcrumb");
+    const vaBrowseUp         = document.getElementById("va-browse-up");
+    const vaBrowseList       = document.getElementById("va-browse-list");
 
     // State
-    let _vaMode         = null;   // "video" | "frames"
+    let _vaMode         = null;   // "video" | "frames" | "browse-video"
     let _vaCurrentFrame = 0;
     let _vaFrameCount   = 0;
     let _vaFps          = 30;
@@ -4017,11 +4311,15 @@
     let _vaPlayTimer    = null;
     let _vaSeekDragging = false;
     let _vaZoom         = 100;
-    // video mode
+    // video mode (DLC project labeled videos)
     let _vaVideoName  = null;
     // frames mode
     let _vaFrameStem  = null;
     let _vaFrameFiles = [];   // sorted list of labeled frame filenames
+    // browse-video mode (arbitrary path via /annotate endpoints)
+    let _vaBrowseVideoPath = null;
+    // browse tab state
+    let _vaBrowsePath = null;
 
     // ── Viewer sizing (same break-out-of-card approach as frame labeler) ──
     function _vaFitViewer() {
@@ -4049,14 +4347,15 @@
 
     function _vaReset() {
       if (_vaPlayTimer) { clearInterval(_vaPlayTimer); _vaPlayTimer = null; }
-      _vaMode         = null;
-      _vaCurrentFrame = 0;
-      _vaFrameCount   = 0;
-      _vaFps          = 30;
-      _vaFrameBusy    = false;
-      _vaVideoName    = null;
-      _vaFrameStem    = null;
-      _vaFrameFiles   = [];
+      _vaMode            = null;
+      _vaCurrentFrame    = 0;
+      _vaFrameCount      = 0;
+      _vaFps             = 30;
+      _vaFrameBusy       = false;
+      _vaVideoName       = null;
+      _vaFrameStem       = null;
+      _vaFrameFiles      = [];
+      _vaBrowseVideoPath = null;
       vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
       vaFrameImg.onload  = null;
       vaFrameImg.onerror = null;
@@ -4071,6 +4370,9 @@
     }
 
     function _vaFrameUrl(n) {
+      if (_vaMode === "browse-video") {
+        return `/annotate/video-frame/${n}?path=${encodeURIComponent(_vaBrowseVideoPath)}`;
+      }
       if (_vaMode === "video") {
         return `/dlc/project/video-frame/${encodeURIComponent(_vaVideoName)}/${n}`;
       }
@@ -4080,7 +4382,7 @@
 
     function _vaUpdateDisplay() {
       vaFrameCounter.textContent = `Frame ${_vaCurrentFrame} / ${_vaFrameCount}`;
-      if (_vaMode === "video") {
+      if (_vaMode === "video" || _vaMode === "browse-video") {
         vaTimeDisplay.textContent = `${(_vaCurrentFrame / _vaFps).toFixed(3)} s`;
       } else {
         vaTimeDisplay.textContent = _vaFrameFiles[_vaCurrentFrame] || "";
@@ -4147,6 +4449,91 @@
       vaPlayerSec.classList.remove("hidden");
       _vaLoadFrame(0);
     }
+
+    async function _vaOpenBrowseVideo(absPath, name) {
+      _vaReset();
+      _vaMode            = "browse-video";
+      _vaBrowseVideoPath = absPath;
+      vaSelectedName.textContent = name;
+      try {
+        const res  = await fetch(`/annotate/video-info?path=${encodeURIComponent(absPath)}`);
+        const info = await res.json();
+        _vaFps        = info.fps || 30;
+        _vaFrameCount = info.frame_count || 0;
+      } catch (_) { _vaFps = 30; _vaFrameCount = 0; }
+      vaPlayerSec.classList.remove("hidden");
+      _vaLoadFrame(0);
+    }
+
+    // ── Browse-tab folder navigator ────────────────────────────
+    const _VA_VIDEO_EXTS = new Set([".mp4", ".avi", ".mov", ".mkv", ".mpg", ".mpeg"]);
+
+    async function _vaRefreshBrowse(path) {
+      _vaBrowsePath = path;
+      vaBrowseBreadcrumb.textContent = path;
+      vaBrowseList.innerHTML = '<p class="explorer-empty">Loading…</p>';
+      try {
+        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(path)}`);
+        const data = await res.json();
+        if (data.error) { vaBrowseList.innerHTML = `<p class="explorer-empty">${data.error}</p>`; return; }
+
+        const entries = data.entries || [];
+        const dirs    = entries.filter(e => e.type === "dir");
+        const videos  = entries.filter(e => e.type === "file" && _VA_VIDEO_EXTS.has(e.name.slice(e.name.lastIndexOf(".")).toLowerCase()));
+
+        if (!dirs.length && !videos.length) {
+          vaBrowseList.innerHTML = '<p class="explorer-empty">No folders or videos found here.</p>';
+          return;
+        }
+        vaBrowseList.innerHTML = "";
+
+        dirs.forEach(d => {
+          const row = document.createElement("div");
+          row.className = "fe-video-item";
+          row.style.cursor = "pointer";
+          row.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.name}/</span>`;
+          row.addEventListener("click", () => _vaRefreshBrowse(path + "/" + d.name));
+          vaBrowseList.appendChild(row);
+        });
+
+        videos.forEach(v => {
+          const fullPath = path + "/" + v.name;
+          const row = document.createElement("div");
+          row.className = "fe-video-item";
+          row.style.cursor = "pointer";
+          row.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><rect x="2" y="2" width="20" height="20" rx="3"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">${v.name}</span>`;
+          row.addEventListener("click", () => _vaOpenBrowseVideo(fullPath, v.name));
+          vaBrowseList.appendChild(row);
+        });
+      } catch (err) {
+        vaBrowseList.innerHTML = `<p class="explorer-empty">Error: ${err.message}</p>`;
+      }
+    }
+
+    // ── Tab switching ──────────────────────────────────────────
+    vaTabProject?.addEventListener("click", () => {
+      vaTabProject.classList.add("active");
+      vaTabBrowse.classList.remove("active");
+      vaTabProjectPanel.classList.remove("hidden");
+      vaTabBrowsePanel.classList.add("hidden");
+    });
+    vaTabBrowse?.addEventListener("click", () => {
+      vaTabBrowse.classList.add("active");
+      vaTabProject.classList.remove("active");
+      vaTabBrowsePanel.classList.remove("hidden");
+      vaTabProjectPanel.classList.add("hidden");
+      if (!_vaBrowsePath) {
+        // Start at user-data dir or /
+        const startPath = _userDataDir || _dataDir || "/";
+        _vaRefreshBrowse(startPath);
+      }
+    });
+
+    vaBrowseUp?.addEventListener("click", () => {
+      if (!_vaBrowsePath) return;
+      const parent = _vaBrowsePath.split("/").slice(0, -1).join("/") || "/";
+      if (parent !== _vaBrowsePath) _vaRefreshBrowse(parent);
+    });
 
     // ── Load content list ─────────────────────────────────────
     async function _vaLoadContent() {
@@ -5010,6 +5397,331 @@
         gmBadge.style.borderColor = busy ? "var(--accent)" : "";
       } catch (_) {}
     }, 6000);
+  })();
+
+  // ── Custom Script Runner ─────────────────────────────────────
+  (function () {
+    const csCard           = document.getElementById("custom-script-card");
+    const openBtn          = document.getElementById("btn-open-custom-script");
+    const closeBtn         = document.getElementById("btn-close-custom-script");
+
+    // Script picker
+    const csScriptBrowseBtn    = document.getElementById("cs-script-browse-btn");
+    const csScriptPathDisplay  = document.getElementById("cs-script-path-display");
+    const csScriptNav          = document.getElementById("cs-script-nav");
+    const csScriptBreadcrumb   = document.getElementById("cs-script-breadcrumb");
+    const csScriptEntries      = document.getElementById("cs-script-entries");
+
+    // Input picker
+    const csInputModeFile      = document.getElementById("cs-input-mode-file");
+    const csInputModeFolder    = document.getElementById("cs-input-mode-folder");
+    const csInputBrowseBtn     = document.getElementById("cs-input-browse-btn");
+    const csInputPathDisplay   = document.getElementById("cs-input-path-display");
+    const csInputNav           = document.getElementById("cs-input-nav");
+    const csInputBreadcrumb    = document.getElementById("cs-input-breadcrumb");
+    const csInputEntries       = document.getElementById("cs-input-entries");
+    const csInputNavHint       = document.getElementById("cs-input-nav-hint");
+
+    // Run / output
+    const csRunBtn         = document.getElementById("cs-run-btn");
+    const csAbortBtn       = document.getElementById("cs-abort-btn");
+    const csRunStatus      = document.getElementById("cs-run-status");
+    const csOutputSection  = document.getElementById("cs-output-section");
+    const csOutputDir      = document.getElementById("cs-output-dir");
+    const csLogOutput      = document.getElementById("cs-log-output");
+
+    let _csSelectedScript = null;
+    let _csSelectedInput  = null;
+    let _csInputMode      = "file";   // "file" | "folder"
+    let _csScriptNavPath  = null;
+    let _csInputNavPath   = null;
+    let _csPollTimer      = null;
+    let _csJobId          = null;
+
+    // ── Open / close ─────────────────────────────────────────
+    openBtn?.addEventListener("click", () => {
+      csCard.classList.remove("hidden");
+      csCard.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+
+    closeBtn?.addEventListener("click", () => {
+      csCard.classList.add("hidden");
+    });
+
+    // ── Input-mode toggle ─────────────────────────────────────
+    function _setInputMode(mode) {
+      _csInputMode = mode;
+      csInputModeFile.classList.toggle("active", mode === "file");
+      csInputModeFolder.classList.toggle("active", mode === "folder");
+      const hint = mode === "folder"
+        ? "Click folders to navigate &nbsp;·&nbsp; <strong>Double-click</strong> a folder to select all its CSVs"
+        : "Click folders to navigate &nbsp;·&nbsp; <strong>Double-click</strong> a <code style=\"font-family:var(--mono);font-size:.73rem\">.csv</code> file to select it";
+      csInputNavHint.innerHTML = hint;
+      _csSelectedInput = null;
+      csInputPathDisplay.textContent = "No input selected";
+      if (!csInputNav.classList.contains("hidden") && _csInputNavPath) {
+        _refreshInputNav(_csInputNavPath);
+      }
+    }
+    csInputModeFile?.addEventListener("click",   () => _setInputMode("file"));
+    csInputModeFolder?.addEventListener("click", () => _setInputMode("folder"));
+
+    // ── Generic filesystem navigator ──────────────────────────
+    function _csDefaultPath() {
+      return _userDataDir || _dataDir || "/";
+    }
+
+    async function _refreshCsNav(path, breadcrumbEl, entriesEl, onFileDblClick, onFolderDblClick, showFiles, fileExt) {
+      // Breadcrumb
+      const base     = _csDefaultPath();
+      const baseName = base.split("/").filter(Boolean).pop() || "/";
+      const rel      = path.startsWith(base)
+        ? path.substring(base.length).split("/").filter(Boolean)
+        : path.split("/").filter(Boolean);
+      let crumbHTML  = `<button class="userdata-bc-seg" data-path="${base}">${baseName}</button>`;
+      let cumPath    = base;
+      rel.forEach((part, i) => {
+        cumPath += "/" + part;
+        const isLast = (i === rel.length - 1);
+        crumbHTML += `<span class="userdata-bc-sep">›</span>`;
+        crumbHTML += `<button class="userdata-bc-seg${isLast ? " active" : ""}" data-path="${cumPath}">${part}</button>`;
+      });
+      breadcrumbEl.innerHTML = crumbHTML;
+      breadcrumbEl.querySelectorAll(".userdata-bc-seg").forEach(seg =>
+        seg.addEventListener("click", () => {
+          if (breadcrumbEl === csScriptBreadcrumb) {
+            _csScriptNavPath = seg.dataset.path;
+            _refreshScriptNav(seg.dataset.path);
+          } else {
+            _csInputNavPath = seg.dataset.path;
+            _refreshInputNav(seg.dataset.path);
+          }
+        })
+      );
+
+      entriesEl.innerHTML = '<span class="userdata-no-folders">Loading…</span>';
+
+      try {
+        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(path)}`);
+        const data = await res.json();
+        entriesEl.innerHTML = "";
+
+        // ".." chip when not at the default base
+        if (path !== base && path !== "/") {
+          const upBtn = document.createElement("button");
+          upBtn.className   = "userdata-subfolder-chip up";
+          upBtn.textContent = "..";
+          upBtn.title       = "Go up one level";
+          const parent = path.split("/").slice(0, -1).join("/") || "/";
+          upBtn.addEventListener("click", () => {
+            if (breadcrumbEl === csScriptBreadcrumb) {
+              _csScriptNavPath = parent;
+              _refreshScriptNav(parent);
+            } else {
+              _csInputNavPath = parent;
+              _refreshInputNav(parent);
+            }
+          });
+          entriesEl.appendChild(upBtn);
+        }
+
+        const entries = res.ok ? (data.entries || []) : [];
+        let hasItems = entriesEl.children.length > 0;
+
+        entries.forEach(entry => {
+          if (entry.type === "dir") {
+            hasItems = true;
+            const chip      = document.createElement("button");
+            chip.className  = "userdata-subfolder-chip";
+            chip.textContent = entry.name + "/";
+            chip.title      = "Click to navigate · Double-click to select folder";
+            const childPath = path + "/" + entry.name;
+            chip.addEventListener("click", () => {
+              if (breadcrumbEl === csScriptBreadcrumb) {
+                _csScriptNavPath = childPath;
+                _refreshScriptNav(childPath);
+              } else {
+                _csInputNavPath = childPath;
+                _refreshInputNav(childPath);
+              }
+            });
+            if (onFolderDblClick) {
+              chip.addEventListener("dblclick", e => {
+                e.preventDefault();
+                onFolderDblClick(childPath, entry.name);
+              });
+            }
+            entriesEl.appendChild(chip);
+          } else if (showFiles && entry.name.toLowerCase().endsWith(fileExt)) {
+            hasItems = true;
+            const chip      = document.createElement("button");
+            chip.className  = "picker-config-chip";
+            chip.textContent = entry.name;
+            chip.title      = "Double-click to select";
+            chip.addEventListener("dblclick", e => {
+              e.preventDefault();
+              onFileDblClick(path + "/" + entry.name, entry.name);
+            });
+            entriesEl.appendChild(chip);
+          }
+        });
+
+        if (!hasItems) {
+          const msg       = document.createElement("span");
+          msg.className   = "userdata-no-folders";
+          msg.textContent = "No items";
+          entriesEl.appendChild(msg);
+        }
+      } catch (err) {
+        console.error("cs nav error:", err);
+        entriesEl.innerHTML = '<span class="userdata-no-folders">Failed to load</span>';
+      }
+    }
+
+    function _refreshScriptNav(path) {
+      _csScriptNavPath = path;
+      _refreshCsNav(
+        path,
+        csScriptBreadcrumb, csScriptEntries,
+        (filePath) => {               // file double-click → select script
+          _csSelectedScript = filePath;
+          csScriptPathDisplay.textContent = filePath;
+          csScriptPathDisplay.style.color = "var(--text)";
+          csScriptNav.classList.add("hidden");
+        },
+        null,                         // no folder select for script picker
+        true, ".py"
+      );
+    }
+
+    function _refreshInputNav(path) {
+      _csInputNavPath = path;
+      const isFolderMode = (_csInputMode === "folder");
+      _refreshCsNav(
+        path,
+        csInputBreadcrumb, csInputEntries,
+        isFolderMode ? null : (filePath) => {   // CSV file double-click
+          _csSelectedInput = filePath;
+          csInputPathDisplay.textContent = filePath;
+          csInputPathDisplay.style.color = "var(--text)";
+          csInputNav.classList.add("hidden");
+        },
+        isFolderMode ? (folderPath) => {        // folder double-click
+          _csSelectedInput = folderPath;
+          csInputPathDisplay.textContent = folderPath;
+          csInputPathDisplay.style.color = "var(--text)";
+          csInputNav.classList.add("hidden");
+        } : null,
+        !isFolderMode, ".csv"
+      );
+    }
+
+    // ── Browse buttons ────────────────────────────────────────
+    csScriptBrowseBtn?.addEventListener("click", () => {
+      if (csScriptNav.classList.contains("hidden")) {
+        csScriptNav.classList.remove("hidden");
+        _refreshScriptNav(_csScriptNavPath || _csDefaultPath());
+      } else {
+        csScriptNav.classList.add("hidden");
+      }
+    });
+
+    csInputBrowseBtn?.addEventListener("click", () => {
+      if (csInputNav.classList.contains("hidden")) {
+        csInputNav.classList.remove("hidden");
+        _refreshInputNav(_csInputNavPath || _csDefaultPath());
+      } else {
+        csInputNav.classList.add("hidden");
+      }
+    });
+
+    // ── Run script ────────────────────────────────────────────
+    csRunBtn?.addEventListener("click", async () => {
+      if (!_csSelectedScript) { alert("Select a Python script first."); return; }
+      if (!_csSelectedInput)  { alert("Select an input CSV file or folder first."); return; }
+
+      csRunBtn.disabled = true;
+      csAbortBtn.classList.remove("hidden");
+      csRunStatus.textContent = "Submitting…";
+      csRunStatus.style.color = "var(--text-dim)";
+      csOutputSection.classList.remove("hidden");
+      csLogOutput.textContent = "Starting…";
+      csOutputDir.textContent = "";
+
+      try {
+        const res  = await fetch("/custom-script/run", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            script_path: _csSelectedScript,
+            input_mode:  _csInputMode,
+            input_path:  _csSelectedInput,
+          }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          csRunStatus.textContent = data.error || "Error";
+          csRunStatus.style.color = "var(--danger)";
+          csRunBtn.disabled = false;
+          csAbortBtn.classList.add("hidden");
+          csLogOutput.textContent = data.error || "Server error";
+          return;
+        }
+
+        _csJobId = data.job_id;
+        csOutputDir.textContent = data.output_dir;
+        csRunStatus.textContent = "Running…";
+        csRunStatus.style.color = "var(--text-dim)";
+
+        if (_csPollTimer) clearInterval(_csPollTimer);
+        _csPollTimer = setInterval(_csPoll, 1500);
+      } catch (err) {
+        csRunStatus.textContent = "Network error";
+        csRunStatus.style.color = "var(--danger)";
+        csRunBtn.disabled = false;
+        csAbortBtn.classList.add("hidden");
+      }
+    });
+
+    async function _csPoll() {
+      if (!_csJobId) return;
+      try {
+        const res  = await fetch(`/custom-script/status/${_csJobId}`);
+        const data = await res.json();
+
+        if (data.output) {
+          csLogOutput.textContent = data.output;
+          csLogOutput.scrollTop   = csLogOutput.scrollHeight;
+        }
+
+        if (data.status === "done") {
+          clearInterval(_csPollTimer); _csPollTimer = null;
+          csRunStatus.textContent = "Done";
+          csRunStatus.style.color = "var(--accent)";
+          csRunBtn.disabled = false;
+          csAbortBtn.classList.add("hidden");
+        } else if (data.status === "error") {
+          clearInterval(_csPollTimer); _csPollTimer = null;
+          const errMsg = data.error || "Script failed";
+          csRunStatus.textContent = errMsg;
+          csRunStatus.style.color = "var(--danger)";
+          if (!data.output) csLogOutput.textContent = "[Error] " + errMsg;
+          else csLogOutput.textContent = data.output + "\n\n[Error] " + errMsg;
+          csLogOutput.scrollTop = csLogOutput.scrollHeight;
+          csRunBtn.disabled = false;
+          csAbortBtn.classList.add("hidden");
+        }
+      } catch (_) { /* ignore transient network errors */ }
+    }
+
+    csAbortBtn?.addEventListener("click", () => {
+      if (_csPollTimer) { clearInterval(_csPollTimer); _csPollTimer = null; }
+      csRunStatus.textContent = "Aborted (script may still finish on the server)";
+      csRunStatus.style.color = "var(--danger)";
+      csRunBtn.disabled = false;
+      csAbortBtn.classList.add("hidden");
+    });
   })();
 
   // ── Inspect Video ────────────────────────────────────────────
