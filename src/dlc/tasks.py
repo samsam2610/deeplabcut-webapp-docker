@@ -1733,3 +1733,102 @@ def run_processing(self, project_id: str, task_type: str = "anipose"):
 
     except Exception:
         raise RuntimeError(traceback.format_exc()[-3000:])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAPNet label propagation task
+# ══════════════════════════════════════════════════════════════════════════════
+
+@celery.task(bind=True, name="tasks.dlc_tapnet_propagate")
+def dlc_tapnet_propagate(
+    self,
+    config_path: str,
+    labeled_data_path: str,
+    tapnet_checkpoint_path: str,
+    params: dict = None,
+):
+    """
+    Propagate DLC labels across consecutive frames using TAPNet/TAPIR.
+
+    Runs in an isolated subprocess on CUDA_VISIBLE_DEVICES=0 (RTX 5090).
+    VRAM is released when the subprocess exits.
+
+    params keys:
+        anchor           (str)  "auto" | "first" | "last"
+        gpu_index        (int)  default 0 (RTX 5090)
+        overwrite        (bool) default False
+    """
+    import tempfile as _tempfile
+
+    if params is None:
+        params = {}
+
+    anchor    = params.get("anchor", "auto")
+    gpu_index = int(params.get("gpu_index", 0))
+    overwrite = bool(params.get("overwrite", False))
+
+    _tmp = _tempfile.NamedTemporaryFile(
+        mode="w", suffix=".log", prefix="tapnet_", delete=False
+    )
+    log_path = _tmp.name
+    _tmp.close()
+
+    try:
+        self.update_state(
+            state="PROGRESS",
+            meta={"progress": 5, "stage": "Scanning frames…", "log": ""},
+        )
+
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
+        if not os.path.isdir(labeled_data_path):
+            raise FileNotFoundError(f"Labeled-data folder not found: {labeled_data_path}")
+        if not os.path.isfile(tapnet_checkpoint_path):
+            raise FileNotFoundError(
+                f"TAPNet checkpoint not found: {tapnet_checkpoint_path}\n"
+                f"Download with:\n  python -m dlc_tapnet_tracker --checkpoint {tapnet_checkpoint_path} <config> <frames>"
+            )
+
+        self.update_state(
+            state="PROGRESS",
+            meta={"progress": 10, "stage": "Running TAPNet propagation…", "log": ""},
+        )
+
+        import sys as _sys
+        _sys.path.insert(0, "/app")
+        from dlc_tapnet_tracker import propagate_labels
+
+        result = propagate_labels(
+            labeled_data_path=labeled_data_path,
+            config_path=config_path,
+            tapnet_checkpoint_path=tapnet_checkpoint_path,
+            anchor=anchor,
+            gpu_index=gpu_index,
+            overwrite_existing=overwrite,
+        )
+
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "progress": 95,
+                "stage": "Finalizing…",
+                "log": result.get("log", ""),
+            },
+        )
+
+        return {
+            "status":          result.get("status", "complete"),
+            "operation":       "tapnet_propagate",
+            "sequences_found": result.get("sequences_found", 0),
+            "frames_labeled":  result.get("frames_labeled", 0),
+            "log":             result.get("log", "")[-8000:],
+        }
+
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+    finally:
+        try:
+            os.unlink(log_path)
+        except OSError:
+            pass

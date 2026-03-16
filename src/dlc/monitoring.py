@@ -282,6 +282,144 @@ def dlc_training_jobs_clear():
     return jsonify({"removed": removed})
 
 
+@bp.route("/dlc/project/tapnet-check")
+def dlc_tapnet_check():
+    """
+    Scan a labeled-data folder and return which consecutive sequences have a
+    labeled anchor frame (and are therefore eligible for TAPNet propagation).
+
+    Query params: video_stem
+    Returns: { sequences: [{frames, anchor, first_labeled, last_labeled}] }
+    """
+    raw = _ctx.redis_client().get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    video_stem   = request.args.get("video_stem", "").strip()
+    if not video_stem:
+        return jsonify({"error": "video_stem required."}), 400
+
+    stem_dir = project_path / "labeled-data" / secure_filename(video_stem)
+    if not stem_dir.is_dir():
+        return jsonify({"error": f"Folder not found: {stem_dir}"}), 404
+
+    try:
+        from dlc_tapnet_tracker import (
+            find_consecutive_sequences,
+            load_dlc_labels,
+            get_labeled_frame_names,
+            check_anchor_frames,
+        )
+
+        pngs = sorted(stem_dir.glob("*.png"))
+        frame_names = [p.name for p in pngs]
+        sequences   = find_consecutive_sequences(frame_names)
+
+        csv_candidates = sorted(stem_dir.glob("CollectedData_*.csv"))
+        labeled: set[str] = set()
+        if csv_candidates:
+            df = load_dlc_labels(csv_candidates[0])
+            labeled = get_labeled_frame_names(df)
+
+        result = []
+        for seq in sequences:
+            info = check_anchor_frames(seq, labeled)
+            result.append({
+                "frame_count":   len(seq),
+                "first_frame":   seq[0],
+                "last_frame":    seq[-1],
+                "first_labeled": info["first_labeled"],
+                "last_labeled":  info["last_labeled"],
+                "anchor":        info["anchor"],
+                "propagatable":  info["anchor"] is not None,
+            })
+
+        return jsonify({
+            "video_stem":       video_stem,
+            "total_frames":     len(frame_names),
+            "sequences":        result,
+            "propagatable_count": sum(1 for r in result if r["propagatable"]),
+        })
+
+    except Exception as exc:
+        import traceback
+        return jsonify({"error": str(exc), "detail": traceback.format_exc()}), 500
+
+
+@bp.route("/dlc/project/tapnet-propagate", methods=["POST"])
+def dlc_tapnet_propagate():
+    """
+    Dispatch a TAPNet label-propagation Celery task.
+
+    Body (JSON):
+        video_stem              (str, required)
+        tapnet_checkpoint_path  (str, required) — absolute path to TAPIR .npy
+        anchor                  (str) "auto" | "first" | "last"  default "auto"
+        gpu_index               (int) default 0 (RTX 5090)
+        overwrite               (bool) default false
+    """
+    raw = _ctx.redis_client().get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    config_path  = project_data.get("config_path", "")
+    engine       = project_data.get("engine", "pytorch")
+    project_path = Path(project_data.get("project_path", ""))
+
+    if not config_path or not Path(config_path).is_file():
+        return jsonify({"error": "No config.yaml in active project."}), 400
+
+    body       = request.get_json(force=True) or {}
+    video_stem = (body.get("video_stem") or "").strip()
+    ckpt_path  = (body.get("tapnet_checkpoint_path") or "").strip()
+
+    if not video_stem:
+        return jsonify({"error": "video_stem is required."}), 400
+    if not ckpt_path:
+        return jsonify({"error": "tapnet_checkpoint_path is required."}), 400
+
+    labeled_data_path = project_path / "labeled-data" / secure_filename(video_stem)
+    if not labeled_data_path.is_dir():
+        return jsonify({"error": f"Frames folder not found: {labeled_data_path}"}), 400
+
+    params = {
+        "anchor":    (body.get("anchor") or "auto").strip(),
+        "gpu_index": int(body.get("gpu_index") or 0),
+        "overwrite": bool(body.get("overwrite", False)),
+    }
+
+    task = _ctx.celery().send_task(
+        "tasks.dlc_tapnet_propagate",
+        kwargs={
+            "config_path":             config_path,
+            "labeled_data_path":       str(labeled_data_path),
+            "tapnet_checkpoint_path":  ckpt_path,
+            "params":                  params,
+        },
+        queue=_get_engine_queue(engine),
+    )
+    return jsonify({"task_id": task.id, "operation": "tapnet_propagate"}), 202
+
+
+@bp.route("/dlc/project/tapnet-propagate/stop", methods=["POST"])
+def dlc_tapnet_propagate_stop():
+    """Stop a running tapnet_propagate task."""
+    body    = request.get_json(force=True) or {}
+    task_id = (body.get("task_id") or "").strip()
+    if not task_id:
+        return jsonify({"error": "task_id is required."}), 400
+    _ctx.celery().control.revoke(task_id, terminate=True)
+    try:
+        from celery.result import AsyncResult
+        AsyncResult(task_id, app=_ctx.celery()).forget()
+    except Exception:
+        pass
+    return jsonify({"status": "stop_requested", "task_id": task_id}), 200
+
+
 @bp.route("/dlc/gpu/status")
 def dlc_gpu_status():
     """
