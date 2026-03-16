@@ -40,6 +40,11 @@ services:
       - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
       # Live-reload: mount source files so edits take effect without rebuild
       - ./src/app.py:/app/app.py
+      - ./src/celery_app.py:/app/celery_app.py
+      - ./src/tasks.py:/app/tasks.py
+      - ./src/dlc:/app/dlc
+      - ./src/anipose:/app/anipose
+      - ./src/routes:/app/routes
       - ./src/templates:/app/templates
       - ./src/static:/app/static
     environment:
