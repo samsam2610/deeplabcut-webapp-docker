@@ -28,8 +28,10 @@ ENV PATH="/home/appuser/.local/bin:${PATH}"
 
 # ---------- Application code ----------
 COPY --chown=appuser:appuser src/app.py .
-COPY --chown=appuser:appuser src/dlc_ctx.py .
+COPY --chown=appuser:appuser src/celery_app.py .
 COPY --chown=appuser:appuser src/dlc/ dlc/
+COPY --chown=appuser:appuser src/anipose/ anipose/
+COPY --chown=appuser:appuser src/routes/ routes/
 COPY --chown=appuser:appuser src/templates/ templates/
 COPY --chown=appuser:appuser src/static/ static/
 
