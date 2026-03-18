@@ -521,8 +521,9 @@
 
   const dlcProjectCard      = document.getElementById("dlc-project-card");
   const dlcFolderNav        = document.getElementById("dlc-folder-nav");
-  const dlcFolderBreadcrumb = document.getElementById("dlc-folder-breadcrumb");
-  const dlcFolderSubfolders = document.getElementById("dlc-folder-subfolders");
+  const dlcBrowseBreadcrumb = document.getElementById("dlc-browse-breadcrumb");
+  const dlcBrowseUp         = document.getElementById("dlc-browse-up");
+  const dlcFolderList       = document.getElementById("dlc-folder-list");
   const dlcBrowseBtn        = document.getElementById("dlc-browse-btn");
   const dlcBrowseInfo       = document.getElementById("dlc-browse-info");
   const dlcSelectBtn        = document.getElementById("dlc-select-btn");
@@ -603,65 +604,52 @@
   // ── Folder navigator ──────────────────────────────────────────
   async function _refreshDlcFolderNav(path) {
     _dlcBrowsePath = path;
-
-    // Breadcrumb
-    const baseName = (_userDataDir || path).split("/").filter(Boolean).pop() || "user-data";
-    const base     = _userDataDir || path;
-    const rel      = path.substring(base.length).split("/").filter(Boolean);
-    let crumbHTML  = `<button class="userdata-bc-seg" data-path="${base}">${baseName}</button>`;
-    let cumPath    = base;
-    rel.forEach((part, i) => {
-      cumPath += "/" + part;
-      const isLast = (i === rel.length - 1);
-      crumbHTML += `<span class="userdata-bc-sep">›</span>`;
-      crumbHTML += `<button class="userdata-bc-seg${isLast ? " active" : ""}" data-path="${cumPath}">${part}</button>`;
-    });
-    dlcFolderBreadcrumb.innerHTML = crumbHTML;
-    dlcFolderBreadcrumb.querySelectorAll(".userdata-bc-seg").forEach(seg =>
-      seg.addEventListener("click", () => _refreshDlcFolderNav(seg.dataset.path)));
-
-    dlcFolderSubfolders.innerHTML = '<span class="userdata-no-folders">Loading…</span>';
-
+    dlcBrowseBreadcrumb.value = path;
+    dlcFolderList.innerHTML = '<p class="explorer-empty">Loading…</p>';
     try {
-      const res  = await fetch(`/fs/list?path=${encodeURIComponent(path)}`);
+      const res  = await fetch(`/fs/ls?path=${encodeURIComponent(path)}`);
       const data = await res.json();
-
-      dlcFolderSubfolders.innerHTML = "";
-
-      // ".." chip
-      if (path !== _userDataDir) {
-        const upBtn = document.createElement("button");
-        upBtn.className   = "userdata-subfolder-chip up";
-        upBtn.textContent = "..";
-        upBtn.title       = "Go up one level";
-        upBtn.addEventListener("click", () => {
-          const parent = path.split("/").slice(0, -1).join("/") || "/";
-          _refreshDlcFolderNav(parent);
-        });
-        dlcFolderSubfolders.appendChild(upBtn);
+      if (data.error) {
+        dlcFolderList.innerHTML = `<span class="userdata-no-folders">${data.error}</span>`;
+        return;
       }
-
-      const subs = res.ok ? (data.projects || []) : [];
-      if (subs.length === 0 && dlcFolderSubfolders.children.length === 0) {
+      dlcFolderList.innerHTML = "";
+      const dirs = data.entries.filter(e => e.type === "dir");
+      if (!dirs.length) {
         const msg = document.createElement("span");
         msg.className   = "userdata-no-folders";
         msg.textContent = "No subfolders";
-        dlcFolderSubfolders.appendChild(msg);
+        dlcFolderList.appendChild(msg);
       } else {
-        subs.forEach(name => {
-          const chip = document.createElement("button");
-          chip.className   = "userdata-subfolder-chip";
-          chip.textContent = name;
-          chip.title       = `Navigate into ${name}/`;
-          chip.addEventListener("click", () => _refreshDlcFolderNav(path + "/" + name));
-          dlcFolderSubfolders.appendChild(chip);
+        dirs.forEach(entry => {
+          const row = document.createElement("div");
+          row.className = "fe-video-item";
+          row.style.cursor = "pointer";
+          const fullPath = data.path.replace(/\/+$/, "") + "/" + entry.name;
+          row.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${entry.name}/</span>`;
+          row.addEventListener("click", () => _refreshDlcFolderNav(fullPath));
+          dlcFolderList.appendChild(row);
         });
       }
     } catch (err) {
       console.error("DLC folder nav error:", err);
-      dlcFolderSubfolders.innerHTML = '<span class="userdata-no-folders">Failed to load</span>';
+      dlcFolderList.innerHTML = '<span class="userdata-no-folders">Failed to load</span>';
     }
   }
+
+  dlcBrowseUp?.addEventListener("click", () => {
+    if (!_dlcBrowsePath) return;
+    const parent = _dlcBrowsePath.split("/").slice(0, -1).join("/") || "/";
+    if (parent !== _dlcBrowsePath) _refreshDlcFolderNav(parent);
+  });
+
+  dlcBrowseBreadcrumb?.addEventListener("keydown", e => {
+    if (e.key === "Enter")  { e.preventDefault(); _refreshDlcFolderNav(dlcBrowseBreadcrumb.value.trim()); }
+    if (e.key === "Escape") { dlcBrowseBreadcrumb.value = _dlcBrowsePath || ""; dlcBrowseBreadcrumb.blur(); }
+  });
+  dlcBrowseBreadcrumb?.addEventListener("paste", e => {
+    setTimeout(() => _refreshDlcFolderNav(dlcBrowseBreadcrumb.value.trim()), 0);
+  });
 
   // ── Select current folder as DLC project ────────────────────
   dlcSelectBtn.addEventListener("click", async () => {
@@ -1569,9 +1557,11 @@
     const feUploadSec     = document.getElementById("fe-upload-section");
     const feFileInput     = document.getElementById("fe-video-file-input");
     const feUploadStatus  = document.getElementById("fe-upload-status");
-    const feServerSec     = document.getElementById("fe-server-section");
-    const feServerBrowser = document.getElementById("fe-server-browser");
-    const feServerStatus  = document.getElementById("fe-server-status");
+    const feServerSec        = document.getElementById("fe-server-section");
+    const feServerBreadcrumb = document.getElementById("fe-server-breadcrumb");
+    const feServerUp         = document.getElementById("fe-server-up");
+    const feServerBrowser    = document.getElementById("fe-server-browser");
+    const feServerStatus     = document.getElementById("fe-server-status");
     const fePlayerSec     = document.getElementById("fe-player-section");
     const feCanvas        = document.getElementById("fe-canvas");
     const feBtnPlay       = document.getElementById("fe-btn-play");
@@ -1640,6 +1630,7 @@
     let _feNoteSegIdx      = 0;
     let _feReRenderStatus = null;
     let _feReRenderNote   = null;
+    let _feBrowsePath   = null;    // current directory in the server browser
     let _feCurrentVideo    = null;
     let _feCurrentVideoExt = false;  // true when video is an external abs path
     let _feExtracted    = 0;
@@ -1821,6 +1812,8 @@
     function _feIsVideo(name) { return _feVideoExts.has(name.slice(name.lastIndexOf(".")).toLowerCase()); }
 
     async function _feBrowseServerDir(dirPath) {
+      _feBrowsePath = dirPath;
+      if (feServerBreadcrumb) feServerBreadcrumb.value = dirPath;
       feServerBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
       try {
         const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
@@ -1830,23 +1823,6 @@
           return;
         }
         feServerBrowser.innerHTML = "";
-
-        // Header row: current path + Up button
-        const header = document.createElement("div");
-        header.style.cssText = "display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem;flex-wrap:wrap";
-        const pathLabel = document.createElement("span");
-        pathLabel.style.cssText = "font-size:.7rem;color:var(--text-dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono)";
-        pathLabel.textContent = data.path;
-        header.appendChild(pathLabel);
-        if (data.parent) {
-          const upBtn = document.createElement("button");
-          upBtn.className = "btn-sm";
-          upBtn.style.cssText = "padding:.12rem .45rem;font-size:.7rem;flex-shrink:0";
-          upBtn.textContent = "↑ Up";
-          upBtn.addEventListener("click", e => { e.stopPropagation(); _feBrowseServerDir(data.parent); });
-          header.appendChild(upBtn);
-        }
-        feServerBrowser.appendChild(header);
 
         const visible = data.entries.filter(e => e.type === "dir" || (e.type === "file" && _feIsVideo(e.name)));
         if (!visible.length) {
@@ -1893,6 +1869,20 @@
         feServerBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">Error: ${err.message}</span>`;
       }
     }
+
+    feServerUp?.addEventListener("click", () => {
+      if (!_feBrowsePath) return;
+      const parent = _feBrowsePath.split("/").slice(0, -1).join("/") || "/";
+      if (parent !== _feBrowsePath) _feBrowseServerDir(parent);
+    });
+
+    feServerBreadcrumb?.addEventListener("keydown", e => {
+      if (e.key === "Enter")  { e.preventDefault(); _feBrowseServerDir(feServerBreadcrumb.value.trim()); }
+      if (e.key === "Escape") { feServerBreadcrumb.value = _feBrowsePath || ""; feServerBreadcrumb.blur(); }
+    });
+    feServerBreadcrumb?.addEventListener("paste", e => {
+      setTimeout(() => _feBrowseServerDir(feServerBreadcrumb.value.trim()), 0);
+    });
 
     // ── File upload ───────────────────────────────────────────────
     feFileInput.addEventListener("change", async () => {
@@ -4314,6 +4304,7 @@
     const avOpenBtn      = document.getElementById("btn-open-analyze");
     const avCloseBtn     = document.getElementById("btn-close-analyze");
     const avTargetPath   = document.getElementById("av-target-path");
+    const avBrowseUp     = document.getElementById("av-browse-up");
     const avBrowseBtn    = document.getElementById("av-browse-btn");
     const avBrowser      = document.getElementById("av-browser");
     const avSnapshot     = document.getElementById("av-snapshot");
@@ -4460,30 +4451,14 @@
 
     async function _avBrowseDir(dirPath) {
       _avBrowserLoaded = false;
+      _avProjectPath = dirPath;
+      avTargetPath.value = dirPath;
       avBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
       try {
         const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
         const data = await res.json();
         if (data.error) { avBrowser.textContent = data.error; return; }
         avBrowser.innerHTML = "";
-
-        // Header: current path + Up button
-        const header = document.createElement("div");
-        header.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.2rem .3rem .35rem;border-bottom:1px solid var(--border);margin-bottom:.25rem;min-width:0";
-        const pathLabel = document.createElement("span");
-        pathLabel.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.72rem;color:var(--text-dim)";
-        pathLabel.textContent = data.path;
-        pathLabel.title = data.path;
-        header.appendChild(pathLabel);
-        if (data.parent) {
-          const upBtn = document.createElement("button");
-          upBtn.className = "btn-sm";
-          upBtn.style.cssText = "padding:.15rem .5rem;font-size:.72rem;flex-shrink:0";
-          upBtn.textContent = "↑ Up";
-          upBtn.addEventListener("click", (e) => { e.stopPropagation(); _avBrowseDir(data.parent); });
-          header.appendChild(upBtn);
-        }
-        avBrowser.appendChild(header);
 
         const visible = data.entries.filter(e => (e.type === "dir" && e.has_media !== false) || (e.type === "file" && _avSupportedFile(e.name)));
         if (!visible.length) {
@@ -4507,17 +4482,34 @@
       const isHidden = avBrowser.classList.contains("hidden");
       avBrowser.classList.toggle("hidden");
       if (!isHidden) return;  // closing
+      const typed = avTargetPath.value.trim();
+      if (typed) { await _avBrowseDir(typed); return; }
       if (_avBrowserLoaded) return;  // already showing content
       try {
         const res  = await fetch("/dlc/project/browse");
         const data = await res.json();
         if (data.error) { avBrowser.textContent = data.error; return; }
-        _avProjectPath = data.project_path;
         await _avBrowseDir(data.project_path);
       } catch (err) {
         avBrowser.textContent = "Failed to load project.";
         console.error("avBrowse:", err);
       }
+    });
+
+    avBrowseUp?.addEventListener("click", () => {
+      const cur = (avTargetPath.value.trim() || _avProjectPath || "").replace(/\/$/, "");
+      if (!cur) return;
+      const parent = cur.split("/").slice(0, -1).join("/") || "/";
+      if (parent !== cur) { _avBrowseDir(parent); avBrowser.classList.remove("hidden"); }
+    });
+
+    avTargetPath?.addEventListener("keydown", e => {
+      if (e.key === "Enter")  { e.preventDefault(); _avBrowseDir(avTargetPath.value.trim()); avBrowser.classList.remove("hidden"); }
+      if (e.key === "Escape") { avBrowser.classList.add("hidden"); avTargetPath.blur(); }
+    });
+    avTargetPath?.addEventListener("paste", e => {
+      if (avBrowser.classList.contains("hidden")) return;  // only navigate when browser is open
+      setTimeout(() => _avBrowseDir(avTargetPath.value.trim()), 0);
     });
 
     // ── Running state helpers ─────────────────────────────────
@@ -4699,45 +4691,20 @@
     const clvBtn        = document.getElementById("btn-create-labeled-video");
     const clvStatus     = document.getElementById("av-clv-status");
     const clvDestInput  = document.getElementById("clv-destfolder");
+    const clvDestUp     = document.getElementById("clv-dest-up");
     const clvDestBrowse = document.getElementById("clv-dest-browse-btn");
     const clvDestClear  = document.getElementById("clv-dest-clear-btn");
     const clvDestBrowser= document.getElementById("clv-dest-browser");
 
     // destfolder browser — shows directories only, double-click selects
     async function _clvBrowseDir(dirPath) {
+      clvDestInput.value = dirPath;
       clvDestBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
       try {
         const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
         const data = await res.json();
         if (data.error) { clvDestBrowser.textContent = data.error; return; }
         clvDestBrowser.innerHTML = "";
-
-        // Header
-        const hdr = document.createElement("div");
-        hdr.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.2rem .3rem .35rem;border-bottom:1px solid var(--border);margin-bottom:.25rem";
-        const pathLbl = document.createElement("span");
-        pathLbl.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.72rem;color:var(--text-dim)";
-        pathLbl.textContent = data.path;
-        hdr.appendChild(pathLbl);
-        // "Select this folder" button
-        const selBtn = document.createElement("button");
-        selBtn.className = "btn-sm";
-        selBtn.style.cssText = "padding:.15rem .5rem;font-size:.72rem;flex-shrink:0";
-        selBtn.textContent = "✓ Select";
-        selBtn.addEventListener("click", () => {
-          clvDestInput.value = data.path;
-          clvDestBrowser.classList.add("hidden");
-        });
-        hdr.appendChild(selBtn);
-        if (data.parent) {
-          const upBtn = document.createElement("button");
-          upBtn.className = "btn-sm";
-          upBtn.style.cssText = "padding:.15rem .5rem;font-size:.72rem;flex-shrink:0";
-          upBtn.textContent = "↑ Up";
-          upBtn.addEventListener("click", (e) => { e.stopPropagation(); _clvBrowseDir(data.parent); });
-          hdr.appendChild(upBtn);
-        }
-        clvDestBrowser.appendChild(hdr);
 
         const dirs = data.entries.filter(e => e.type === "dir");
         if (!dirs.length) {
@@ -4774,6 +4741,22 @@
         _clvBrowseDir(startPath);
       }
     });
+
+    clvDestUp?.addEventListener("click", () => {
+      const cur = clvDestInput.value.trim().replace(/\/$/, "");
+      if (!cur) return;
+      const parent = cur.split("/").slice(0, -1).join("/") || "/";
+      if (parent !== cur) { _clvBrowseDir(parent); clvDestBrowser.classList.remove("hidden"); }
+    });
+
+    clvDestInput?.addEventListener("keydown", e => {
+      if (e.key === "Enter")  { e.preventDefault(); _clvBrowseDir(clvDestInput.value.trim()); clvDestBrowser.classList.remove("hidden"); }
+      if (e.key === "Escape") { clvDestBrowser.classList.add("hidden"); clvDestInput.blur(); }
+    });
+    clvDestInput?.addEventListener("paste", e => {
+      setTimeout(() => { _clvBrowseDir(clvDestInput.value.trim()); clvDestBrowser.classList.remove("hidden"); }, 0);
+    });
+
     clvDestClear?.addEventListener("click", () => { clvDestInput.value = ""; });
 
     clvBtn?.addEventListener("click", async () => {
@@ -4888,8 +4871,21 @@
     let _vaSelectedParts    = new Set();  // empty = show all
     let _vaThreshold        = 0.60;
     let _vaMarkerSize       = 6;
-    // absolute path to the currently loaded original video (for annotated frames)
+    // absolute path to the currently loaded original video (for annotated frames + companion CSV)
     let _vaCurrentVideoPath = null;
+    // Hook called by _vaLoadFrame so the nested curation IIFE can sync its annotation panel
+    let _vaCurationFrameHook = null;
+    let _vaMetadataFrameHook = null;
+
+    // ── Pose cache (prefetch window) ───────────────────────────────────────
+    const _POSE_WINDOW  = 30;
+    const _vaPoseCache  = new Map();  // frameNumber → {key, poses, n_bodyparts}
+    let   _vaPrefetchCtrl = null;     // AbortController for in-flight batch prefetch
+
+    function _vaClearPoseCache() {
+      _vaPoseCache.clear();
+      if (_vaPrefetchCtrl) { _vaPrefetchCtrl.abort(); _vaPrefetchCtrl = null; }
+    }
 
     // ── Viewer sizing (same break-out-of-card approach as frame labeler) ──
     function _vaFitViewer() {
@@ -4930,6 +4926,7 @@
       _vaCurrentVideoPath = null;
       _vaCurrentPoses = [];
       _vaHoverBp      = null;
+      _vaClearPoseCache();
       if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
       vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
       vaFrameImg.onload  = null;
@@ -4945,30 +4942,21 @@
     }
 
     function _vaFrameUrl(n) {
-      // ── Kinematic overlay takes priority when enabled and h5 is loaded ──
-      if (_vaOverlayEnabled && _vaH5Path && _vaCurrentVideoPath) {
-        const parts = _vaSelectedParts.size > 0
-          ? [..._vaSelectedParts].join(",")
-          : "";
-        const p = new URLSearchParams({
-          video:       _vaCurrentVideoPath,
-          h5:          _vaH5Path,
-          threshold:   _vaThreshold.toFixed(2),
-          marker_size: _vaMarkerSize,
-          scale:       1.0,
-        });
-        if (parts) p.set("parts", parts);
-        return `/dlc/viewer/frame-annotated/${n}?${p}`;
-      }
-
       if (_vaMode === "browse-video") {
-        return `/annotate/video-frame/${n}?path=${encodeURIComponent(_vaBrowseVideoPath)}`;
+        // Use the same cached VideoCapture endpoint as Frame Extractor
+        return `/dlc/project/video-frame-ext/${n}?path=${encodeURIComponent(_vaBrowseVideoPath)}`;
       }
       if (_vaMode === "video") {
         return `/dlc/project/video-frame/${encodeURIComponent(_vaVideoName)}/${n}`;
       }
       // frames mode: index into _vaFrameFiles
       return `/dlc/project/frame-image/${encodeURIComponent(_vaFrameStem)}/${encodeURIComponent(_vaFrameFiles[n])}`;
+    }
+
+    function _vaPrefetchFrames(frames) {
+      frames.forEach(n => {
+        if (n >= 0 && n < _vaFrameCount) new Image().src = _vaFrameUrl(n);
+      });
     }
 
     function _vaUpdateDisplay() {
@@ -5005,10 +4993,10 @@
         });
         _vaFitViewer();
         _vaUpdateDisplay();
-        // Sync canvas size after image loads, then fetch poses for hover labels
-        _vaSyncCanvas();
-        if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(n);
-        else { _vaCurrentPoses = []; _vaHoverBp = null; if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height); }
+        _vaPrefetchFrames([n + 1, n + 2]);
+        if (_vaCurationFrameHook) _vaCurationFrameHook(n);
+        if (_vaMetadataFrameHook) _vaMetadataFrameHook(n);
+        _vaUpdateOverlay(n);
       } catch (err) {
         vaStatus.textContent = `Failed to load frame: ${err.message}`;
         vaStatus.className   = "fe-extract-status err";
@@ -5016,6 +5004,23 @@
         _vaFrameBusy = false;
         vaFrameSpinner.classList.add("hidden");
       }
+    }
+
+    // Draw overlay for frame n: show cached poses immediately; fetch from server only when paused.
+    function _vaUpdateOverlay(n) {
+      if (!vaOverlayCtx || !_vaOverlayEnabled) return;
+      _vaSyncCanvas();
+      vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+      if (!_vaH5Path) return;
+      const key    = _vaPoseCacheKey();
+      const cached = _vaPoseCache.get(n);
+      if (cached && cached.key === key) {
+        _vaCurrentPoses = cached.poses;
+        _vaNBodyparts   = cached.n_bodyparts;
+        _vaDrawPoseMarkers();
+      }
+      // Only hit the server when paused
+      if (!_vaPlayTimer && (!cached || cached.key !== key)) _vaFetchPoses(n);
     }
 
     async function _vaOpenVideo(name) {
@@ -5026,8 +5031,9 @@
       try {
         const res  = await fetch(`/dlc/project/video-info/${encodeURIComponent(name)}`);
         const info = await res.json();
-        _vaFps        = info.fps || 30;
-        _vaFrameCount = info.frame_count || 0;
+        _vaFps             = info.fps || 30;
+        _vaFrameCount      = info.frame_count || 0;
+        _vaCurrentVideoPath = info.abs_path || null;
       } catch (_) { _vaFps = 30; _vaFrameCount = 0; }
       vaPlayerSec.classList.remove("hidden");
       _vaLoadFrame(0);
@@ -5197,10 +5203,30 @@
       }
     }
 
+    // Draw all pose marker circles onto the overlay canvas
+    function _vaDrawPoseMarkers() {
+      if (!vaOverlayCtx || !_vaOverlayEnabled || !_vaCurrentPoses.length) return;
+      const natW = vaFrameImg.naturalWidth  || 1;
+      const natH = vaFrameImg.naturalHeight || 1;
+      const sx   = vaOverlayCanvas.width  / natW;
+      const sy   = vaOverlayCanvas.height / natH;
+      const r    = Math.max(1, Math.round(_vaMarkerSize * Math.min(sx, sy)));
+      for (const pose of _vaCurrentPoses) {
+        const cx    = Math.round(pose.x * sx);
+        const cy    = Math.round(pose.y * sy);
+        const color = _vaPaletteColor(pose.color_idx, _vaNBodyparts);
+        vaOverlayCtx.beginPath();
+        vaOverlayCtx.arc(cx, cy, r, 0, Math.PI * 2);
+        vaOverlayCtx.fillStyle = color;
+        vaOverlayCtx.fill();
+      }
+    }
+
     function _vaDrawHoverLabel() {
       if (!vaOverlayCtx) return;
       _vaSyncCanvas();
       vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+      _vaDrawPoseMarkers();
       if (!_vaHoverBp || !_vaCurrentPoses.length) return;
       const pose = _vaCurrentPoses.find(p => p.bp === _vaHoverBp);
       if (!pose) return;
@@ -5266,22 +5292,68 @@
       });
     }
 
-    // Fetch visible poses for the current frame (called after overlay frame loads)
+    // Pose cache key encodes everything that affects pose data
+    function _vaPoseCacheKey() {
+      return `${_vaH5Path}:${_vaThreshold.toFixed(2)}:${[..._vaSelectedParts].sort().join(",")}`;
+    }
+
+    // Fetch poses for frameNumber from cache or server; draw overlay; start background prefetch.
+    // Only called when paused — never during playback.
     async function _vaFetchPoses(frameNumber) {
-      if (!_vaH5Path) return;
-      const parts    = _vaSelectedParts.size > 0 ? [..._vaSelectedParts].join(",") : "";
-      const p        = new URLSearchParams({ h5: _vaH5Path, threshold: _vaThreshold.toFixed(2) });
-      if (parts) p.set("parts", parts);
-      try {
-        const res  = await fetch(`/dlc/viewer/frame-poses/${frameNumber}?${p}`);
-        const data = await res.json();
-        _vaCurrentPoses = data.poses || [];
-        _vaNBodyparts   = data.n_bodyparts || 1;
-      } catch (_) {
-        _vaCurrentPoses = [];
+      if (!_vaH5Path || !_vaOverlayEnabled) return;
+      const key    = _vaPoseCacheKey();
+      const cached = _vaPoseCache.get(frameNumber);
+      if (cached && cached.key === key) {
+        _vaCurrentPoses = cached.poses;
+        _vaNBodyparts   = cached.n_bodyparts;
+      } else {
+        const parts = _vaSelectedParts.size > 0 ? [..._vaSelectedParts].join(",") : "";
+        const p     = new URLSearchParams({ h5: _vaH5Path, threshold: _vaThreshold.toFixed(2) });
+        if (parts) p.set("parts", parts);
+        try {
+          const res  = await fetch(`/dlc/viewer/frame-poses/${frameNumber}?${p}`);
+          const data = await res.json();
+          _vaCurrentPoses = data.poses || [];
+          _vaNBodyparts   = data.n_bodyparts || 1;
+          _vaPoseCache.set(frameNumber, { key, poses: _vaCurrentPoses, n_bodyparts: _vaNBodyparts });
+        } catch (_) { _vaCurrentPoses = []; }
       }
       _vaHoverBp = null;
       _vaDrawHoverLabel();
+      if (!_vaPrefetchCtrl) _vaFetchPosesWindow(frameNumber);
+    }
+
+    // Prefetch the next _POSE_WINDOW frames in the background (runs only when paused).
+    async function _vaFetchPosesWindow(fromFrame) {
+      if (!_vaH5Path) return;
+      const key = _vaPoseCacheKey();
+      let missing = 0;
+      for (let i = fromFrame; i < fromFrame + _POSE_WINDOW && i < _vaFrameCount; i++) {
+        const c = _vaPoseCache.get(i);
+        if (!c || c.key !== key) missing++;
+      }
+      if (missing === 0) return;
+      if (_vaPrefetchCtrl) return;  // let the current batch finish
+      _vaPrefetchCtrl = new AbortController();
+      const ctrl  = _vaPrefetchCtrl;
+      const parts = _vaSelectedParts.size > 0 ? [..._vaSelectedParts].join(",") : "";
+      const p = new URLSearchParams({
+        h5: _vaH5Path, start: fromFrame, count: _POSE_WINDOW, threshold: _vaThreshold.toFixed(2),
+      });
+      if (parts) p.set("parts", parts);
+      try {
+        const res  = await fetch(`/dlc/viewer/frame-poses-batch?${p}`, { signal: ctrl.signal });
+        if (!res.ok) return;
+        const data = await res.json();
+        for (const [fnStr, fd] of Object.entries(data.frames || {})) {
+          const fn = parseInt(fnStr, 10);
+          _vaPoseCache.set(fn, { key, poses: fd.poses || [], n_bodyparts: fd.n_bodyparts || 1 });
+        }
+      } catch (e) {
+        if (e.name !== "AbortError") console.warn("pose prefetch failed:", e);
+      } finally {
+        if (_vaPrefetchCtrl === ctrl) _vaPrefetchCtrl = null;
+      }
     }
 
     // ── Kinematic overlay controls ────────────────────────────
@@ -5342,6 +5414,7 @@
           // If all checked manually, reset to empty (= all)
           if ([...vaOverlayPartsBox.querySelectorAll("input")].every(c => c.checked))
             _vaSelectedParts.clear();
+          _vaClearPoseCache();
           if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
         });
         lbl.appendChild(chk);
@@ -5361,6 +5434,7 @@
         if (data.error) { _vaOverlayStatus(data.error.includes("No .h5") ? "No .h5 found — browse to select one." : data.error); return; }
         _vaH5Path = data.h5_path;
         vaOverlayH5Path.value = _vaH5Path;
+        _vaClearPoseCache();
         _vaOverlayStatus("h5 auto-detected");
         await _vaLoadH5Info(_vaH5Path);
       } catch (e) {
@@ -5371,9 +5445,12 @@
     vaOverlayToggle?.addEventListener("change", () => {
       _vaOverlayEnabled = vaOverlayToggle.checked;
       vaOverlayControls.classList.toggle("hidden", !_vaOverlayEnabled);
-      if (_vaOverlayEnabled && !_vaH5Path && _vaCurrentVideoPath)
-        _vaAutoDetectH5(_vaCurrentVideoPath);
-      if (_vaCurrentFrame !== null) _vaLoadFrame(_vaCurrentFrame);
+      if (!_vaOverlayEnabled) {
+        if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+        return;
+      }
+      if (!_vaH5Path && _vaCurrentVideoPath) _vaAutoDetectH5(_vaCurrentVideoPath);
+      if (_vaH5Path && !_vaPlayTimer) _vaFetchPoses(_vaCurrentFrame);
     });
 
     vaOverlayH5Auto?.addEventListener("click", () => {
@@ -5385,9 +5462,11 @@
       vaOverlayH5Path.value = "";
       _vaAllBodyParts = [];
       _vaSelectedParts.clear();
+      _vaClearPoseCache();
       vaOverlayPartsBox.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">Load an .h5 file to see body parts.</span>';
       _vaOverlayStatus("");
-      if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
+      _vaCurrentPoses = [];
+      if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
     });
 
     // Threshold slider
@@ -5396,21 +5475,21 @@
       vaOverlayThreshVal.textContent = _vaThreshold.toFixed(2);
     });
     vaOverlayThreshold?.addEventListener("change", () => {
+      _vaClearPoseCache();
       if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
     });
 
-    // Marker size slider
+    // Marker size slider — redraw canvas immediately, no frame reload needed
     vaOverlayMarkerSz?.addEventListener("input", () => {
       _vaMarkerSize = parseInt(vaOverlayMarkerSz.value, 10);
       vaOverlayMarkerVal.textContent = _vaMarkerSize;
-    });
-    vaOverlayMarkerSz?.addEventListener("change", () => {
-      if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
+      _vaDrawHoverLabel();
     });
 
     vaOverlayPartsAll?.addEventListener("click", () => {
       _vaSelectedParts.clear();
       vaOverlayPartsBox.querySelectorAll("input").forEach(c => { c.checked = true; });
+      _vaClearPoseCache();
       if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
     });
     vaOverlayPartsNone?.addEventListener("click", () => {
@@ -5460,6 +5539,7 @@
               const full = path + "/" + e.name;
               _vaH5Path = full;
               vaOverlayH5Path.value = full;
+              _vaClearPoseCache();
               vaOverlayH5Browser.classList.add("hidden");
               _vaOverlayStatus("h5 selected");
               await _vaLoadH5Info(full);
@@ -5544,12 +5624,15 @@
       if (_vaPlayTimer) {
         clearInterval(_vaPlayTimer); _vaPlayTimer = null;
         vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
+        // Just paused: show poses for current frame
+        if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(_vaCurrentFrame);
       } else {
         vaPlayIcon.classList.add("hidden"); vaPauseIcon.classList.remove("hidden");
         _vaPlayTimer = setInterval(async () => {
           if (_vaCurrentFrame >= _vaFrameCount - 1) {
             clearInterval(_vaPlayTimer); _vaPlayTimer = null;
             vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
+            if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(_vaCurrentFrame);
             return;
           }
           await _vaLoadFrame(_vaCurrentFrame + 1);
@@ -5620,28 +5703,48 @@
 
     // ── Dataset Curation ──────────────────────────────────────────
     (() => {
-      const vaCurationPanel    = document.getElementById("va-curation-panel");
-      const vaCurationStatus   = document.getElementById("va-curation-status");
-      const vaExtractFrameBtn  = document.getElementById("va-extract-frame-btn");
-      const vaAddToDatasetBtn  = document.getElementById("va-add-to-dataset-btn");
-      const vaAnnotBpSelect    = document.getElementById("va-annotation-bp-select");
-      const vaAnnotCoords      = document.getElementById("va-annotation-coords");
-      const vaSaveAnnotBtn     = document.getElementById("va-save-annotation-btn");
-      const vaClearAnnotBtn    = document.getElementById("va-clear-annotation-btn");
-      const vaPendingCount     = document.getElementById("va-pending-count");
+      const vaCurationStatus  = document.getElementById("va-curation-status");
+      const vaExtractFrameBtn = document.getElementById("va-extract-frame-btn");
+      const vaAddToDatasetBtn = document.getElementById("va-add-to-dataset-btn");
+      const vaBatchAddBtn     = document.getElementById("va-batch-add-btn");
+      const vaBatchCount      = document.getElementById("va-batch-count");
+      const vaBatchStep       = document.getElementById("va-batch-step");
+      const vaCsvNone         = document.getElementById("va-csv-none");
+      const vaCsvLoaded       = document.getElementById("va-csv-loaded");
+      const vaCsvPathDisplay  = document.getElementById("va-csv-path-display");
+      const vaCreateCsvBtn    = document.getElementById("va-create-csv-btn");
+      const vaCsvCreateStatus = document.getElementById("va-csv-create-status");
+      const vaCsvBars         = document.getElementById("va-csv-bars");
+      const vaStatusBarWrap   = document.getElementById("va-status-bar-wrap");
+      const vaNoteBarWrap     = document.getElementById("va-note-bar-wrap");
+      const vaStatusBar       = document.getElementById("va-status-bar");
+      const vaNoteBar         = document.getElementById("va-note-bar");
+      const vaNoteFilter      = document.getElementById("va-note-filter");
+      const vaAnnotPanel      = document.getElementById("va-annot-panel");
+      const vaAnnotFrameNum   = document.getElementById("va-annot-frame-num");
+      const vaNoteInput       = document.getElementById("va-note-input");
+      const vaStatusInput     = document.getElementById("va-status-input");
+      const vaSaveNoteBtn     = document.getElementById("va-save-note-btn");
+      const vaAnnotSaveStatus = document.getElementById("va-annot-save-status");
+      const vaTagChips        = document.getElementById("va-tag-chips");
+      const vaNewTagInput     = document.getElementById("va-new-tag-input");
+      const vaAddTagBtn       = document.getElementById("va-add-tag-btn");
 
-      // Per-frame curation state
-      let _vaCurVideoStem  = null;    // video_stem of the last extracted frame
-      let _vaCurFrameName  = null;    // e.g. "img0002-00150.png"
-      let _vaPending       = {};      // {bp: [x, y]}  pending annotation changes
-      let _vaAnnotBp       = null;    // currently selected body part for click-to-place
+      // Companion CSV state
+      let _vaCsvPath        = null;
+      let _vaCsvRows        = [];     // {frame_number, timestamp, frame_line_status, note}
+      let _vaUserTags       = [];
+      let _vaActiveNoteFilter = null; // active filter tag for the note timeline bar
+
+      // Colour palette for timeline segments (matches anv palette)
+      const _vaCsvPalette = ["#60a5fa","#34d399","#f97316","#f472b6","#a78bfa","#facc15","#38bdf8","#fb7185"];
 
       // ── Status helpers ──────────────────────────────────────────
       let _curationMsgTimer = null;
       function _curStatus(msg, isErr) {
         if (!vaCurationStatus) return;
-        vaCurationStatus.textContent  = msg;
-        vaCurationStatus.className    = "fe-extract-status" + (isErr ? " err" : "");
+        vaCurationStatus.textContent = msg;
+        vaCurationStatus.className   = "fe-extract-status" + (isErr ? " err" : "");
         if (_curationMsgTimer) clearTimeout(_curationMsgTimer);
         if (msg && !isErr) {
           _curationMsgTimer = setTimeout(() => {
@@ -5650,105 +5753,10 @@
         }
       }
 
-      function _updatePendingUI() {
-        const n = Object.keys(_vaPending).length;
-        if (vaPendingCount) {
-          vaPendingCount.textContent = n > 0 ? `${n} pending change${n !== 1 ? "s" : ""}` : "";
-        }
-      }
-
-      // ── Populate body-parts dropdown ────────────────────────────
-      function _populateBpSelect(parts) {
-        if (!vaAnnotBpSelect) return;
-        const prev = vaAnnotBpSelect.value;
-        vaAnnotBpSelect.innerHTML = '<option value="">– select –</option>';
-        parts.forEach(bp => {
-          const opt  = document.createElement("option");
-          opt.value  = bp;
-          opt.textContent = bp;
-          if (bp === prev) opt.selected = true;
-          vaAnnotBpSelect.appendChild(opt);
-        });
-      }
-
-      // Populate from H5 body-parts list if available, otherwise fetch from config
-      async function _ensureBpSelectPopulated() {
-        if (_vaAllBodyParts && _vaAllBodyParts.length > 0) {
-          _populateBpSelect(_vaAllBodyParts);
-          return;
-        }
-        try {
-          const res  = await fetch("/dlc/project/bodyparts");
-          const data = await res.json();
-          if (data.bodyparts && data.bodyparts.length > 0) {
-            _populateBpSelect(data.bodyparts);
-          }
-        } catch (_) {}
-      }
-
-      // Keep the bp select in sync when the H5 bodyparts panel changes
-      const _bpObserver = new MutationObserver(() => {
-        if (_vaAllBodyParts && _vaAllBodyParts.length > 0)
-          _populateBpSelect(_vaAllBodyParts);
-      });
-      const _bpContainer = document.getElementById("va-overlay-bodyparts");
-      if (_bpContainer) _bpObserver.observe(_bpContainer, { childList: true });
-
-      // ── Body part selection → enable canvas annotation ──────────
-      if (vaAnnotBpSelect) {
-        vaAnnotBpSelect.addEventListener("change", () => {
-          _vaAnnotBp = vaAnnotBpSelect.value || null;
-          if (vaOverlayCanvas) {
-            vaOverlayCanvas.style.pointerEvents = _vaAnnotBp ? "all" : "none";
-            vaOverlayCanvas.style.cursor        = _vaAnnotBp ? "crosshair" : "";
-          }
-          if (vaAnnotCoords) vaAnnotCoords.textContent = "";
-        });
-      }
-
-      // ── Canvas click → place annotation marker ─────────────────
-      if (vaOverlayCanvas) {
-        vaOverlayCanvas.addEventListener("click", (e) => {
-          if (!_vaAnnotBp) return;
-
-          // Convert CSS canvas coords → original video pixel coords
-          const rect   = vaFrameImg.getBoundingClientRect();
-          const x_norm = (e.clientX - rect.left)  / rect.width;
-          const y_norm = (e.clientY - rect.top)   / rect.height;
-          const vx = Math.round(x_norm * (vaFrameImg.naturalWidth  || rect.width));
-          const vy = Math.round(y_norm * (vaFrameImg.naturalHeight || rect.height));
-
-          _vaPending[_vaAnnotBp] = [vx, vy];
-          if (vaAnnotCoords) vaAnnotCoords.textContent = `x=${vx}  y=${vy}`;
-          _updatePendingUI();
-
-          // Draw a temporary crosshair on the annotation canvas
-          if (vaOverlayCtx) {
-            const cx = e.clientX - rect.left;
-            const cy = e.clientY - rect.top;
-            const cw = vaOverlayCanvas.width;
-            const ch = vaOverlayCanvas.height;
-            // Scale CSS coords to canvas pixel coords
-            const px = cx * (cw / rect.width);
-            const py = cy * (ch / rect.height);
-            vaOverlayCtx.save();
-            vaOverlayCtx.strokeStyle = "#ffea00";
-            vaOverlayCtx.lineWidth   = 2;
-            vaOverlayCtx.beginPath();
-            vaOverlayCtx.arc(px, py, 7, 0, Math.PI * 2);
-            vaOverlayCtx.stroke();
-            vaOverlayCtx.beginPath();
-            vaOverlayCtx.moveTo(px - 11, py); vaOverlayCtx.lineTo(px + 11, py);
-            vaOverlayCtx.moveTo(px, py - 11); vaOverlayCtx.lineTo(px, py + 11);
-            vaOverlayCtx.stroke();
-            vaOverlayCtx.restore();
-          }
-        });
-      }
-
       // ── Build request body helper ───────────────────────────────
-      function _videoRequestBody() {
-        const body = { frame_number: _vaCurrentFrame };
+      function _videoRequestBody(frameNum) {
+        const n = (frameNum !== undefined) ? frameNum : _vaCurrentFrame;
+        const body = { frame_number: n };
         if (_vaMode === "browse-video" && _vaCurrentVideoPath) {
           body.video_path = _vaCurrentVideoPath;
         } else if (_vaMode === "video" && _vaVideoName) {
@@ -5773,15 +5781,11 @@
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-
-            _vaCurVideoStem = data.video_stem;
-            _vaCurFrameName = data.saved;
             _curStatus(
               data.duplicate
                 ? `Already extracted: ${data.saved}`
                 : `Saved ${data.saved} (${data.folder}, #${data.frame_count})`
             );
-            await _ensureBpSelectPopulated();
           } catch (err) {
             _curStatus(`Extract failed: ${err.message}`, true);
           } finally {
@@ -5806,16 +5810,12 @@
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-
-            _vaCurVideoStem = data.video_stem;
-            _vaCurFrameName = data.saved;
             const h5note = data.h5_updated ? " + H5" : "";
             _curStatus(
               data.duplicate
                 ? `Already in dataset: ${data.saved}`
                 : `Added ${data.saved} to CSV${h5note} (${data.frame_count} frames)`
             );
-            await _ensureBpSelectPopulated();
           } catch (err) {
             _curStatus(`Failed: ${err.message}`, true);
           } finally {
@@ -5824,72 +5824,348 @@
         });
       }
 
-      // ── Save Annotation ────────────────────────────────────────────
-      if (vaSaveAnnotBtn) {
-        vaSaveAnnotBtn.addEventListener("click", async () => {
-          if (Object.keys(_vaPending).length === 0) {
-            _curStatus("No pending annotation changes. Click on the frame to place markers.", true);
-            return;
+      // ── Batch Add ─────────────────────────────────────────────────
+      if (vaBatchAddBtn) {
+        vaBatchAddBtn.addEventListener("click", async () => {
+          if (!_vaMode || _vaMode === "frames") {
+            _curStatus("No video loaded — open a video first.", true); return;
           }
-          if (!_vaCurFrameName || !_vaCurVideoStem) {
-            _curStatus("Extract the frame first (or use Add to Dataset), then annotate.", true);
-            return;
+          const count = Math.max(1, parseInt(vaBatchCount?.value) || 10);
+          const step  = Math.max(1, parseInt(vaBatchStep?.value)  || 30);
+          vaBatchAddBtn.disabled = true;
+          let added = 0, dupes = 0, errors = 0;
+          const start = _vaCurrentFrame;
+          let lastFrame = start;
+          for (let i = 0; i < count; i++) {
+            const frameNum = start + i * step;
+            if (frameNum >= _vaFrameCount) break;
+            lastFrame = frameNum;
+            _curStatus(`Batch adding… ${i + 1}/${count} (frame ${frameNum})`);
+            // Navigate player to the frame being extracted
+            await _vaLoadFrame(frameNum);
+            try {
+              const res  = await fetch("/dlc/curator/add-to-dataset", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(_videoRequestBody(frameNum)),
+              });
+              const data = await res.json();
+              if (!res.ok) { errors++; continue; }
+              if (data.duplicate) dupes++; else added++;
+            } catch (_) { errors++; }
           }
-          vaSaveAnnotBtn.disabled = true;
-          _curStatus("Saving annotation…");
-          try {
-            const body = {
-              video_stem: _vaCurVideoStem,
-              frame_name: _vaCurFrameName,
-              coords:     { ..._vaPending },
-            };
-            // Supply video info so the backend can auto-extract if PNG is missing
-            Object.assign(body, _videoRequestBody());
-
-            const res  = await fetch("/dlc/curator/save-annotation", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(body),
-            });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-
-            const n = Object.keys(_vaPending).length;
-            _vaPending = {};
-            _updatePendingUI();
-            const h5note = data.h5_updated ? " + H5" : "";
-            _curStatus(`Saved ${n} annotation${n !== 1 ? "s" : ""} to CSV${h5note}`);
-          } catch (err) {
-            _curStatus(`Save failed: ${err.message}`, true);
-          } finally {
-            vaSaveAnnotBtn.disabled = false;
-          }
+          // Ensure player is on the last frame processed
+          if (lastFrame !== _vaCurrentFrame) await _vaLoadFrame(lastFrame);
+          vaBatchAddBtn.disabled = false;
+          const parts = [];
+          if (added) parts.push(`${added} added`);
+          if (dupes) parts.push(`${dupes} duplicate${dupes !== 1 ? "s" : ""}`);
+          if (errors) parts.push(`${errors} error${errors !== 1 ? "s" : ""}`);
+          _curStatus(`Batch done: ${parts.join(", ") || "nothing to add"}.`, errors > 0 && added === 0);
         });
       }
 
-      // ── Clear pending ────────────────────────────────────────────
-      if (vaClearAnnotBtn) {
-        vaClearAnnotBtn.addEventListener("click", () => {
-          _vaPending = {};
-          _updatePendingUI();
-          if (vaAnnotCoords) vaAnnotCoords.textContent = "";
-          _curStatus("Pending annotations cleared.");
-          // Redraw canvas without the temporary markers
-          _vaSyncCanvas();
-          if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(_vaCurrentFrame);
+      // ── Timeline bars ────────────────────────────────────────────
+
+      function _vaBuildCsvBars() {
+        if (!vaCsvBars) return;
+        const total     = Math.max(_vaFrameCount, 1);
+        const hasNote   = _vaCsvRows.some(r => r.note);
+        const hasStatus = _vaCsvRows.some(r => r.frame_line_status && r.frame_line_status !== "0");
+        vaCsvBars.classList.toggle("hidden", !hasNote && !hasStatus);
+
+        // Note bar
+        vaNoteBarWrap?.classList.toggle("hidden", !hasNote);
+        if (hasNote && vaNoteBar) {
+          const vals = [...new Set(_vaCsvRows.filter(r => r.note).map(r => r.note))];
+          const colorMap = {};
+          vals.forEach((v, i) => { colorMap[v] = _vaCsvPalette[i % _vaCsvPalette.length]; });
+          vaNoteBar.innerHTML = "";
+          _vaCsvRows.forEach(row => {
+            if (!row.note) return;
+            if (_vaActiveNoteFilter && row.note !== _vaActiveNoteFilter) return;
+            const fn    = Number(row.frame_number);
+            const color = colorMap[row.note];
+            const seg   = document.createElement("div");
+            seg.className = "fe-timeline-seg";
+            seg.style.cssText = `left:${(fn / total) * 100}%;width:max(0.5%,3px);background:${color}40;border-color:${color};color:${color}`;
+            seg.textContent = row.note;
+            seg.title = `${row.note}  (frame ${fn})`;
+            seg.addEventListener("click", () => _vaLoadFrame(fn));
+            vaNoteBar.appendChild(seg);
+          });
+          // Note filter chips (only if 2+ distinct values)
+          if (vaNoteFilter) {
+            vaNoteFilter.innerHTML = "";
+            if (vals.length >= 2) {
+              vals.forEach(val => {
+                const chip = document.createElement("span");
+                chip.className = "fe-tag-chip" + (_vaActiveNoteFilter === val ? " active" : "");
+                chip.style.setProperty("--chip-color", colorMap[val]);
+                chip.textContent = val;
+                chip.title = _vaActiveNoteFilter === val ? `Show all notes` : `Filter to "${val}"`;
+                chip.addEventListener("click", () => {
+                  _vaActiveNoteFilter = (_vaActiveNoteFilter === val) ? null : val;
+                  _vaBuildCsvBars();
+                });
+                vaNoteFilter.appendChild(chip);
+              });
+            }
+          }
+        }
+
+        // Status bar
+        vaStatusBarWrap?.classList.toggle("hidden", !hasStatus);
+        if (hasStatus && vaStatusBar) {
+          const vals = [...new Set(_vaCsvRows.filter(r => r.frame_line_status && r.frame_line_status !== "0").map(r => r.frame_line_status))];
+          const colorMap = {};
+          vals.forEach((v, i) => { colorMap[v] = _vaCsvPalette[(i + 3) % _vaCsvPalette.length]; });
+          vaStatusBar.innerHTML = "";
+          _vaCsvRows.forEach(row => {
+            if (!row.frame_line_status || row.frame_line_status === "0") return;
+            const fn    = Number(row.frame_number);
+            const color = colorMap[row.frame_line_status];
+            const seg   = document.createElement("div");
+            seg.className = "fe-timeline-seg";
+            seg.style.cssText = `left:${(fn / total) * 100}%;width:max(0.5%,3px);background:${color}40;border-color:${color};color:${color}`;
+            seg.textContent = row.frame_line_status;
+            seg.title = `status ${row.frame_line_status}  (frame ${fn})`;
+            seg.addEventListener("click", () => _vaLoadFrame(fn));
+            vaStatusBar.appendChild(seg);
+          });
+        }
+      }
+
+      // ── Companion CSV helpers ────────────────────────────────────
+
+      function _vaCsvSyncPanel() {
+        if (!_vaCsvPath) return;
+        if (vaAnnotFrameNum) vaAnnotFrameNum.textContent = _vaCurrentFrame;
+        const row = _vaCsvRows.find(r => r.frame_number === _vaCurrentFrame);
+        if (vaNoteInput)   vaNoteInput.value   = row ? (row.note || "") : "";
+        if (vaStatusInput) vaStatusInput.value = row ? (row.frame_line_status ?? "0") : "0";
+      }
+
+      function _vaCsvApplyRows(rows, csvPath) {
+        _vaCsvPath  = csvPath;
+        _vaCsvRows  = rows;
+        const noteVals = [...new Set(rows.map(r => r.note).filter(v => v))];
+        _vaUserTags = [...new Set([..._vaUserTags, ...noteVals])];
+
+        if (vaCsvNone)        vaCsvNone.classList.add("hidden");
+        if (vaCsvLoaded)      vaCsvLoaded.classList.remove("hidden");
+        if (vaCsvPathDisplay) { vaCsvPathDisplay.textContent = csvPath; vaCsvPathDisplay.title = csvPath; }
+        if (vaAnnotPanel)     vaAnnotPanel.classList.remove("hidden");
+
+        _vaBuildCsvBars();
+        _vaCsvRenderTags();
+        _vaCsvSyncPanel();
+      }
+
+      function _vaCsvRenderTags() {
+        if (!vaTagChips) return;
+        vaTagChips.innerHTML = "";
+        _vaUserTags.forEach(tag => {
+          const chip = document.createElement("span");
+          chip.className   = "fe-tag-chip";
+          chip.textContent = tag;
+          chip.style.setProperty("--chip-color", "#6ee7b7");
+          chip.title = `Click to annotate frame ${_vaCurrentFrame} with note "${tag}"`;
+          chip.addEventListener("click", () => _vaCsvApplyTag(tag));
+          vaTagChips.appendChild(chip);
         });
       }
 
-      // Populate bp select when the player section becomes visible (new video opened)
+      async function _vaCsvApplyTag(tag) {
+        if (!_vaCsvPath) return;
+        if (vaNoteInput) vaNoteInput.value = tag;
+        await _vaCsvSaveAnnotation();
+      }
+
+      async function _vaCsvSaveAnnotation() {
+        if (!_vaCsvPath) return;
+        if (vaAnnotSaveStatus) { vaAnnotSaveStatus.textContent = "Saving…"; vaAnnotSaveStatus.className = "fe-extract-status"; }
+        const note   = vaNoteInput   ? vaNoteInput.value.trim()     : "";
+        const status = vaStatusInput ? (vaStatusInput.value || "0") : "0";
+        try {
+          const res  = await fetch("/annotate/save-row", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({
+              csv_path:          _vaCsvPath,
+              frame_number:      _vaCurrentFrame,
+              note,
+              frame_line_status: status,
+              fps:               _vaFps,
+            }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+
+          const isInteresting = note || (status && status !== "0");
+          const idx = _vaCsvRows.findIndex(r => r.frame_number === _vaCurrentFrame);
+          if (isInteresting) {
+            const savedRow = data.row || { frame_number: _vaCurrentFrame, timestamp: (_vaCurrentFrame / _vaFps).toFixed(3), frame_line_status: status, note };
+            if (idx >= 0) _vaCsvRows[idx] = savedRow;
+            else { _vaCsvRows.push(savedRow); _vaCsvRows.sort((a, b) => a.frame_number - b.frame_number); }
+            if (note && !_vaUserTags.includes(note)) { _vaUserTags.push(note); _vaCsvRenderTags(); }
+          } else {
+            if (idx >= 0) _vaCsvRows.splice(idx, 1);
+          }
+
+          _vaBuildCsvBars();
+
+          if (vaAnnotSaveStatus) {
+            vaAnnotSaveStatus.textContent = "Saved";
+            vaAnnotSaveStatus.className   = "fe-extract-status ok";
+            setTimeout(() => { if (vaAnnotSaveStatus?.textContent === "Saved") vaAnnotSaveStatus.textContent = ""; }, 2000);
+          }
+        } catch (err) {
+          if (vaAnnotSaveStatus) { vaAnnotSaveStatus.textContent = `Error: ${err.message}`; vaAnnotSaveStatus.className = "fe-extract-status err"; }
+        }
+      }
+
+      async function _vaCsvLoad(videoPath) {
+        // Reset CSV state
+        _vaCsvPath = null; _vaCsvRows = []; _vaUserTags = []; _vaActiveNoteFilter = null;
+        if (vaCsvNone)        vaCsvNone.classList.remove("hidden");
+        if (vaCsvLoaded)      vaCsvLoaded.classList.add("hidden");
+        if (vaCsvBars)        vaCsvBars.classList.add("hidden");
+        if (vaAnnotPanel)     vaAnnotPanel.classList.add("hidden");
+        if (vaCsvCreateStatus) vaCsvCreateStatus.textContent = "";
+
+        if (!videoPath) return;
+        try {
+          const res  = await fetch(`/annotate/csv?path=${encodeURIComponent(videoPath)}`);
+          const data = await res.json();
+          if (data.csv_exists) {
+            _vaCsvApplyRows(data.rows, data.csv_path);
+          }
+        } catch (_) {}
+      }
+
+      // Hook into frame navigation
+      _vaCurationFrameHook = () => {
+        _vaCsvSyncPanel();
+      };
+
+      // Load companion CSV when player section becomes visible (video opened)
       if (typeof MutationObserver !== "undefined" && vaPlayerSec) {
         new MutationObserver(async () => {
-          if (!vaPlayerSec.classList.contains("hidden")) {
-            await _ensureBpSelectPopulated();
+          if (!vaPlayerSec.classList.contains("hidden") && _vaCurrentVideoPath) {
+            await _vaCsvLoad(_vaCurrentVideoPath);
+          } else if (vaPlayerSec.classList.contains("hidden")) {
+            _vaCsvPath = null; _vaCsvRows = []; _vaUserTags = []; _vaActiveNoteFilter = null;
+            if (vaCsvNone)    vaCsvNone.classList.remove("hidden");
+            if (vaCsvLoaded)  vaCsvLoaded.classList.add("hidden");
+            if (vaCsvBars)    vaCsvBars.classList.add("hidden");
+            if (vaAnnotPanel) vaAnnotPanel.classList.add("hidden");
           }
         }).observe(vaPlayerSec, { attributes: true, attributeFilter: ["class"] });
       }
 
+      // Create CSV
+      if (vaCreateCsvBtn) {
+        vaCreateCsvBtn.addEventListener("click", async () => {
+          if (!_vaCurrentVideoPath) return;
+          if (vaCsvCreateStatus) { vaCsvCreateStatus.textContent = `Creating CSV for ${_vaFrameCount} frames…`; vaCsvCreateStatus.className = "fe-extract-status"; }
+          try {
+            const res  = await fetch("/annotate/create-csv", {
+              method:  "POST",
+              headers: { "Content-Type": "application/json" },
+              body:    JSON.stringify({ video_path: _vaCurrentVideoPath, fps: _vaFps, frame_count: _vaFrameCount }),
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            if (vaCsvCreateStatus) vaCsvCreateStatus.textContent = "";
+            _vaCsvApplyRows(data.rows, data.csv_path);
+          } catch (err) {
+            if (vaCsvCreateStatus) { vaCsvCreateStatus.textContent = `Error: ${err.message}`; vaCsvCreateStatus.className = "fe-extract-status err"; }
+          }
+        });
+      }
+
+      // Save annotation
+      if (vaSaveNoteBtn) {
+        vaSaveNoteBtn.addEventListener("click", _vaCsvSaveAnnotation);
+      }
+
+      // Add new tag
+      if (vaAddTagBtn) {
+        vaAddTagBtn.addEventListener("click", () => {
+          const tag = vaNewTagInput ? vaNewTagInput.value.trim() : "";
+          if (!tag) return;
+          if (!_vaUserTags.includes(tag)) { _vaUserTags.push(tag); _vaCsvRenderTags(); }
+          if (vaNewTagInput) vaNewTagInput.value = "";
+        });
+      }
+      if (vaNewTagInput) {
+        vaNewTagInput.addEventListener("keydown", e => {
+          if (e.key === "Enter") { e.preventDefault(); vaAddTagBtn?.click(); }
+        });
+      }
+
     })(); // end Dataset Curation
+
+    // ── Video Metadata Panel (companion CSV viewer) ────────────────────────
+    (() => {
+      const vaMetaCsvInfo   = document.getElementById("va-meta-csv-info");
+      const vaMetaFrameRow  = document.getElementById("va-meta-frame-row");
+      const vaMetaFrameNote = document.getElementById("va-meta-frame-note");
+      const vaMetaFrameStat = document.getElementById("va-meta-frame-status");
+      if (!vaMetaCsvInfo) return;
+
+      let _metaCsvRows = [];
+
+      function _metaClear() {
+        _metaCsvRows = [];
+        vaMetaCsvInfo.textContent = "No companion CSV";
+        vaMetaFrameRow.style.display = "none";
+      }
+
+      function _metaShowFrame(n) {
+        if (!_metaCsvRows.length) { vaMetaFrameRow.style.display = "none"; return; }
+        const row = _metaCsvRows.find(r => r.frame_number === n);
+        const hasContent = row && (row.note || (row.frame_line_status && row.frame_line_status !== "0"));
+        if (!hasContent) { vaMetaFrameRow.style.display = "none"; return; }
+        vaMetaFrameRow.style.display = "flex";
+        vaMetaFrameNote.textContent = row.note || "—";
+        vaMetaFrameStat.textContent = row.frame_line_status || "0";
+      }
+
+      async function _metaLoad(videoPath) {
+        _metaClear();
+        if (!videoPath) return;
+        try {
+          const res  = await fetch(`/annotate/csv?path=${encodeURIComponent(videoPath)}`);
+          const data = await res.json();
+          if (!data.csv_exists) return;
+          // Store only rows with actual annotations for the frame tooltip
+          _metaCsvRows = (data.rows || []).filter(
+            r => r.note || (r.frame_line_status && r.frame_line_status !== "0"),
+          );
+          const fname = (data.csv_path || "").split("/").pop();
+          vaMetaCsvInfo.textContent = _metaCsvRows.length
+            ? `${fname} · ${_metaCsvRows.length.toLocaleString()} annotated frames`
+            : `${fname} · no annotations yet`;
+        } catch (_) {}
+      }
+
+      // Hook into frame navigation (outer scope variable set above)
+      _vaMetadataFrameHook = n => _metaShowFrame(n);
+
+      // Watch vaPlayerSec visibility to auto-load the companion CSV
+      if (typeof MutationObserver !== "undefined" && vaPlayerSec) {
+        new MutationObserver(async () => {
+          if (!vaPlayerSec.classList.contains("hidden") && _vaCurrentVideoPath) {
+            await _metaLoad(_vaCurrentVideoPath);
+            _metaShowFrame(_vaCurrentFrame);
+          } else if (vaPlayerSec.classList.contains("hidden")) {
+            _metaClear();
+          }
+        }).observe(vaPlayerSec, { attributes: true, attributeFilter: ["class"] });
+      }
+    })(); // end Video Metadata Panel
 
   })();
 
@@ -5939,6 +6215,15 @@
     const anvZoomInput      = document.getElementById("anv-zoom");
     const anvZoomVal        = document.getElementById("anv-zoom-val");
     const anvRefreshCsvBtn  = document.getElementById("anv-refresh-csv-btn");
+    const anvClipSection    = document.getElementById("anv-clip-section");
+    const anvClipStart      = document.getElementById("anv-clip-start");
+    const anvClipFrames     = document.getElementById("anv-clip-frames");
+    const anvClipPostfix    = document.getElementById("anv-clip-postfix");
+    const anvClipOutdir     = document.getElementById("anv-clip-outdir");
+    const anvClipBrowseBtn  = document.getElementById("anv-clip-browse-btn");
+    const anvClipBrowser    = document.getElementById("anv-clip-browser");
+    const anvClipBtn        = document.getElementById("anv-clip-btn");
+    const anvClipStatus     = document.getElementById("anv-clip-status");
 
     // ── State ───────────────────────────────────────────────────
     let _anvZoom          = 100;
@@ -5994,13 +6279,22 @@
       anvStatusBarWrap.classList.add("hidden");
       anvNoteBarWrap.classList.add("hidden");
       anvAnnotationPanel.classList.add("hidden");
+      anvClipSection.classList.add("hidden");
+      anvClipBrowser.classList.add("hidden");
+      anvClipStatus.textContent = ""; anvClipStatus.className = "fe-extract-status";
       anvLoadStatus.textContent = "";
       anvLoadStatus.className = "fe-extract-status";
     }
 
     // ── Frame URL ───────────────────────────────────────────────
     function _anvFrameUrl(n) {
-      return `/annotate/video-frame/${n}?path=${encodeURIComponent(_anvVideoPath)}`;
+      return `/dlc/project/video-frame-ext/${n}?path=${encodeURIComponent(_anvVideoPath)}`;
+    }
+
+    function _anvPrefetch(frames) {
+      frames.forEach(n => {
+        if (n >= 0 && n < _anvFrameCount) new Image().src = _anvFrameUrl(n);
+      });
     }
 
     // ── Frame counter — text node kept separate from the jump input ──
@@ -6014,6 +6308,9 @@
       if (!_anvSeekDragging)
         anvSeek.value = Math.round((_anvCurrentFrame / Math.max(_anvFrameCount - 1, 1)) * 1000);
       _anvSyncAnnotationPanel();
+      // Keep clip-start in sync with the current frame position
+      anvClipStart.value = String(_anvCurrentFrame);
+      anvClipStart.max   = String(Math.max(_anvFrameCount - 1, 0));
     }
 
     // ── Double-click frame counter to jump ───────────────────────
@@ -6068,6 +6365,7 @@
         });
         _anvFitViewer();
         _anvUpdateDisplay();
+        _anvPrefetch([n + 1, n + 2]);
       } catch (err) {
         anvLoadStatus.textContent = `Frame load error: ${err.message}`;
         anvLoadStatus.className   = "fe-extract-status err";
@@ -6319,6 +6617,13 @@
       anvLoadStatus.textContent = "";
       anvPlayerSec.classList.remove("hidden");
       anvCsvSection.classList.remove("hidden");
+      anvClipSection.classList.remove("hidden");
+      anvClipStart.value  = "0";
+      anvClipStart.max    = String(Math.max(_anvFrameCount - 1, 0));
+      anvClipFrames.value = "100";
+      anvClipOutdir.value = "";
+      anvClipPostfix.value = "";
+      anvClipStatus.textContent = "";
       _anvLoadFrame(0);
 
       // Try to load companion CSV
@@ -6469,6 +6774,133 @@
       _anvReset();
       anvBrowser.classList.add("hidden");
     });
+
+    // ── Clip extractor dir browser ───────────────────────────────
+    async function _anvClipBrowseDir(dirPath) {
+      anvClipBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
+      try {
+        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
+        const data = await res.json();
+        if (data.error) {
+          anvClipBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">${data.error}</span>`;
+          return;
+        }
+        anvClipBrowser.innerHTML = "";
+
+        // Header: current path + Up button
+        const header = document.createElement("div");
+        header.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.15rem .2rem .3rem;border-bottom:1px solid var(--border);margin-bottom:.2rem;min-width:0";
+        const pathLabel = document.createElement("span");
+        pathLabel.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.7rem;color:var(--text-dim)";
+        pathLabel.textContent = data.path;
+        pathLabel.title = data.path;
+        header.appendChild(pathLabel);
+        if (data.parent) {
+          const upBtn = document.createElement("button");
+          upBtn.className = "btn-sm";
+          upBtn.style.cssText = "padding:.12rem .45rem;font-size:.7rem;flex-shrink:0";
+          upBtn.textContent = "↑ Up";
+          upBtn.addEventListener("click", e => { e.stopPropagation(); _anvClipBrowseDir(data.parent); });
+          header.appendChild(upBtn);
+        }
+        anvClipBrowser.appendChild(header);
+
+        // "Use this folder" row for the current directory
+        const useRow = document.createElement("div");
+        useRow.style.cssText = "display:flex;align-items:center;gap:.35rem;padding:.18rem .3rem;border-radius:4px;cursor:pointer;font-size:.77rem;color:var(--accent)";
+        useRow.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>Use this folder</span>`;
+        useRow.addEventListener("mouseenter", () => { useRow.style.background = "var(--surface-3,#2a2a2a)"; });
+        useRow.addEventListener("mouseleave", () => { useRow.style.background = ""; });
+        useRow.addEventListener("click", () => {
+          anvClipOutdir.value = data.path;
+          anvClipBrowser.classList.add("hidden");
+        });
+        anvClipBrowser.appendChild(useRow);
+
+        const dirs = data.entries.filter(e => e.type === "dir");
+        if (!dirs.length) {
+          const empty = document.createElement("span");
+          empty.style.cssText = "font-size:.75rem;color:var(--text-dim);padding:.25rem;display:block";
+          empty.textContent = "(no subdirectories)";
+          anvClipBrowser.appendChild(empty);
+        } else {
+          dirs.forEach(e => {
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;align-items:center;gap:.35rem;padding:.18rem .3rem;border-radius:4px;cursor:pointer;font-size:.77rem";
+            const icon = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;color:var(--text-dim)"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+            row.innerHTML = `${icon}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">${e.name}</span>`;
+            row.addEventListener("mouseenter", () => { row.style.background = "var(--surface-3,#2a2a2a)"; });
+            row.addEventListener("mouseleave", () => { row.style.background = ""; });
+            const fullPath = data.path.replace(/\/+$/, "") + "/" + e.name;
+            row.addEventListener("click", () => _anvClipBrowseDir(fullPath));
+            anvClipBrowser.appendChild(row);
+          });
+        }
+      } catch (err) {
+        anvClipBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">Error: ${err.message}</span>`;
+      }
+    }
+
+    anvClipBrowseBtn.addEventListener("click", () => {
+      if (anvClipBrowser.classList.contains("hidden")) {
+        anvClipBrowser.classList.remove("hidden");
+        // Start browser at current video's directory if possible, else user data dir
+        const startPath = _anvVideoPath
+          ? _anvVideoPath.substring(0, _anvVideoPath.lastIndexOf("/")) || "/"
+          : (_userDataDir || "/");
+        _anvClipBrowseDir(startPath);
+      } else {
+        anvClipBrowser.classList.add("hidden");
+      }
+    });
+
+    // ── Crop video ───────────────────────────────────────────────
+    async function _anvCropVideo() {
+      if (!_anvVideoPath) return;
+      const startFrame = parseInt(anvClipStart.value, 10) || 0;
+      const numFrames  = parseInt(anvClipFrames.value, 10) || 0;
+      if (numFrames <= 0) {
+        anvClipStatus.textContent = "Frames must be > 0.";
+        anvClipStatus.className   = "fe-extract-status err";
+        return;
+      }
+
+      anvClipStatus.textContent = "Cropping…";
+      anvClipStatus.className   = "fe-extract-status";
+      anvClipBtn.disabled       = true;
+
+      try {
+        const res  = await fetch("/annotate/crop-video", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            video_path:  _anvVideoPath,
+            start_frame: startFrame,
+            num_frames:  numFrames,
+            output_dir:  anvClipOutdir.value.trim(),
+            postfix:     anvClipPostfix.value.trim(),
+          }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        const fname = data.output_path.split("/").pop();
+        let msg = `Saved: ${fname}`;
+        if (data.csv_path) {
+          msg += ` + CSV`;
+        }
+        anvClipStatus.textContent = msg;
+        anvClipStatus.className   = "fe-extract-status ok";
+        anvClipStatus.title       = data.output_path;
+      } catch (err) {
+        anvClipStatus.textContent = `Error: ${err.message}`;
+        anvClipStatus.className   = "fe-extract-status err";
+      } finally {
+        anvClipBtn.disabled = false;
+      }
+    }
+
+    anvClipBtn.addEventListener("click", _anvCropVideo);
   })();
 
   // ── GPU & Training Monitor ────────────────────────────────────

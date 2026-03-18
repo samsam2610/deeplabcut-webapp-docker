@@ -122,10 +122,17 @@
           </div>
         </div>
 
-        <!-- Folder navigator (breadcrumb + subfolder chips) -->
+        <!-- Folder navigator (address bar + flat list) -->
         <div id="dlc-folder-nav" class="userdata-nav hidden">
-          <div id="dlc-folder-breadcrumb" class="userdata-breadcrumb"></div>
-          <div id="dlc-folder-subfolders" class="userdata-subfolders"></div>
+          <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem">
+            <input id="dlc-browse-breadcrumb" type="text" spellcheck="false" autocomplete="off"
+              placeholder="/paste/a/path/here"
+              style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:5px;padding:.25rem .45rem" />
+            <button class="btn-sm" id="dlc-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
+          </div>
+          <div id="dlc-folder-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
+            <p class="explorer-empty">Loading…</p>
+          </div>
           <div style="display:flex;align-items:center;gap:.5rem;margin-top:.55rem">
             <button class="btn-sm btn-create" id="dlc-select-btn">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -289,6 +296,12 @@
 
         <!-- Browse Server: directory browser -->
         <div id="fe-server-section" class="hidden" style="margin-bottom:.8rem">
+          <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem">
+            <input id="fe-server-breadcrumb" type="text" spellcheck="false" autocomplete="off"
+              placeholder="/paste/a/path/here"
+              style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:5px;padding:.25rem .45rem" />
+            <button class="btn-sm" id="fe-server-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
+          </div>
           <div id="fe-server-browser"
             style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.3rem .4rem;font-size:.77rem;margin-bottom:.4rem">
             <p class="explorer-empty">Loading…</p>
@@ -925,6 +938,7 @@
         <div style="display:flex;gap:.4rem">
           <input type="text" id="av-target-path" placeholder="/path/to/video.mp4  or  /path/to/folder"
             style="flex:1;font-family:var(--mono);font-size:.78rem;padding:.35rem .55rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+          <button class="btn-sm" id="av-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
           <button class="btn-sm" id="av-browse-btn" title="Browse project folders">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             Browse
@@ -938,7 +952,8 @@
         <label style="display:block;font-size:.78rem;color:var(--text-dim);margin-bottom:.3rem">Output folder <span style="opacity:.6">(analysis data + labeled video; default: same as target)</span></label>
         <div style="display:flex;gap:.4rem">
           <input type="text" id="clv-destfolder" placeholder="/path/to/output  (default: same as target)"
-            style="flex:1;font-family:var(--mono);font-size:.78rem;padding:.35rem .55rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" readonly />
+            style="flex:1;font-family:var(--mono);font-size:.78rem;padding:.35rem .55rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+          <button class="btn-sm" id="clv-dest-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
           <button class="btn-sm" id="clv-dest-browse-btn" title="Browse output folder">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             Browse
@@ -1122,6 +1137,18 @@
           </label>
         </div>
 
+        <!-- ── Video Metadata Strip (companion CSV) ─────────── -->
+        <div id="va-metadata-panel" style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.5rem;padding:.32rem .55rem;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;font-size:.76rem">
+          <span style="color:var(--text-dim);flex-shrink:0">CSV</span>
+          <span id="va-meta-csv-info" style="color:var(--text-dim);font-family:var(--mono)">No companion CSV</span>
+          <div id="va-meta-frame-row" style="display:none;margin-left:auto;display:flex;gap:.45rem;align-items:center;font-size:.75rem">
+            <span style="color:var(--text-dim)">Note:</span>
+            <span id="va-meta-frame-note" style="color:var(--text);font-style:italic;max-width:18rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+            <span style="color:var(--text-dim);margin-left:.35rem">Status:</span>
+            <span id="va-meta-frame-status" style="font-family:var(--mono);color:var(--text)"></span>
+          </div>
+        </div>
+
         <!-- ── Kinematic Overlay Panel ──────────────────────── -->
         <div id="va-overlay-panel" style="margin-bottom:.6rem;padding:.5rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
           <!-- Toggle row -->
@@ -1242,32 +1269,87 @@
             </button>
           </div>
 
-          <!-- Row 2: Annotation controls -->
-          <div id="va-annotation-controls" style="border-top:1px solid var(--border);padding-top:.45rem">
-            <div style="margin-bottom:.3rem">
-              <span style="font-size:.76rem;color:var(--text-dim);font-weight:500">Annotate</span>
-              <span style="font-size:.72rem;color:var(--text-dim);margin-left:.4rem">— click the frame to place a marker for the selected body part</span>
+          <!-- Row 2: Batch extraction controls -->
+          <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.4rem">
+            <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">Batch:</label>
+            <input type="number" id="va-batch-count" value="10" min="1" max="500"
+              style="width:4.2rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem"
+              title="Number of frames to add" />
+            <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">every</label>
+            <input type="number" id="va-batch-step" value="30" min="1" max="9999"
+              style="width:4.2rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem"
+              title="Frame step between additions" />
+            <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">frames</label>
+            <button class="btn-sm" id="va-batch-add-btn"
+              title="Add multiple frames to the dataset starting from the current frame">
+              Batch Add
+            </button>
+          </div>
+
+          <!-- Row 3: Companion CSV status -->
+          <div id="va-csv-section" style="border-top:1px solid var(--border);padding-top:.45rem;margin-top:.05rem">
+            <!-- No CSV found -->
+            <div id="va-csv-none">
+              <span style="font-size:.79rem;color:var(--text-dim)">No companion CSV found.</span>
+              <div style="margin-top:.35rem;display:flex;align-items:center;gap:.5rem">
+                <button class="btn-sm btn-create" id="va-create-csv-btn">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  Create CSV
+                </button>
+                <span id="va-csv-create-status" class="fe-extract-status"></span>
+              </div>
             </div>
-            <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem">
-              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">Body part:</label>
-              <select id="va-annotation-bp-select"
-                style="font-size:.76rem;padding:.2rem .4rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);max-width:140px">
-                <option value="">– select –</option>
-              </select>
-              <span id="va-annotation-coords" style="font-family:var(--mono);font-size:.72rem;color:var(--text-dim);min-width:7rem"></span>
+            <!-- CSV loaded -->
+            <div id="va-csv-loaded" class="hidden" style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+              <span style="font-size:.74rem;color:var(--text-dim);flex-shrink:0">CSV:</span>
+              <span id="va-csv-path-display" style="font-family:var(--mono);font-size:.71rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
             </div>
-            <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
-              <button class="btn-sm" id="va-save-annotation-btn"
-                style="background:var(--accent);color:#fff;font-weight:500"
-                title="Write all pending annotations to CollectedData CSV and H5">
-                Save Annotation
+          </div>
+
+          <!-- Row 3b: CSV timeline bars (hidden until annotations exist) -->
+          <div id="va-csv-bars" class="hidden" style="margin-top:.5rem">
+            <div id="va-status-bar-wrap" class="hidden">
+              <div class="fe-csv-bar-label">Status</div>
+              <div id="va-status-bar" class="fe-timeline-bar"></div>
+            </div>
+            <div id="va-note-bar-wrap" class="hidden">
+              <div class="fe-csv-bar-label">Notes</div>
+              <div id="va-note-bar" class="fe-timeline-bar"></div>
+              <div id="va-note-filter" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
+            </div>
+          </div>
+
+          <!-- Row 4: Annotation panel (shown when CSV loaded) -->
+          <div id="va-annot-panel" class="hidden" style="margin-top:.5rem">
+            <div style="font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.4rem">
+              Annotate frame <span id="va-annot-frame-num" style="color:var(--text);font-family:var(--mono)">0</span>
+            </div>
+            <!-- Note + Status + Save -->
+            <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.45rem">
+              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Note</label>
+              <input type="text" id="va-note-input" placeholder="Enter note…"
+                style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .45rem" />
+              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Status</label>
+              <input type="number" id="va-status-input" value="0"
+                style="width:4.5rem;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .4rem" />
+              <button id="va-save-note-btn" class="btn-sm btn-create" style="padding:.28rem .75rem">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Save
               </button>
-              <button class="btn-sm" id="va-clear-annotation-btn"
-                style="opacity:.7"
-                title="Discard all pending annotation changes">
-                Clear
-              </button>
-              <span id="va-pending-count" style="font-size:.73rem;color:var(--text-dim)"></span>
+            </div>
+            <span id="va-annot-save-status" class="fe-extract-status"></span>
+            <!-- Note tags -->
+            <div style="margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--border)">
+              <div style="font-size:.71rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim);margin-bottom:.35rem">Note tags — click to apply</div>
+              <div id="va-tag-chips" class="fe-tag-filter" style="margin-bottom:.35rem;min-height:1.4rem"></div>
+              <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+                <input type="text" id="va-new-tag-input" placeholder="New tag name…"
+                  style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.24rem .4rem" />
+                <button id="va-add-tag-btn" class="btn-sm">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  Add Tag
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1414,6 +1496,53 @@
                 Add Tag
               </button>
             </div>
+          </div>
+        </div>
+
+        <!-- ── Clip extractor ────────────────────────────────────── -->
+        <div id="anv-clip-section" style="margin-top:.75rem;padding:.55rem .7rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
+          <div style="font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim);margin-bottom:.6rem">Clip Extractor</div>
+
+          <!-- Start / Frames / Postfix row -->
+          <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.5rem">
+            <label style="font-size:.78rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Start</label>
+            <input type="number" id="anv-clip-start" value="0" min="0" step="1"
+              style="width:5.5rem;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.28rem .4rem" />
+            <label style="font-size:.78rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Frames</label>
+            <input type="number" id="anv-clip-frames" value="100" min="1" step="1"
+              style="width:5.5rem;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.28rem .4rem" />
+            <label style="font-size:.78rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Postfix</label>
+            <input type="text" id="anv-clip-postfix" placeholder="optional…"
+              style="flex:1;min-width:80px;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.28rem .45rem" />
+          </div>
+
+          <!-- Output folder row -->
+          <label style="display:block;font-size:.78rem;color:var(--text-dim);margin-bottom:.3rem">
+            Output folder
+            <span style="font-size:.72rem">(blank = auto-named subfolder next to video)</span>
+          </label>
+          <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.35rem">
+            <input type="text" id="anv-clip-outdir" placeholder="leave blank for auto…"
+              spellcheck="false" autocorrect="off" autocapitalize="off"
+              style="flex:1;min-width:0;font-family:var(--mono);font-size:.78rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.3rem .5rem" />
+            <button id="anv-clip-browse-btn" class="btn-sm btn-server-pick" title="Browse for output folder">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              Browse
+            </button>
+          </div>
+
+          <!-- Dir browser for output folder (dirs only) -->
+          <div id="anv-clip-browser" class="hidden"
+            style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.3rem .4rem;font-size:.77rem;margin-bottom:.35rem">
+          </div>
+
+          <!-- Action row -->
+          <div style="display:flex;align-items:center;gap:.6rem;margin-top:.45rem">
+            <button id="anv-clip-btn" class="btn-sm btn-create">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+              Crop Video
+            </button>
+            <span id="anv-clip-status" class="fe-extract-status"></span>
           </div>
         </div>
       </div>
