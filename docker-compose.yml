@@ -47,6 +47,8 @@ services:
       - ./src/routes:/app/routes
       - ./src/templates:/app/templates
       - ./src/static:/app/static
+      - ./src/dlc_tapnet_tracker.py:/app/dlc_tapnet_tracker.py
+      - ./src/dlc_dataset_curator.py:/app/dlc_dataset_curator.py
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0

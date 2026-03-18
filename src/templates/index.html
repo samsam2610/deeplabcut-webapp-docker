@@ -1219,6 +1219,60 @@
         <input type="range" id="va-seek" class="fe-seek" min="0" max="1000" value="0" step="1" />
 
         <span id="va-status" class="fe-extract-status"></span>
+
+        <!-- ── Dataset Curation Panel ──────────────────────────────── -->
+        <div id="va-curation-panel" style="margin-top:.65rem;padding:.5rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
+
+          <!-- Header -->
+          <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.45rem">
+            <span style="font-size:.8rem;font-weight:600;color:var(--text)">Dataset Curation</span>
+            <span id="va-curation-status" class="fe-extract-status" style="font-size:.73rem;flex:1;min-width:0"></span>
+          </div>
+
+          <!-- Row 1: Quick-extract + Add to Dataset -->
+          <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.4rem">
+            <button class="btn-sm" id="va-extract-frame-btn"
+              title="Save the raw video frame as a lossless PNG in labeled-data/ (no CSV entry)">
+              Extract Frame
+            </button>
+            <button class="btn-sm" id="va-add-to-dataset-btn"
+              style="background:var(--accent);color:#fff;font-weight:500"
+              title="Extract frame + add blank entry to CollectedData CSV/H5">
+              + Add to Dataset
+            </button>
+          </div>
+
+          <!-- Row 2: Annotation controls -->
+          <div id="va-annotation-controls" style="border-top:1px solid var(--border);padding-top:.45rem">
+            <div style="margin-bottom:.3rem">
+              <span style="font-size:.76rem;color:var(--text-dim);font-weight:500">Annotate</span>
+              <span style="font-size:.72rem;color:var(--text-dim);margin-left:.4rem">— click the frame to place a marker for the selected body part</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem">
+              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">Body part:</label>
+              <select id="va-annotation-bp-select"
+                style="font-size:.76rem;padding:.2rem .4rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);max-width:140px">
+                <option value="">– select –</option>
+              </select>
+              <span id="va-annotation-coords" style="font-family:var(--mono);font-size:.72rem;color:var(--text-dim);min-width:7rem"></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+              <button class="btn-sm" id="va-save-annotation-btn"
+                style="background:var(--accent);color:#fff;font-weight:500"
+                title="Write all pending annotations to CollectedData CSV and H5">
+                Save Annotation
+              </button>
+              <button class="btn-sm" id="va-clear-annotation-btn"
+                style="opacity:.7"
+                title="Discard all pending annotation changes">
+                Clear
+              </button>
+              <span id="va-pending-count" style="font-size:.73rem;color:var(--text-dim)"></span>
+            </div>
+          </div>
+        </div>
+        <!-- ── end Dataset Curation Panel ──────────────────────────── -->
+
       </div>
     </section>
 

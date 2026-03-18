@@ -145,6 +145,7 @@ from dlc.training import bp as _dlc_training_bp
 from dlc.inference import bp as _dlc_inference_bp
 from dlc.monitoring import bp as _dlc_monitoring_bp
 from dlc.viewer import bp as _dlc_viewer_bp
+from dlc.curator import bp as _dlc_curator_bp
 
 app.register_blueprint(_dlc_project_bp)
 app.register_blueprint(_dlc_config_bp)
@@ -154,6 +155,7 @@ app.register_blueprint(_dlc_training_bp)
 app.register_blueprint(_dlc_inference_bp)
 app.register_blueprint(_dlc_monitoring_bp)
 app.register_blueprint(_dlc_viewer_bp)
+app.register_blueprint(_dlc_curator_bp)
 
 # ── Register Anipose Blueprints ───────────────────────────────────
 from anipose.session import bp as _anipose_session_bp

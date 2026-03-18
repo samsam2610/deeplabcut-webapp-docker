@@ -5617,6 +5617,280 @@
     });
     // Make the card focusable so keydown fires when clicked inside it
     if (!vaCard.hasAttribute("tabindex")) vaCard.setAttribute("tabindex", "-1");
+
+    // ── Dataset Curation ──────────────────────────────────────────
+    (() => {
+      const vaCurationPanel    = document.getElementById("va-curation-panel");
+      const vaCurationStatus   = document.getElementById("va-curation-status");
+      const vaExtractFrameBtn  = document.getElementById("va-extract-frame-btn");
+      const vaAddToDatasetBtn  = document.getElementById("va-add-to-dataset-btn");
+      const vaAnnotBpSelect    = document.getElementById("va-annotation-bp-select");
+      const vaAnnotCoords      = document.getElementById("va-annotation-coords");
+      const vaSaveAnnotBtn     = document.getElementById("va-save-annotation-btn");
+      const vaClearAnnotBtn    = document.getElementById("va-clear-annotation-btn");
+      const vaPendingCount     = document.getElementById("va-pending-count");
+
+      // Per-frame curation state
+      let _vaCurVideoStem  = null;    // video_stem of the last extracted frame
+      let _vaCurFrameName  = null;    // e.g. "img0002-00150.png"
+      let _vaPending       = {};      // {bp: [x, y]}  pending annotation changes
+      let _vaAnnotBp       = null;    // currently selected body part for click-to-place
+
+      // ── Status helpers ──────────────────────────────────────────
+      let _curationMsgTimer = null;
+      function _curStatus(msg, isErr) {
+        if (!vaCurationStatus) return;
+        vaCurationStatus.textContent  = msg;
+        vaCurationStatus.className    = "fe-extract-status" + (isErr ? " err" : "");
+        if (_curationMsgTimer) clearTimeout(_curationMsgTimer);
+        if (msg && !isErr) {
+          _curationMsgTimer = setTimeout(() => {
+            vaCurationStatus.textContent = "";
+          }, 4000);
+        }
+      }
+
+      function _updatePendingUI() {
+        const n = Object.keys(_vaPending).length;
+        if (vaPendingCount) {
+          vaPendingCount.textContent = n > 0 ? `${n} pending change${n !== 1 ? "s" : ""}` : "";
+        }
+      }
+
+      // ── Populate body-parts dropdown ────────────────────────────
+      function _populateBpSelect(parts) {
+        if (!vaAnnotBpSelect) return;
+        const prev = vaAnnotBpSelect.value;
+        vaAnnotBpSelect.innerHTML = '<option value="">– select –</option>';
+        parts.forEach(bp => {
+          const opt  = document.createElement("option");
+          opt.value  = bp;
+          opt.textContent = bp;
+          if (bp === prev) opt.selected = true;
+          vaAnnotBpSelect.appendChild(opt);
+        });
+      }
+
+      // Populate from H5 body-parts list if available, otherwise fetch from config
+      async function _ensureBpSelectPopulated() {
+        if (_vaAllBodyParts && _vaAllBodyParts.length > 0) {
+          _populateBpSelect(_vaAllBodyParts);
+          return;
+        }
+        try {
+          const res  = await fetch("/dlc/project/bodyparts");
+          const data = await res.json();
+          if (data.bodyparts && data.bodyparts.length > 0) {
+            _populateBpSelect(data.bodyparts);
+          }
+        } catch (_) {}
+      }
+
+      // Keep the bp select in sync when the H5 bodyparts panel changes
+      const _bpObserver = new MutationObserver(() => {
+        if (_vaAllBodyParts && _vaAllBodyParts.length > 0)
+          _populateBpSelect(_vaAllBodyParts);
+      });
+      const _bpContainer = document.getElementById("va-overlay-bodyparts");
+      if (_bpContainer) _bpObserver.observe(_bpContainer, { childList: true });
+
+      // ── Body part selection → enable canvas annotation ──────────
+      if (vaAnnotBpSelect) {
+        vaAnnotBpSelect.addEventListener("change", () => {
+          _vaAnnotBp = vaAnnotBpSelect.value || null;
+          if (vaOverlayCanvas) {
+            vaOverlayCanvas.style.pointerEvents = _vaAnnotBp ? "all" : "none";
+            vaOverlayCanvas.style.cursor        = _vaAnnotBp ? "crosshair" : "";
+          }
+          if (vaAnnotCoords) vaAnnotCoords.textContent = "";
+        });
+      }
+
+      // ── Canvas click → place annotation marker ─────────────────
+      if (vaOverlayCanvas) {
+        vaOverlayCanvas.addEventListener("click", (e) => {
+          if (!_vaAnnotBp) return;
+
+          // Convert CSS canvas coords → original video pixel coords
+          const rect   = vaFrameImg.getBoundingClientRect();
+          const x_norm = (e.clientX - rect.left)  / rect.width;
+          const y_norm = (e.clientY - rect.top)   / rect.height;
+          const vx = Math.round(x_norm * (vaFrameImg.naturalWidth  || rect.width));
+          const vy = Math.round(y_norm * (vaFrameImg.naturalHeight || rect.height));
+
+          _vaPending[_vaAnnotBp] = [vx, vy];
+          if (vaAnnotCoords) vaAnnotCoords.textContent = `x=${vx}  y=${vy}`;
+          _updatePendingUI();
+
+          // Draw a temporary crosshair on the annotation canvas
+          if (vaOverlayCtx) {
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+            const cw = vaOverlayCanvas.width;
+            const ch = vaOverlayCanvas.height;
+            // Scale CSS coords to canvas pixel coords
+            const px = cx * (cw / rect.width);
+            const py = cy * (ch / rect.height);
+            vaOverlayCtx.save();
+            vaOverlayCtx.strokeStyle = "#ffea00";
+            vaOverlayCtx.lineWidth   = 2;
+            vaOverlayCtx.beginPath();
+            vaOverlayCtx.arc(px, py, 7, 0, Math.PI * 2);
+            vaOverlayCtx.stroke();
+            vaOverlayCtx.beginPath();
+            vaOverlayCtx.moveTo(px - 11, py); vaOverlayCtx.lineTo(px + 11, py);
+            vaOverlayCtx.moveTo(px, py - 11); vaOverlayCtx.lineTo(px, py + 11);
+            vaOverlayCtx.stroke();
+            vaOverlayCtx.restore();
+          }
+        });
+      }
+
+      // ── Build request body helper ───────────────────────────────
+      function _videoRequestBody() {
+        const body = { frame_number: _vaCurrentFrame };
+        if (_vaMode === "browse-video" && _vaCurrentVideoPath) {
+          body.video_path = _vaCurrentVideoPath;
+        } else if (_vaMode === "video" && _vaVideoName) {
+          body.video_name = _vaVideoName;
+        }
+        return body;
+      }
+
+      // ── Extract Frame ────────────────────────────────────────────
+      if (vaExtractFrameBtn) {
+        vaExtractFrameBtn.addEventListener("click", async () => {
+          if (!_vaMode || _vaMode === "frames") {
+            _curStatus("No video loaded — open a video first.", true); return;
+          }
+          vaExtractFrameBtn.disabled = true;
+          _curStatus("Extracting…");
+          try {
+            const res  = await fetch("/dlc/curator/extract-frame", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(_videoRequestBody()),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+            _vaCurVideoStem = data.video_stem;
+            _vaCurFrameName = data.saved;
+            _curStatus(
+              data.duplicate
+                ? `Already extracted: ${data.saved}`
+                : `Saved ${data.saved} (${data.folder}, #${data.frame_count})`
+            );
+            await _ensureBpSelectPopulated();
+          } catch (err) {
+            _curStatus(`Extract failed: ${err.message}`, true);
+          } finally {
+            vaExtractFrameBtn.disabled = false;
+          }
+        });
+      }
+
+      // ── Add to Dataset ────────────────────────────────────────────
+      if (vaAddToDatasetBtn) {
+        vaAddToDatasetBtn.addEventListener("click", async () => {
+          if (!_vaMode || _vaMode === "frames") {
+            _curStatus("No video loaded — open a video first.", true); return;
+          }
+          vaAddToDatasetBtn.disabled = true;
+          _curStatus("Adding to dataset…");
+          try {
+            const res  = await fetch("/dlc/curator/add-to-dataset", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(_videoRequestBody()),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+            _vaCurVideoStem = data.video_stem;
+            _vaCurFrameName = data.saved;
+            const h5note = data.h5_updated ? " + H5" : "";
+            _curStatus(
+              data.duplicate
+                ? `Already in dataset: ${data.saved}`
+                : `Added ${data.saved} to CSV${h5note} (${data.frame_count} frames)`
+            );
+            await _ensureBpSelectPopulated();
+          } catch (err) {
+            _curStatus(`Failed: ${err.message}`, true);
+          } finally {
+            vaAddToDatasetBtn.disabled = false;
+          }
+        });
+      }
+
+      // ── Save Annotation ────────────────────────────────────────────
+      if (vaSaveAnnotBtn) {
+        vaSaveAnnotBtn.addEventListener("click", async () => {
+          if (Object.keys(_vaPending).length === 0) {
+            _curStatus("No pending annotation changes. Click on the frame to place markers.", true);
+            return;
+          }
+          if (!_vaCurFrameName || !_vaCurVideoStem) {
+            _curStatus("Extract the frame first (or use Add to Dataset), then annotate.", true);
+            return;
+          }
+          vaSaveAnnotBtn.disabled = true;
+          _curStatus("Saving annotation…");
+          try {
+            const body = {
+              video_stem: _vaCurVideoStem,
+              frame_name: _vaCurFrameName,
+              coords:     { ..._vaPending },
+            };
+            // Supply video info so the backend can auto-extract if PNG is missing
+            Object.assign(body, _videoRequestBody());
+
+            const res  = await fetch("/dlc/curator/save-annotation", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+            const n = Object.keys(_vaPending).length;
+            _vaPending = {};
+            _updatePendingUI();
+            const h5note = data.h5_updated ? " + H5" : "";
+            _curStatus(`Saved ${n} annotation${n !== 1 ? "s" : ""} to CSV${h5note}`);
+          } catch (err) {
+            _curStatus(`Save failed: ${err.message}`, true);
+          } finally {
+            vaSaveAnnotBtn.disabled = false;
+          }
+        });
+      }
+
+      // ── Clear pending ────────────────────────────────────────────
+      if (vaClearAnnotBtn) {
+        vaClearAnnotBtn.addEventListener("click", () => {
+          _vaPending = {};
+          _updatePendingUI();
+          if (vaAnnotCoords) vaAnnotCoords.textContent = "";
+          _curStatus("Pending annotations cleared.");
+          // Redraw canvas without the temporary markers
+          _vaSyncCanvas();
+          if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(_vaCurrentFrame);
+        });
+      }
+
+      // Populate bp select when the player section becomes visible (new video opened)
+      if (typeof MutationObserver !== "undefined" && vaPlayerSec) {
+        new MutationObserver(async () => {
+          if (!vaPlayerSec.classList.contains("hidden")) {
+            await _ensureBpSelectPopulated();
+          }
+        }).observe(vaPlayerSec, { attributes: true, attributeFilter: ["class"] });
+      }
+
+    })(); // end Dataset Curation
+
   })();
 
   // ── Video Annotator ───────────────────────────────────────────
