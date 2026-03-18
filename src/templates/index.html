@@ -1189,15 +1189,25 @@
 
         <!-- Controls row -->
         <div class="fe-controls">
-          <button id="va-btn-play" class="btn-sm fe-ctrl-btn" title="Play / Pause">
+          <button id="va-btn-play" class="btn-sm fe-ctrl-btn" title="Play / Pause (Space)">
             <svg id="va-play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             <svg id="va-pause-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" class="hidden"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
           </button>
-          <button id="va-btn-prev" class="btn-sm fe-ctrl-btn" title="Previous frame (&#8592;)">
+          <button id="va-btn-prev" class="btn-sm fe-ctrl-btn" title="Previous frame (←)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/><line x1="9" y1="6" x2="9" y2="18"/></svg>
           </button>
-          <button id="va-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (&#8594;)">
+          <button id="va-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (→)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
+          </button>
+          <!-- Multi-frame skip -->
+          <button id="va-btn-skip-back" class="btn-sm fe-ctrl-btn" title="Skip backward N frames (Ctrl+←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="19 18 13 12 19 6"/><polyline points="13 18 7 12 13 6"/></svg>
+          </button>
+          <input type="number" id="va-skip-n" value="10" min="1" max="9999" step="1"
+            title="Frames to skip (Ctrl+← / Ctrl+→)"
+            style="width:46px;text-align:center;font-family:var(--mono);font-size:.78rem;padding:.18rem .3rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+          <button id="va-btn-skip-fwd" class="btn-sm fe-ctrl-btn" title="Skip forward N frames (Ctrl+→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="5 18 11 12 5 6"/><polyline points="11 18 17 12 11 6"/></svg>
           </button>
           <span class="fe-frame-counter" id="va-frame-counter">Frame 0 / 0</span>
           <span class="fe-time-display" id="va-time-display">0.000 s</span>

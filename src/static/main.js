@@ -4846,6 +4846,9 @@
     const vaPauseIcon    = document.getElementById("va-pause-icon");
     const vaBtnPrev      = document.getElementById("va-btn-prev");
     const vaBtnNext      = document.getElementById("va-btn-next");
+    const vaBtnSkipBack  = document.getElementById("va-btn-skip-back");
+    const vaBtnSkipFwd   = document.getElementById("va-btn-skip-fwd");
+    const vaSkipN        = document.getElementById("va-skip-n");
     const vaFrameCounter = document.getElementById("va-frame-counter");
     const vaTimeDisplay  = document.getElementById("va-time-display");
     const vaSeek         = document.getElementById("va-seek");
@@ -5530,6 +5533,12 @@
     vaBtnPrev.addEventListener("click", () => _vaLoadFrame(_vaCurrentFrame - 1));
     vaBtnNext.addEventListener("click", () => _vaLoadFrame(_vaCurrentFrame + 1));
 
+    function _vaSkipN() { return Math.max(1, parseInt(vaSkipN?.value, 10) || 10); }
+    vaBtnSkipBack?.addEventListener("click", () => _vaLoadFrame(_vaCurrentFrame - _vaSkipN()));
+    vaBtnSkipFwd?.addEventListener("click",  () => _vaLoadFrame(_vaCurrentFrame + _vaSkipN()));
+    // Prevent arrow keys from changing the skip-N field from triggering frame nav
+    vaSkipN?.addEventListener("keydown", e => e.stopPropagation());
+
     vaSeek.addEventListener("mousedown",  () => { _vaSeekDragging = true; });
     vaSeek.addEventListener("touchstart", () => { _vaSeekDragging = true; });
     vaSeek.addEventListener("input", () => {
@@ -5553,12 +5562,34 @@
       _vaReset();
     });
 
-    // Arrow key navigation when player is active
+    // ── Keyboard navigation ───────────────────────────────────
+    // Scoped to vaCard so it doesn't fire when another card has focus.
     vaCard.addEventListener("keydown", (e) => {
       if (vaPlayerSec.classList.contains("hidden")) return;
-      if (e.key === "ArrowLeft")  { e.preventDefault(); _vaLoadFrame(_vaCurrentFrame - 1); }
-      if (e.key === "ArrowRight") { e.preventDefault(); _vaLoadFrame(_vaCurrentFrame + 1); }
+      // Don't intercept when typing in any input except the skip-N field
+      if (e.target.tagName === "INPUT" && e.target !== vaSkipN) return;
+      if (e.target.tagName === "TEXTAREA") return;
+
+      if (e.key === " ") {
+        e.preventDefault();
+        vaBtnPlay.click();
+        return;
+      }
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        e.ctrlKey ? _vaLoadFrame(_vaCurrentFrame - _vaSkipN())
+                  : _vaLoadFrame(_vaCurrentFrame - 1);
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        e.ctrlKey ? _vaLoadFrame(_vaCurrentFrame + _vaSkipN())
+                  : _vaLoadFrame(_vaCurrentFrame + 1);
+        return;
+      }
     });
+    // Make the card focusable so keydown fires when clicked inside it
+    if (!vaCard.hasAttribute("tabindex")) vaCard.setAttribute("tabindex", "-1");
   })();
 
   // ── Video Annotator ───────────────────────────────────────────
