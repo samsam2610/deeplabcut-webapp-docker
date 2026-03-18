@@ -1585,6 +1585,9 @@
     const feSeek          = document.getElementById("fe-seek");
     const feBtnExtract    = document.getElementById("fe-btn-extract");
     const feBtnStopExtract = document.getElementById("fe-btn-stop-extract");
+    const feBatchCountInput = document.getElementById("fe-batch-count");
+    const feBatchStepInput  = document.getElementById("fe-batch-step");
+    const feBtnBatchExtract = document.getElementById("fe-btn-batch-extract");
     const feExtractDialog = document.getElementById("fe-extract-dialog");
     const feDialogMsg     = document.getElementById("fe-dialog-msg");
     const feDialogConfirm = document.getElementById("fe-dialog-confirm");
@@ -2034,10 +2037,11 @@
       }
     }
 
-    async function _feSaveFrames(count) {
+    async function _feSaveFrames(count, step = 1) {
       if (!_feCurrentVideo) return;
       _feStopExtraction = false;
       feBtnExtract.disabled = true;
+      feBtnBatchExtract.disabled = true;
       if (count > 1) {
         feBtnStopExtract.classList.remove("hidden");
         feExtractStatus.textContent = `Saving ${count} frames…`;
@@ -2048,7 +2052,7 @@
       try {
         for (let i = 0; i < count; i++) {
           if (_feStopExtraction) break;
-          if (i > 0) await _feLoadFrame(_feCurrentFrame + 1);
+          if (i > 0) await _feLoadFrame(_feCurrentFrame + step);
           if (_feStopExtraction) break;
           const base64 = await _feCaptureCurrent();
           if (!base64) break;
@@ -2084,6 +2088,7 @@
         feExtractStatus.className = "fe-extract-status err";
       } finally {
         feBtnExtract.disabled = false;
+        feBtnBatchExtract.disabled = false;
         feBtnStopExtract.classList.add("hidden");
         feBtnStopExtract.disabled = false;
         _feStopExtraction = false;
@@ -2251,6 +2256,21 @@
 
     feBtnExtract.addEventListener("click", () => _feSaveFrames(1));
 
+    feBtnBatchExtract.addEventListener("click", () => {
+      if (!_feCurrentVideo) return;
+      const requested = Math.max(2, parseInt(feBatchCountInput.value) || 10);
+      const step      = Math.max(1, parseInt(feBatchStepInput.value)  || 1);
+      // max frames reachable from current position with this step
+      const maxCount  = Math.floor((_feFrameCount - 1 - _feCurrentFrame) / step) + 1;
+      const count     = Math.min(requested, maxCount);
+      if (count < 1) return;
+      if (count < requested) {
+        feExtractStatus.textContent = `Near end — extracting ${count} frame${count !== 1 ? "s" : ""} (clamped from ${requested})`;
+        feExtractStatus.className = "fe-extract-status";
+      }
+      _feSaveFrames(count, step);
+    });
+
     feBtnStopExtract.addEventListener("click", () => { _feStopExtraction = true; feBtnStopExtract.disabled = true; });
 
     // ── Window-extract confirmation dialog ───────────────────────
@@ -2384,6 +2404,31 @@
     const flMarkerSizeVal   = document.getElementById("fl-marker-size-val");
     const flShowNamesInput  = document.getElementById("fl-show-names");
 
+    // ── TAPNet propagation elements ──────────────────────────────
+    const flTapCheckbox      = document.getElementById("fl-tap-checkbox");
+    const flTapOpts          = document.getElementById("fl-tap-opts");
+    const flTapCkpt          = document.getElementById("fl-tap-ckpt");
+    const flTapAnchor        = document.getElementById("fl-tap-anchor");
+    const flTapCheckBtn      = document.getElementById("fl-tap-check-btn");
+    const flTapCheckStatus   = document.getElementById("fl-tap-check-status");
+    const flTapSeqInfo       = document.getElementById("fl-tap-seq-info");
+    const flTapOverwrite     = document.getElementById("fl-tap-overwrite");
+    const flTapRunBtn        = document.getElementById("fl-tap-run-btn");
+    const flTapStopBtn       = document.getElementById("fl-tap-stop-btn");
+    const flTapRerunBtn      = document.getElementById("fl-tap-rerun-btn");
+    const flTapConfirmedCount= document.getElementById("fl-tap-confirmed-count");
+    const flTapStatus        = document.getElementById("fl-tap-status");
+    const flTapProgress      = document.getElementById("fl-tap-progress");
+    const flTapTaskId        = document.getElementById("fl-tap-task-id");
+    const flTapProgressBar   = document.getElementById("fl-tap-progress-bar");
+    const flTapProgressStage = document.getElementById("fl-tap-progress-stage");
+    const flTapProgressPct   = document.getElementById("fl-tap-progress-pct");
+    const flTapLogOutput     = document.getElementById("fl-tap-log-output");
+    // Per-frame confirm elements
+    const flTapFrameBadge    = document.getElementById("fl-tap-frame-badge");
+    const flTapConfirmBtn    = document.getElementById("fl-tap-confirm-btn");
+    const flTapConfirmLabel  = document.getElementById("fl-tap-confirm-label");
+
     // ── Machine-labeling elements ────────────────────────────────
     const flMlCheckbox     = document.getElementById("fl-ml-checkbox");
     const flMlOpts         = document.getElementById("fl-ml-opts");
@@ -2442,22 +2487,26 @@
 
     // ── Machine labeling: load snapshots ────────────────────────
     async function _flMlLoadSnapshots() {
-      const shuffle = flMlShuffle.value || "1";
       try {
-        const res  = await fetch(`/dlc/project/snapshots?shuffle=${encodeURIComponent(shuffle)}`);
+        // No shuffle filter — show all shuffles so models from any shuffle are visible.
+        // The backend will auto-correct the shuffle when snapshot_path is provided.
+        const res  = await fetch("/dlc/project/snapshots");
         const data = await res.json();
         if (data.error) return;
         flMlSnapshot.innerHTML = "";
         const latestOpt = document.createElement("option");
-        latestOpt.value = "-1";
-        latestOpt.textContent = data.latest_label
-          ? `Latest — ${data.latest_label}${data.latest_iteration != null ? "  ·  iter " + data.latest_iteration.toLocaleString() : ""}`
-          : "Latest (from config)";
+        // Use the actual latest snapshot path (not -1) so shuffle is auto-derived
+        latestOpt.value = data.latest_rel_path || "-1";
+        const latestSuffix = data.latest_label
+          ? ` — ${data.latest_label}${data.latest_iteration != null ? "  ·  iter " + data.latest_iteration.toLocaleString() : ""}${data.latest_shuffle != null ? "  ·  sh" + data.latest_shuffle : ""}`
+          : "";
+        latestOpt.textContent = `Latest${latestSuffix}`;
         flMlSnapshot.appendChild(latestOpt);
         (data.snapshots || []).forEach(s => {
           const opt = document.createElement("option");
           opt.value = s.rel_path;
-          opt.textContent = `${s.label}${s.iteration != null ? "  ·  iter " + s.iteration.toLocaleString() : ""}`;
+          const shuffleSuffix = s.shuffle != null ? `  ·  sh${s.shuffle}` : "";
+          opt.textContent = `${s.label}${s.iteration != null ? "  ·  iter " + s.iteration.toLocaleString() : ""}${shuffleSuffix}`;
           flMlSnapshot.appendChild(opt);
         });
       } catch (err) {
@@ -2636,6 +2685,292 @@
       }
     });
 
+    // ══════════════════════════════════════════════════════════════
+    // TAPNet propagation
+    // ══════════════════════════════════════════════════════════════
+    let _flTapPollTimer   = null;
+    let _flTapActiveTask  = null;
+    let _flTapConfirmed   = new Set();   // confirmed anchor frame names
+    let _flTapnetFrames   = new Set();   // frames labeled by TAPNet
+
+    // Load confirmed anchors + tapnet frames from server for current stem
+    async function _flTapLoadSidecars() {
+      if (!_flVideoStem) return;
+      try {
+        const res  = await fetch(`/dlc/project/tapnet-confirmed?video_stem=${encodeURIComponent(_flVideoStem)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        _flTapConfirmed  = new Set(data.confirmed     || []);
+        _flTapnetFrames  = new Set(data.tapnet_frames || []);
+      } catch (_) { /* non-critical */ }
+      _flTapUpdateFrameStatus();
+      _flTapUpdateConfirmedCount();
+    }
+
+    // Update the per-frame badge + confirm button for the current frame
+    function _flTapUpdateFrameStatus() {
+      const fname = _flFrames[_flFrameIdx];
+      if (!fname || !flTapCheckbox.checked) {
+        flTapFrameBadge.classList.add("hidden");
+        flTapConfirmBtn.classList.add("hidden");
+        return;
+      }
+      flTapConfirmBtn.classList.remove("hidden");
+      const isConfirmed = _flTapConfirmed.has(fname);
+      const isTapnet    = _flTapnetFrames.has(fname);
+      flTapConfirmLabel.textContent = isConfirmed ? "✓ Confirmed anchor" : "Confirm as anchor";
+      flTapConfirmBtn.style.background = isConfirmed ? "var(--accent)" : "";
+      flTapConfirmBtn.style.color      = isConfirmed ? "#fff" : "";
+      if (isConfirmed) {
+        flTapFrameBadge.textContent = "Anchor";
+        flTapFrameBadge.style.color = "var(--accent)";
+        flTapFrameBadge.style.borderColor = "var(--accent)";
+        flTapFrameBadge.classList.remove("hidden");
+      } else if (isTapnet) {
+        flTapFrameBadge.textContent = "TAPNet";
+        flTapFrameBadge.style.color = "var(--text-dim)";
+        flTapFrameBadge.style.borderColor = "var(--border)";
+        flTapFrameBadge.classList.remove("hidden");
+      } else {
+        flTapFrameBadge.classList.add("hidden");
+      }
+    }
+
+    // Update the confirmed-count display and rerun button visibility
+    function _flTapUpdateConfirmedCount() {
+      const n = _flTapConfirmed.size;
+      if (n > 0 && flTapCheckbox.checked) {
+        flTapConfirmedCount.textContent = `${n} confirmed anchor${n === 1 ? "" : "s"}`;
+        flTapConfirmedCount.classList.remove("hidden");
+        flTapRerunBtn.classList.remove("hidden");
+      } else {
+        flTapConfirmedCount.classList.add("hidden");
+        flTapRerunBtn.classList.add("hidden");
+      }
+    }
+
+    flTapCheckbox.addEventListener("change", () => {
+      flTapOpts.classList.toggle("hidden", !flTapCheckbox.checked);
+      _flTapUpdateFrameStatus();
+      _flTapUpdateConfirmedCount();
+      if (flTapCheckbox.checked && _flVideoStem) _flTapLoadSidecars();
+    });
+
+    // Confirm / unconfirm current frame as anchor
+    flTapConfirmBtn.addEventListener("click", async () => {
+      const fname = _flFrames[_flFrameIdx];
+      if (!fname || !_flVideoStem) return;
+      try {
+        const res  = await fetch("/dlc/project/tapnet-confirm-frame", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ video_stem: _flVideoStem, frame_name: fname }),
+        });
+        const data = await res.json();
+        if (data.error) { console.error("confirm-frame:", data.error); return; }
+        if (data.confirmed) _flTapConfirmed.add(fname);
+        else                _flTapConfirmed.delete(fname);
+        _flTapUpdateFrameStatus();
+        _flTapUpdateConfirmedCount();
+      } catch (err) {
+        console.error("confirm-frame error:", err);
+      }
+    });
+
+    // Re-run with confirmed anchors
+    flTapRerunBtn.addEventListener("click", async () => {
+      if (!_flVideoStem) {
+        flTapStatus.textContent = "Select a labeled-data folder first.";
+        flTapStatus.className   = "fe-extract-status err";
+        return;
+      }
+      const ckpt = flTapCkpt.value.trim();
+      if (!ckpt) {
+        flTapStatus.textContent = "Enter the checkpoint path.";
+        flTapStatus.className   = "fe-extract-status err";
+        return;
+      }
+      flTapStatus.textContent = "";
+      flTapStatus.className   = "fe-extract-status";
+      try {
+        const res  = await fetch("/dlc/project/tapnet-propagate-multi", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            video_stem:            _flVideoStem,
+            tapnet_checkpoint_path: ckpt,
+            gpu_index:             0,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          flTapStatus.textContent = data.error || "Failed to start multi-anchor TAPNet.";
+          flTapStatus.className   = "fe-extract-status err";
+          return;
+        }
+        _flTapActiveTask = data.task_id;
+        _flTapStartPolling(data.task_id);
+      } catch (err) {
+        flTapStatus.textContent = "Network error: " + err.message;
+        flTapStatus.className   = "fe-extract-status err";
+      }
+    });
+
+    function _flTapSetRunning(running) {
+      flTapRunBtn.classList.toggle("hidden",  running);
+      flTapStopBtn.classList.toggle("hidden", !running);
+    }
+
+    flTapCheckBtn.addEventListener("click", async () => {
+      if (!_flVideoStem) {
+        flTapCheckStatus.textContent = "Select a labeled-data folder first.";
+        flTapCheckStatus.className   = "fe-extract-status err";
+        return;
+      }
+      flTapCheckStatus.textContent = "Checking…";
+      flTapCheckStatus.className   = "fe-extract-status";
+      flTapSeqInfo.classList.add("hidden");
+      try {
+        const res  = await fetch(`/dlc/project/tapnet-check?video_stem=${encodeURIComponent(_flVideoStem)}`);
+        const data = await res.json();
+        if (!res.ok) {
+          flTapCheckStatus.textContent = data.error || "Check failed.";
+          flTapCheckStatus.className   = "fe-extract-status err";
+          return;
+        }
+        const n = data.propagatable_count;
+        flTapCheckStatus.textContent = `${n} propagatable sequence(s) found`;
+        flTapCheckStatus.className   = "fe-extract-status " + (n > 0 ? "ok" : "");
+        if (data.sequences && data.sequences.length > 0) {
+          flTapSeqInfo.innerHTML = data.sequences.map(s => {
+            const badge = s.propagatable
+              ? `<span style="color:var(--accent)">✓ anchor: ${s.anchor}</span>`
+              : `<span style="color:var(--text-dim)">✗ no labeled anchor</span>`;
+            return `<div>${s.first_frame} → ${s.last_frame} &nbsp;(${s.frame_count} frames) &nbsp;${badge}</div>`;
+          }).join("");
+          flTapSeqInfo.classList.remove("hidden");
+        }
+      } catch (err) {
+        flTapCheckStatus.textContent = "Network error: " + err.message;
+        flTapCheckStatus.className   = "fe-extract-status err";
+      }
+    });
+
+    flTapRunBtn.addEventListener("click", async () => {
+      if (!_flVideoStem) {
+        flTapStatus.textContent = "Select a labeled-data folder first.";
+        flTapStatus.className   = "fe-extract-status err";
+        return;
+      }
+      const ckpt = flTapCkpt.value.trim();
+      if (!ckpt) {
+        flTapStatus.textContent = "Enter the checkpoint path.";
+        flTapStatus.className   = "fe-extract-status err";
+        return;
+      }
+      flTapStatus.textContent = "";
+      flTapStatus.className   = "fe-extract-status";
+      try {
+        const res  = await fetch("/dlc/project/tapnet-propagate", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            video_stem:             _flVideoStem,
+            tapnet_checkpoint_path: ckpt,
+            anchor:                 flTapAnchor.value,
+            gpu_index:              0,
+            overwrite:              flTapOverwrite.checked,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          flTapStatus.textContent = data.error || "Failed to start TAPNet.";
+          flTapStatus.className   = "fe-extract-status err";
+          return;
+        }
+        _flTapActiveTask = data.task_id;
+        _flTapStartPolling(data.task_id);
+      } catch (err) {
+        flTapStatus.textContent = "Network error: " + err.message;
+        flTapStatus.className   = "fe-extract-status err";
+      }
+    });
+
+    flTapStopBtn.addEventListener("click", async () => {
+      if (!_flTapActiveTask) return;
+      flTapStopBtn.disabled = true;
+      try {
+        await fetch("/dlc/project/tapnet-propagate/stop", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ task_id: _flTapActiveTask }),
+        });
+        flTapStatus.textContent = "Stop signal sent.";
+        flTapStatus.className   = "fe-extract-status";
+      } catch (err) {
+        flTapStatus.textContent = "Stop error: " + err.message;
+        flTapStatus.className   = "fe-extract-status err";
+        flTapStopBtn.disabled = false;
+      }
+    });
+
+    function _flTapStartPolling(taskId) {
+      flTapProgress.classList.remove("hidden", "state-success", "state-fail");
+      flTapTaskId.textContent        = taskId.slice(0, 12) + "…";
+      flTapProgressBar.style.width   = "0%";
+      flTapProgressPct.textContent   = "0 %";
+      flTapProgressStage.textContent = "Queued";
+      flTapLogOutput.textContent     = "Waiting for output…";
+      _flTapSetRunning(true);
+      if (_flTapPollTimer) clearInterval(_flTapPollTimer);
+      _flTapPollTimer = setInterval(() => _flTapPoll(taskId), 2000);
+      _flTapPoll(taskId);
+    }
+
+    async function _flTapPoll(taskId) {
+      try {
+        const res  = await fetch(`/status/${taskId}`);
+        const data = await res.json();
+        const pct  = Math.min(data.progress || 0, 100);
+        flTapProgressBar.style.width   = pct + "%";
+        flTapProgressPct.textContent   = pct + " %";
+        flTapProgressStage.textContent = data.stage || data.state;
+        if (data.log) {
+          flTapLogOutput.textContent = data.log;
+          flTapLogOutput.scrollTop   = flTapLogOutput.scrollHeight;
+        }
+        if (data.state === "SUCCESS") {
+          clearInterval(_flTapPollTimer); _flTapPollTimer = null;
+          const r = data.result || {};
+          if (r.log) flTapLogOutput.textContent = r.log;
+          flTapProgress.classList.add("state-success");
+          flTapProgressStage.textContent = "✓ Propagation complete";
+          flTapProgressBar.style.width   = "100%";
+          flTapProgressPct.textContent   = "100 %";
+          flTapStatus.textContent = `Done — ${r.frames_labeled || 0} frame(s) labeled across ${r.sequences_found || 0} sequence(s).`;
+          flTapStatus.className   = "fe-extract-status ok";
+          _flTapSetRunning(false);
+          // Reload labels so the user sees propagated markers immediately
+          if (_flVideoStem) {
+            const found = _flStemData.find(s => s.video_stem === _flVideoStem);
+            if (found) await _flSelectStem(found.video_stem, found.frames);
+          }
+        }
+        if (data.state === "FAILURE" || data.state === "REVOKED") {
+          clearInterval(_flTapPollTimer); _flTapPollTimer = null;
+          const userStopped = data.state === "REVOKED" || (data.error || "").includes("__USER_STOPPED__");
+          flTapProgress.classList.add("state-fail");
+          flTapProgressStage.textContent = userStopped ? "✗ Stopped" : "✗ " + (data.error || "Failed").split("\n")[0];
+          if (!userStopped) flTapLogOutput.textContent = data.error || "An unknown error occurred.";
+          flTapStatus.textContent = userStopped ? "TAPNet stopped." : "";
+          flTapStatus.className   = "fe-extract-status";
+          _flTapSetRunning(false);
+        }
+      } catch (err) {
+        console.error("flTapPoll:", err);
+      }
+    }
+
     function _flUpdateScorerFilename() {
       if (flScorerFilename) flScorerFilename.textContent = `CollectedData_${_flScorer}.csv`;
     }
@@ -2768,6 +3103,11 @@
       flPlayerSec.classList.remove("hidden");
       _flUpdateLabelCount();
       _flShowFrame(0);
+
+      // Load TAPNet sidecars (confirmed anchors + tapnet-labeled frames)
+      _flTapConfirmed  = new Set();
+      _flTapnetFrames  = new Set();
+      _flTapLoadSidecars();
     }
 
     // ── Update Threshold ─────────────────────────────────────────
@@ -2885,6 +3225,7 @@
 
       _flUpdateBpChipStatus();
       _flUpdateLabelCount();
+      _flTapUpdateFrameStatus();
 
       // Load frame image
       _flHoverBp   = null;
@@ -3103,6 +3444,50 @@
       e.preventDefault();
       if (!_flVideoStem) return;
       _flClearFrame();
+    });
+
+    document.getElementById("fl-btn-delete-frame").addEventListener("dblclick", async e => {
+      e.preventDefault();
+      const fname = _flFrames[_flFrameIdx];
+      if (!_flVideoStem || !fname) return;
+
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const res = await fetch("/dlc/project/frame", {
+          method:  "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ video_stem: _flVideoStem, frame_name: fname }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          flSaveStatus.textContent = `Delete failed: ${d.error || res.status}`;
+          flSaveStatus.className   = "fl-save-status err";
+          return;
+        }
+        // Remove from in-memory state
+        delete _flLabels[fname];
+        _flFrames.splice(_flFrameIdx, 1);
+        _flUpdateLabelCount();
+
+        if (_flFrames.length === 0) {
+          // No frames left — reset canvas
+          _flFrameIdx = 0;
+          flFrameInfo.textContent = "Frame 0 / 0";
+          flFrameName.textContent = "";
+          const ctx = flCanvas.getContext("2d");
+          ctx.clearRect(0, 0, flCanvas.width, flCanvas.height);
+        } else {
+          _flShowFrame(Math.min(_flFrameIdx, _flFrames.length - 1));
+        }
+        flSaveStatus.textContent = `Deleted ${fname}`;
+        flSaveStatus.className   = "fl-save-status";
+      } catch (err) {
+        flSaveStatus.textContent = `Delete error: ${err.message}`;
+        flSaveStatus.className   = "fl-save-status err";
+      } finally {
+        btn.disabled = false;
+      }
     });
 
     // Auto-advance to the next unlabeled body part (napari behavior)
@@ -3593,9 +3978,18 @@
           ctdAddDatasetsBtn.disabled = false;
           return;
         }
-        // Poll until the task completes
+        // Poll until the task completes (max 60 s — guards against worker-killed tasks stuck at STARTED)
         const taskId = data.task_id;
+        let _pollCount = 0;
         const timer = setInterval(async () => {
+          _pollCount++;
+          if (_pollCount > 40) {
+            clearInterval(timer);
+            ctdAddDatasetsStatus.textContent = "Timed out — worker may have restarted. Retry.";
+            ctdAddDatasetsStatus.className   = "fe-extract-status err";
+            ctdAddDatasetsBtn.disabled = false;
+            return;
+          }
           try {
             const sr   = await fetch(`/status/${taskId}`);
             const sd   = await sr.json();
@@ -3699,15 +4093,17 @@
         tnCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
         _tnDetectEngine(); // sync — reads _dlcEngine set when project was loaded
         _populateGpuSelect("tn-gputouse");
-        // Check if a training job is already running and disable run button if so
+        // Check if a training job is already running; if so, reconnect to it
         try {
           const res  = await fetch("/dlc/training/jobs");
           const data = await res.json();
-          _dlcTrainingActive = (data.jobs || []).some(j => j.status === "running");
-          if (_dlcTrainingActive && !tnRunBtn._tnPolling) {
-            tnRunBtn.disabled = true;
-            tnRunStatus.textContent = "A training job is already running. Stop it first.";
-            tnRunStatus.className   = "fe-extract-status err";
+          const activeJob = (data.jobs || []).find(
+            j => (j.status === "running" || j.status === "dead") && j.operation !== "analyze"
+          );
+          _dlcTrainingActive = !!activeJob;
+          if (activeJob && !tnRunBtn._tnPolling) {
+            _tnActiveTask = activeJob.task_id;
+            _tnStartPolling(activeJob.task_id);
           }
         } catch (_) {}
       });
@@ -3939,22 +4335,24 @@
 
     // ── Snapshots ─────────────────────────────────────────────
     async function _avLoadSnapshots() {
-      const shuffle = document.getElementById("av-shuffle").value || "1";
       try {
-        const res  = await fetch(`/dlc/project/snapshots?shuffle=${encodeURIComponent(shuffle)}`);
+        // No shuffle filter — show all shuffles so models from any shuffle are visible.
+        // The backend will auto-correct the shuffle when snapshot_path is provided.
+        const res  = await fetch("/dlc/project/snapshots");
         const data = await res.json();
         if (data.error) return;
 
         avSnapshot.innerHTML = "";
 
-        // "Latest" default option — show actual latest snapshot info if available
+        // "Latest" default option — use actual path so shuffle is auto-derived
         const latestOpt = document.createElement("option");
-        latestOpt.value = "-1";
+        latestOpt.value = data.latest_rel_path || "-1";
         if (data.latest_label) {
           const iterStr = data.latest_iteration != null
             ? `  ·  iter ${data.latest_iteration.toLocaleString()}`
             : "";
-          latestOpt.textContent = `Latest — ${data.latest_label}${iterStr}`;
+          const shStr = data.latest_shuffle != null ? `  ·  sh${data.latest_shuffle}` : "";
+          latestOpt.textContent = `Latest — ${data.latest_label}${iterStr}${shStr}`;
         } else {
           latestOpt.textContent = "Latest (from config)";
         }
@@ -3967,7 +4365,8 @@
           const iterStr = s.iteration != null
             ? `  ·  iter ${s.iteration.toLocaleString()}`
             : "";
-          opt.textContent = `${s.label}${iterStr}`;
+          const shStr = s.shuffle != null ? `  ·  sh${s.shuffle}` : "";
+          opt.textContent = `${s.label}${iterStr}${shStr}`;
           avSnapshot.appendChild(opt);
         });
       } catch (err) {
@@ -4126,6 +4525,8 @@
       avRunBtn.classList.toggle("hidden",  running);
       avStopBtn.classList.toggle("hidden", !running);
       avRunBtn.disabled  = running;
+      const _clvBtn = document.getElementById("btn-create-labeled-video");
+      if (_clvBtn) _clvBtn.disabled = running;
     }
 
     // ── Polling ───────────────────────────────────────────────
@@ -4189,13 +4590,27 @@
     }
 
     // ── Open / Close ──────────────────────────────────────────
-    avOpenBtn?.addEventListener("click", () => {
+    avOpenBtn?.addEventListener("click", async () => {
       avCard.classList.remove("hidden");
       avCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
       _avLoadSnapshots();
       _populateGpuSelect("av-gputouse");
       _avBrowserLoaded = false;
       avBrowser.classList.add("hidden");
+      // Auto-reconnect to a running analyze job
+      if (!_avActiveTask) {
+        try {
+          const res  = await fetch("/dlc/training/jobs");
+          const data = await res.json();
+          const activeAnalyze = (data.jobs || []).find(
+            j => (j.status === "running" || j.status === "dead") && j.operation === "analyze"
+          );
+          if (activeAnalyze) {
+            _avActiveTask = activeAnalyze.task_id;
+            _avStartPolling(activeAnalyze.task_id);
+          }
+        } catch (_) {}
+      }
     });
 
     avCloseBtn?.addEventListener("click", () => {
@@ -4217,6 +4632,8 @@
 
       const snapshotVal = avSnapshot.value;
 
+      const batchSizeVal = document.getElementById("av-batch-size").value;
+      const clvPcutoff   = document.getElementById("clv-pcutoff").value;
       const body = {
         target_path:      target,
         shuffle:          parseInt(document.getElementById("av-shuffle").value) || 1,
@@ -4224,9 +4641,19 @@
         gputouse:         document.getElementById("av-gputouse").value !== ""
                             ? parseInt(document.getElementById("av-gputouse").value)
                             : null,
+        batch_size:       batchSizeVal !== "" ? parseInt(batchSizeVal) : null,
         save_as_csv:      document.getElementById("av-save-csv").checked,
         create_labeled:   document.getElementById("av-create-labeled").checked,
         snapshot_path:    snapshotVal !== "-1" ? snapshotVal : null,
+        // labeled video params
+        pcutoff:          clvPcutoff !== "" ? parseFloat(clvPcutoff) : null,
+        dotsize:          parseInt(document.getElementById("clv-dotsize").value) || 8,
+        colormap:         document.getElementById("clv-colormap").value,
+        modelprefix:      (document.getElementById("clv-modelprefix").value || "").trim(),
+        filtered:         document.getElementById("clv-filtered").checked,
+        draw_skeleton:    document.getElementById("clv-draw-skeleton").checked,
+        overwrite:        document.getElementById("clv-overwrite").checked,
+        destfolder:       (document.getElementById("clv-destfolder").value || "").trim() || null,
       };
 
       try {
@@ -4265,6 +4692,136 @@
         avRunStatus.textContent = "Stop error: " + err.message;
         avRunStatus.className   = "fe-extract-status err";
         avStopBtn.disabled = false;
+      }
+    });
+
+    // ── Create Labeled Video (standalone) ─────────────────────
+    const clvBtn        = document.getElementById("btn-create-labeled-video");
+    const clvStatus     = document.getElementById("av-clv-status");
+    const clvDestInput  = document.getElementById("clv-destfolder");
+    const clvDestBrowse = document.getElementById("clv-dest-browse-btn");
+    const clvDestClear  = document.getElementById("clv-dest-clear-btn");
+    const clvDestBrowser= document.getElementById("clv-dest-browser");
+
+    // destfolder browser — shows directories only, double-click selects
+    async function _clvBrowseDir(dirPath) {
+      clvDestBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
+      try {
+        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
+        const data = await res.json();
+        if (data.error) { clvDestBrowser.textContent = data.error; return; }
+        clvDestBrowser.innerHTML = "";
+
+        // Header
+        const hdr = document.createElement("div");
+        hdr.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.2rem .3rem .35rem;border-bottom:1px solid var(--border);margin-bottom:.25rem";
+        const pathLbl = document.createElement("span");
+        pathLbl.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.72rem;color:var(--text-dim)";
+        pathLbl.textContent = data.path;
+        hdr.appendChild(pathLbl);
+        // "Select this folder" button
+        const selBtn = document.createElement("button");
+        selBtn.className = "btn-sm";
+        selBtn.style.cssText = "padding:.15rem .5rem;font-size:.72rem;flex-shrink:0";
+        selBtn.textContent = "✓ Select";
+        selBtn.addEventListener("click", () => {
+          clvDestInput.value = data.path;
+          clvDestBrowser.classList.add("hidden");
+        });
+        hdr.appendChild(selBtn);
+        if (data.parent) {
+          const upBtn = document.createElement("button");
+          upBtn.className = "btn-sm";
+          upBtn.style.cssText = "padding:.15rem .5rem;font-size:.72rem;flex-shrink:0";
+          upBtn.textContent = "↑ Up";
+          upBtn.addEventListener("click", (e) => { e.stopPropagation(); _clvBrowseDir(data.parent); });
+          hdr.appendChild(upBtn);
+        }
+        clvDestBrowser.appendChild(hdr);
+
+        const dirs = data.entries.filter(e => e.type === "dir");
+        if (!dirs.length) {
+          const em = document.createElement("span");
+          em.style.cssText = "font-size:.78rem;color:var(--text-dim);padding:.3rem;display:block";
+          em.textContent = "(no subdirectories)";
+          clvDestBrowser.appendChild(em);
+        }
+        dirs.forEach(e => {
+          const row = document.createElement("div");
+          const fullPath = data.path.replace(/\/+$/, "") + "/" + e.name;
+          row.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.18rem .4rem;cursor:pointer;border-radius:4px;user-select:none;font-size:.78rem";
+          row.innerHTML = `<span style="flex-shrink:0">📁</span><span style="font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.name}</span>`;
+          row.title = fullPath;
+          row.addEventListener("mouseenter", () => row.style.background = "var(--surface-3,#2a2a2a)");
+          row.addEventListener("mouseleave", () => row.style.background = "");
+          row.addEventListener("click",    () => _clvBrowseDir(fullPath));
+          row.addEventListener("dblclick", () => {
+            clvDestInput.value = fullPath;
+            clvDestBrowser.classList.add("hidden");
+          });
+          clvDestBrowser.appendChild(row);
+        });
+      } catch (err) {
+        clvDestBrowser.textContent = "Failed to load.";
+      }
+    }
+
+    clvDestBrowse?.addEventListener("click", () => {
+      const isHidden = clvDestBrowser.classList.contains("hidden");
+      clvDestBrowser.classList.toggle("hidden");
+      if (isHidden) {
+        const startPath = clvDestInput.value.trim() || _avProjectPath || "/";
+        _clvBrowseDir(startPath);
+      }
+    });
+    clvDestClear?.addEventListener("click", () => { clvDestInput.value = ""; });
+
+    clvBtn?.addEventListener("click", async () => {
+      const target = (document.getElementById("av-target-path")?.value || "").trim();
+      if (!target) {
+        clvStatus.textContent = "Select a video file first.";
+        clvStatus.className   = "fe-extract-status err";
+        return;
+      }
+      clvStatus.textContent = "Dispatching…";
+      clvStatus.className   = "fe-extract-status";
+      clvBtn.disabled = true;
+
+      const pcutoffVal = document.getElementById("clv-pcutoff").value;
+      const destVal    = (clvDestInput?.value || "").trim();
+      try {
+        const res = await fetch("/dlc/project/create-labeled-video", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            video_path:       target,
+            shuffle:          parseInt(document.getElementById("av-shuffle").value) || 1,
+            trainingsetindex: parseInt(document.getElementById("av-trainingsetindex").value) ?? 0,
+            pcutoff:          pcutoffVal !== "" ? parseFloat(pcutoffVal) : null,
+            dotsize:          parseInt(document.getElementById("clv-dotsize").value) || 8,
+            colormap:         document.getElementById("clv-colormap").value,
+            modelprefix:      (document.getElementById("clv-modelprefix").value || "").trim(),
+            filtered:         document.getElementById("clv-filtered").checked,
+            draw_skeleton:    document.getElementById("clv-draw-skeleton").checked,
+            overwrite:        document.getElementById("clv-overwrite").checked,
+            destfolder:       destVal || null,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          clvStatus.textContent = data.error || "Failed to start.";
+          clvStatus.className   = "fe-extract-status err";
+          clvBtn.disabled = false;
+          return;
+        }
+        _avActiveTask = data.task_id;
+        _avStartPolling(data.task_id);
+        clvStatus.textContent = "Rendering… see progress below.";
+        clvStatus.className   = "fe-extract-status ok";
+      } catch (err) {
+        clvStatus.textContent = "Network error: " + err.message;
+        clvStatus.className   = "fe-extract-status err";
+        clvBtn.disabled = false;
       }
     });
   })();
@@ -4321,6 +4878,16 @@
     // browse tab state
     let _vaBrowsePath = null;
 
+    // ── Kinematic overlay state ────────────────────────────────────────────
+    let _vaOverlayEnabled   = false;
+    let _vaH5Path           = null;       // absolute path to loaded .h5 file
+    let _vaAllBodyParts     = [];         // all body parts from h5-info
+    let _vaSelectedParts    = new Set();  // empty = show all
+    let _vaThreshold        = 0.60;
+    let _vaMarkerSize       = 6;
+    // absolute path to the currently loaded original video (for annotated frames)
+    let _vaCurrentVideoPath = null;
+
     // ── Viewer sizing (same break-out-of-card approach as frame labeler) ──
     function _vaFitViewer() {
       if (!vaFrameImg.naturalWidth) return;
@@ -4356,6 +4923,7 @@
       _vaFrameStem       = null;
       _vaFrameFiles      = [];
       _vaBrowseVideoPath = null;
+      _vaCurrentVideoPath = null;
       vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
       vaFrameImg.onload  = null;
       vaFrameImg.onerror = null;
@@ -4370,6 +4938,22 @@
     }
 
     function _vaFrameUrl(n) {
+      // ── Kinematic overlay takes priority when enabled and h5 is loaded ──
+      if (_vaOverlayEnabled && _vaH5Path && _vaCurrentVideoPath) {
+        const parts = _vaSelectedParts.size > 0
+          ? [..._vaSelectedParts].join(",")
+          : "";
+        const p = new URLSearchParams({
+          video:       _vaCurrentVideoPath,
+          h5:          _vaH5Path,
+          threshold:   _vaThreshold.toFixed(2),
+          marker_size: _vaMarkerSize,
+          scale:       1.0,
+        });
+        if (parts) p.set("parts", parts);
+        return `/dlc/viewer/frame-annotated/${n}?${p}`;
+      }
+
       if (_vaMode === "browse-video") {
         return `/annotate/video-frame/${n}?path=${encodeURIComponent(_vaBrowseVideoPath)}`;
       }
@@ -4452,8 +5036,9 @@
 
     async function _vaOpenBrowseVideo(absPath, name) {
       _vaReset();
-      _vaMode            = "browse-video";
-      _vaBrowseVideoPath = absPath;
+      _vaMode             = "browse-video";
+      _vaBrowseVideoPath  = absPath;
+      _vaCurrentVideoPath = absPath;
       vaSelectedName.textContent = name;
       try {
         const res  = await fetch(`/annotate/video-info?path=${encodeURIComponent(absPath)}`);
@@ -4463,6 +5048,8 @@
       } catch (_) { _vaFps = 30; _vaFrameCount = 0; }
       vaPlayerSec.classList.remove("hidden");
       _vaLoadFrame(0);
+      // Auto-detect companion h5 in the same directory
+      _vaAutoDetectH5(absPath);
     }
 
     // ── Browse-tab folder navigator ────────────────────────────
@@ -4533,6 +5120,207 @@
       if (!_vaBrowsePath) return;
       const parent = _vaBrowsePath.split("/").slice(0, -1).join("/") || "/";
       if (parent !== _vaBrowsePath) _vaRefreshBrowse(parent);
+    });
+
+    // ── Kinematic overlay controls ────────────────────────────
+    const vaOverlayToggle    = document.getElementById("va-overlay-toggle");
+    const vaOverlayControls  = document.getElementById("va-overlay-controls");
+    const vaOverlayStatus    = document.getElementById("va-overlay-status");
+    const vaOverlayH5Path    = document.getElementById("va-overlay-h5-path");
+    const vaOverlayH5Auto    = document.getElementById("va-overlay-h5-auto");
+    const vaOverlayH5Browse  = document.getElementById("va-overlay-h5-browse");
+    const vaOverlayH5Clear   = document.getElementById("va-overlay-h5-clear");
+    const vaOverlayH5Browser = document.getElementById("va-overlay-h5-browser");
+    const vaOverlayThreshold = document.getElementById("va-overlay-threshold");
+    const vaOverlayThreshVal = document.getElementById("va-overlay-threshold-val");
+    const vaOverlayMarkerSz  = document.getElementById("va-overlay-marker-size");
+    const vaOverlayMarkerVal = document.getElementById("va-overlay-marker-size-val");
+    const vaOverlayPartsBox  = document.getElementById("va-overlay-bodyparts");
+    const vaOverlayPartsAll  = document.getElementById("va-overlay-parts-all");
+    const vaOverlayPartsNone = document.getElementById("va-overlay-parts-none");
+
+    function _vaOverlayStatus(msg, isErr = false) {
+      vaOverlayStatus.textContent = msg;
+      vaOverlayStatus.className   = "fe-extract-status" + (isErr ? " err" : "");
+    }
+
+    async function _vaLoadH5Info(h5Path) {
+      vaOverlayPartsBox.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">Loading…</span>';
+      _vaSelectedParts.clear();
+      try {
+        const res  = await fetch(`/dlc/viewer/h5-info?h5=${encodeURIComponent(h5Path)}`);
+        const data = await res.json();
+        if (data.error) { _vaOverlayStatus(data.error, true); return; }
+        _vaAllBodyParts = data.bodyparts || [];
+        _vaRebuildPartsChecklist();
+        _vaOverlayStatus(`${data.frame_count.toLocaleString()} frames · ${_vaAllBodyParts.length} body parts`);
+      } catch (e) {
+        _vaOverlayStatus(`Failed to load h5 info: ${e.message}`, true);
+      }
+    }
+
+    function _vaRebuildPartsChecklist() {
+      vaOverlayPartsBox.innerHTML = "";
+      if (!_vaAllBodyParts.length) {
+        vaOverlayPartsBox.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">No body parts loaded.</span>';
+        return;
+      }
+      _vaAllBodyParts.forEach(bp => {
+        const lbl  = document.createElement("label");
+        lbl.style.cssText = "display:flex;align-items:center;gap:.3rem;cursor:pointer;white-space:nowrap";
+        const chk  = document.createElement("input");
+        chk.type   = "checkbox";
+        chk.value  = bp;
+        chk.style.accentColor = "var(--accent)";
+        // Empty _vaSelectedParts means ALL selected
+        chk.checked = _vaSelectedParts.size === 0 || _vaSelectedParts.has(bp);
+        chk.addEventListener("change", () => {
+          if (chk.checked) _vaSelectedParts.delete(bp);  // empty = all
+          else             _vaSelectedParts.add(bp);      // explicit exclude
+          // If all checked manually, reset to empty (= all)
+          if ([...vaOverlayPartsBox.querySelectorAll("input")].every(c => c.checked))
+            _vaSelectedParts.clear();
+          if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
+        });
+        lbl.appendChild(chk);
+        lbl.appendChild(document.createTextNode(bp));
+        vaOverlayPartsBox.appendChild(lbl);
+      });
+    }
+
+    async function _vaAutoDetectH5(videoPath) {
+      const dir  = videoPath.substring(0, videoPath.lastIndexOf("/"));
+      const name = videoPath.substring(videoPath.lastIndexOf("/") + 1);
+      const stem = name.replace(/\.[^.]+$/, "");
+      _vaOverlayStatus("Scanning for .h5…");
+      try {
+        const res  = await fetch(`/dlc/viewer/h5-find?dir=${encodeURIComponent(dir)}&stem=${encodeURIComponent(stem)}`);
+        const data = await res.json();
+        if (data.error) { _vaOverlayStatus(data.error.includes("No .h5") ? "No .h5 found — browse to select one." : data.error); return; }
+        _vaH5Path = data.h5_path;
+        vaOverlayH5Path.value = _vaH5Path;
+        _vaOverlayStatus("h5 auto-detected");
+        await _vaLoadH5Info(_vaH5Path);
+      } catch (e) {
+        _vaOverlayStatus("Auto-detect failed: " + e.message);
+      }
+    }
+
+    vaOverlayToggle?.addEventListener("change", () => {
+      _vaOverlayEnabled = vaOverlayToggle.checked;
+      vaOverlayControls.classList.toggle("hidden", !_vaOverlayEnabled);
+      if (_vaOverlayEnabled && !_vaH5Path && _vaCurrentVideoPath)
+        _vaAutoDetectH5(_vaCurrentVideoPath);
+      if (_vaCurrentFrame !== null) _vaLoadFrame(_vaCurrentFrame);
+    });
+
+    vaOverlayH5Auto?.addEventListener("click", () => {
+      if (_vaCurrentVideoPath) _vaAutoDetectH5(_vaCurrentVideoPath);
+    });
+
+    vaOverlayH5Clear?.addEventListener("click", () => {
+      _vaH5Path = null;
+      vaOverlayH5Path.value = "";
+      _vaAllBodyParts = [];
+      _vaSelectedParts.clear();
+      vaOverlayPartsBox.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">Load an .h5 file to see body parts.</span>';
+      _vaOverlayStatus("");
+      if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
+    });
+
+    // Threshold slider
+    vaOverlayThreshold?.addEventListener("input", () => {
+      _vaThreshold = parseFloat(vaOverlayThreshold.value);
+      vaOverlayThreshVal.textContent = _vaThreshold.toFixed(2);
+    });
+    vaOverlayThreshold?.addEventListener("change", () => {
+      if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
+    });
+
+    // Marker size slider
+    vaOverlayMarkerSz?.addEventListener("input", () => {
+      _vaMarkerSize = parseInt(vaOverlayMarkerSz.value, 10);
+      vaOverlayMarkerVal.textContent = _vaMarkerSize;
+    });
+    vaOverlayMarkerSz?.addEventListener("change", () => {
+      if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
+    });
+
+    vaOverlayPartsAll?.addEventListener("click", () => {
+      _vaSelectedParts.clear();
+      vaOverlayPartsBox.querySelectorAll("input").forEach(c => { c.checked = true; });
+      if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
+    });
+    vaOverlayPartsNone?.addEventListener("click", () => {
+      _vaAllBodyParts.forEach(bp => _vaSelectedParts.add(bp));
+      vaOverlayPartsBox.querySelectorAll("input").forEach(c => { c.checked = false; });
+      // "none selected" still shows all — reset to prevent empty render
+      _vaSelectedParts.clear();
+      vaOverlayPartsBox.querySelectorAll("input").forEach(c => { c.checked = false; });
+      // keep _vaSelectedParts empty but mark first part as explicit include for "none" visual
+      // Actually: show nothing when all unchecked — use a sentinel
+      _vaAllBodyParts.forEach(bp => _vaSelectedParts.add("__none__"));
+    });
+
+    // h5 file browser (shows .h5 files and dirs)
+    let _vaH5BrowsePath = null;
+
+    async function _vaH5BrowseDir(path) {
+      _vaH5BrowsePath = path;
+      vaOverlayH5Browser.innerHTML = '<p class="explorer-empty">Loading…</p>';
+      try {
+        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(path)}`);
+        const data = await res.json();
+        if (data.error) { vaOverlayH5Browser.innerHTML = `<p class="explorer-empty">${data.error}</p>`; return; }
+        vaOverlayH5Browser.innerHTML = "";
+        const entries = data.entries || [];
+        // Up button
+        if (data.parent) {
+          const upRow = document.createElement("div");
+          upRow.className = "fe-video-item";
+          upRow.style.cursor = "pointer";
+          upRow.textContent = "↑ ..";
+          upRow.addEventListener("click", () => _vaH5BrowseDir(data.parent));
+          vaOverlayH5Browser.appendChild(upRow);
+        }
+        entries.forEach(e => {
+          const isH5  = e.type === "file" && e.name.toLowerCase().endsWith(".h5");
+          const isDir = e.type === "dir";
+          if (!isH5 && !isDir) return;
+          const row = document.createElement("div");
+          row.className   = "fe-video-item";
+          row.style.cursor = "pointer";
+          row.textContent  = isDir ? `📁 ${e.name}/` : `📊 ${e.name}`;
+          row.addEventListener("click", async () => {
+            if (isDir) {
+              _vaH5BrowseDir(path + "/" + e.name);
+            } else {
+              const full = path + "/" + e.name;
+              _vaH5Path = full;
+              vaOverlayH5Path.value = full;
+              vaOverlayH5Browser.classList.add("hidden");
+              _vaOverlayStatus("h5 selected");
+              await _vaLoadH5Info(full);
+              if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
+            }
+          });
+          vaOverlayH5Browser.appendChild(row);
+        });
+        if (!vaOverlayH5Browser.children.length)
+          vaOverlayH5Browser.innerHTML = '<p class="explorer-empty">No .h5 files found here.</p>';
+      } catch (e) {
+        vaOverlayH5Browser.innerHTML = `<p class="explorer-empty">Error: ${e.message}</p>`;
+      }
+    }
+
+    vaOverlayH5Browse?.addEventListener("click", () => {
+      const isHidden = vaOverlayH5Browser.classList.toggle("hidden");
+      if (!isHidden) {
+        const startDir = _vaCurrentVideoPath
+          ? _vaCurrentVideoPath.substring(0, _vaCurrentVideoPath.lastIndexOf("/"))
+          : (_userDataDir || _dataDir || "/");
+        _vaH5BrowseDir(startDir);
+      }
     });
 
     // ── Load content list ─────────────────────────────────────
@@ -5221,15 +6009,17 @@
 
   // ── GPU & Training Monitor ────────────────────────────────────
   (() => {
-    const gmCard       = document.getElementById("gpu-monitor-card");
-    const gmOpenBtn    = document.getElementById("btn-open-gpu-monitor");
-    const gmCloseBtn   = document.getElementById("btn-close-gpu-monitor");
-    const gmRefreshBtn = document.getElementById("gm-refresh-btn");
-    const gmClearBtn   = document.getElementById("gm-clear-btn");
-    const gmGpuList    = document.getElementById("gm-gpu-list");
-    const gmGpuAge     = document.getElementById("gm-gpu-age");
-    const gmJobsList   = document.getElementById("gm-jobs-list");
-    const gmBadge      = document.getElementById("gpu-monitor-badge");
+    const gmCard          = document.getElementById("gpu-monitor-card");
+    const gmOpenBtn       = document.getElementById("btn-open-gpu-monitor");
+    const gmCloseBtn      = document.getElementById("btn-close-gpu-monitor");
+    const gmRefreshBtn    = document.getElementById("gm-refresh-btn");
+    const gmClearBtn      = document.getElementById("gm-clear-btn");
+    const gmGpuList       = document.getElementById("gm-gpu-list");
+    const gmGpuAge        = document.getElementById("gm-gpu-age");
+    const gmJobsList      = document.getElementById("gm-jobs-list");
+    const gmQueueList     = document.getElementById("gm-queue-list");
+    const gmCancelAllBtn  = document.getElementById("gm-cancel-all-btn");
+    const gmBadge         = document.getElementById("gpu-monitor-badge");
 
     let _gmPollTimer = null;
 
@@ -5254,6 +6044,69 @@
       } catch (e) { console.error(e); }
       gmClearBtn.disabled = false;
     });
+
+    gmCancelAllBtn?.addEventListener("click", async () => {
+      if (!confirm("Cancel all queued tasks? They will not run.")) return;
+      gmCancelAllBtn.disabled = true;
+      try {
+        await fetch("/dlc/training/queue/cancel-all", { method: "POST" });
+        await _gmRefresh();
+      } catch (e) { console.error(e); }
+      gmCancelAllBtn.disabled = false;
+    });
+
+    // ── Render queued tasks ───────────────────────────────────
+    function _gmRenderQueue(data, runningIds = new Set()) {
+      let tasks = data.tasks || [];
+      const INTERNAL_TASKS = new Set(["tasks.dlc_probe_gpu_stats"]);
+      tasks = tasks.filter(t => !INTERNAL_TASKS.has(t.task_name) && !runningIds.has(t.task_id));
+      if (tasks.length === 0) {
+        gmQueueList.innerHTML = '<span style="font-size:.82rem;color:var(--text-dim)">No queued tasks.</span>';
+        gmCancelAllBtn.classList.add("hidden");
+        return;
+      }
+      gmCancelAllBtn.classList.remove("hidden");
+
+      const taskLabel = {
+        "tasks.dlc_train_network":           "Train",
+        "tasks.dlc_create_training_dataset": "Create Dataset",
+        "tasks.dlc_analyze":                 "Analyze",
+        "tasks.dlc_machine_label_frames":    "Machine Label",
+        "tasks.dlc_tapnet_propagate":        "TAPNet",
+      };
+      const queueColor = { pytorch: "#a78bfa", tensorflow: "#f59e0b", celery: "var(--text-dim)" };
+
+      gmQueueList.innerHTML = tasks.map(t => {
+        const label    = taskLabel[t.task_name] || (t.task_name || "task").split(".").pop();
+        const project  = t.config_path ? t.config_path.split("/").slice(-2, -1)[0] : "—";
+        const qClr     = queueColor[t.queue] || "var(--text-dim)";
+        return `
+        <div style="display:flex;align-items:center;gap:.55rem;padding:.45rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:6px">
+          <span style="font-size:.68rem;font-weight:600;color:#f0a030;flex-shrink:0;text-transform:uppercase;letter-spacing:.04em">QUEUED</span>
+          <span style="font-size:.68rem;font-weight:600;color:var(--text-dim);flex-shrink:0;text-transform:uppercase;letter-spacing:.04em">${label}</span>
+          <span style="font-family:var(--mono);font-size:.72rem;color:var(--text-dim);flex-shrink:0">${(t.task_id||"").slice(0,8)}…</span>
+          <span style="font-size:.78rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${project}</span>
+          <span style="font-size:.7rem;color:${qClr};flex-shrink:0">${t.queue}</span>
+          <button class="btn-sm btn-danger gm-cancel-btn" data-task-id="${t.task_id}" style="padding:.15rem .45rem;font-size:.72rem;flex-shrink:0" title="Cancel this task">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>`;
+      }).join("");
+
+      gmQueueList.querySelectorAll(".gm-cancel-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try {
+            await fetch("/dlc/training/queue/cancel", {
+              method:  "POST",
+              headers: { "Content-Type": "application/json" },
+              body:    JSON.stringify({ task_id: btn.dataset.taskId }),
+            });
+            await _gmRefresh();
+          } catch (e) { console.error(e); btn.disabled = false; }
+        });
+      });
+    }
 
     // ── Render GPU bars ───────────────────────────────────────
     function _gmRenderGpus(data) {
@@ -5297,7 +6150,7 @@
     // ── Render jobs list ──────────────────────────────────────
     function _gmRenderJobs(data) {
       // Update the global training-active flag and the run button
-      _dlcTrainingActive = (data.jobs || []).some(j => j.status === "running" && j.operation !== "analyze");
+      _dlcTrainingActive = (data.jobs || []).some(j => (j.status === "running" || j.status === "dead") && j.operation !== "analyze");
       const tnRunBtn = document.getElementById("btn-run-train-network");
       if (tnRunBtn && !tnRunBtn._tnPolling) {
         tnRunBtn.disabled = _dlcTrainingActive;
@@ -5320,7 +6173,7 @@
         const opBadge   = opLabel[op] || op;
         const opClr     = opColor[op] || "var(--text-dim)";
         const ago       = j.started_at ? _gmTimeAgo(parseFloat(j.started_at)) : "";
-        const canStop   = j.status === "running";
+        const canStop   = j.status === "running" || j.status === "dead";
         // For analyze jobs show target file/folder name as subtitle
         const subtitle  = op === "analyze" && j.target_path
           ? j.target_path.split("/").pop()
@@ -5372,12 +6225,18 @@
 
     async function _gmRefresh() {
       try {
-        const [gpuRes, jobsRes] = await Promise.all([
+        const [gpuRes, jobsRes, queueRes] = await Promise.all([
           fetch("/dlc/gpu/status"),
           fetch("/dlc/training/jobs"),
+          fetch("/dlc/training/queue"),
         ]);
         _gmRenderGpus(await gpuRes.json());
-        _gmRenderJobs(await jobsRes.json());
+        const jobsData  = await jobsRes.json();
+        const queueData = await queueRes.json();
+        _gmRenderJobs(jobsData);
+        // Pass running task IDs so the queue renderer can hide duplicates
+        const runningIds = new Set((jobsData.jobs || []).map(j => j.task_id));
+        _gmRenderQueue(queueData, runningIds);
       } catch (e) {
         console.error("GPU monitor refresh error:", e);
       }
