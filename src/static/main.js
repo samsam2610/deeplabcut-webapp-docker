@@ -4910,6 +4910,7 @@
       _vaZoom = parseInt(vaZoomInput.value, 10);
       vaZoomVal.textContent = _vaZoom + " %";
       _vaFitViewer();
+      _vaSyncCanvas();
     });
 
     function _vaReset() {
@@ -4924,6 +4925,9 @@
       _vaFrameFiles      = [];
       _vaBrowseVideoPath = null;
       _vaCurrentVideoPath = null;
+      _vaCurrentPoses = [];
+      _vaHoverBp      = null;
+      if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
       vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
       vaFrameImg.onload  = null;
       vaFrameImg.onerror = null;
@@ -4998,6 +5002,10 @@
         });
         _vaFitViewer();
         _vaUpdateDisplay();
+        // Sync canvas size after image loads, then fetch poses for hover labels
+        _vaSyncCanvas();
+        if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(n);
+        else { _vaCurrentPoses = []; _vaHoverBp = null; if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height); }
       } catch (err) {
         vaStatus.textContent = `Failed to load frame: ${err.message}`;
         vaStatus.className   = "fe-extract-status err";
@@ -5121,6 +5129,130 @@
       const parent = _vaBrowsePath.split("/").slice(0, -1).join("/") || "/";
       if (parent !== _vaBrowsePath) _vaRefreshBrowse(parent);
     });
+
+    // ── Kinematic overlay canvas ──────────────────────────────
+    const vaOverlayCanvas = document.getElementById("va-overlay-canvas");
+    const vaOverlayCtx    = vaOverlayCanvas ? vaOverlayCanvas.getContext("2d") : null;
+
+    // Current frame poses (fetched alongside each annotated frame)
+    let _vaCurrentPoses = [];  // [{bp, x, y, lh, color_idx}]
+    let _vaNBodyparts   = 1;   // total bodyparts count (for palette)
+    let _vaHoverBp      = null;
+
+    // Replicate the server's HSV rainbow palette in JS for label colours
+    function _vaHsvToRgb(h, s, v) {
+      const i = Math.floor(h * 6);
+      const f = h * 6 - i;
+      const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+      let r, g, b;
+      switch (i % 6) {
+        case 0: r=v; g=t; b=p; break; case 1: r=q; g=v; b=p; break;
+        case 2: r=p; g=v; b=t; break; case 3: r=p; g=q; b=v; break;
+        case 4: r=t; g=p; b=v; break; default: r=v; g=p; b=q;
+      }
+      return `rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
+    }
+    function _vaPaletteColor(idx, total) {
+      return _vaHsvToRgb(idx / Math.max(total, 1), 0.9, 0.95);
+    }
+
+    function _vaSyncCanvas() {
+      if (!vaOverlayCanvas) return;
+      // Match canvas buffer size to the *displayed* image size (not natural)
+      const w = vaFrameImg.offsetWidth  || vaFrameImg.clientWidth  || 1;
+      const h = vaFrameImg.offsetHeight || vaFrameImg.clientHeight || 1;
+      if (vaOverlayCanvas.width !== w || vaOverlayCanvas.height !== h) {
+        vaOverlayCanvas.width  = w;
+        vaOverlayCanvas.height = h;
+      }
+    }
+
+    function _vaDrawHoverLabel() {
+      if (!vaOverlayCtx) return;
+      _vaSyncCanvas();
+      vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+      if (!_vaHoverBp || !_vaCurrentPoses.length) return;
+      const pose = _vaCurrentPoses.find(p => p.bp === _vaHoverBp);
+      if (!pose) return;
+
+      // Map video-native coords → canvas display coords
+      const natW = vaFrameImg.naturalWidth  || 1;
+      const natH = vaFrameImg.naturalHeight || 1;
+      const sx   = vaOverlayCanvas.width  / natW;
+      const sy   = vaOverlayCanvas.height / natH;
+      const cx   = pose.x * sx;
+      const cy   = pose.y * sy;
+
+      const color = _vaPaletteColor(pose.color_idx, _vaNBodyparts);
+      const r     = _vaMarkerSize + 2;          // slightly larger hit ring
+      const bp    = pose.bp;
+
+      vaOverlayCtx.font      = "bold 11px 'JetBrains Mono', monospace";
+      const tw = vaOverlayCtx.measureText(bp).width;
+      // Flip label to the left if it would clip the right edge
+      const flip = (cx + r + tw + 12) > vaOverlayCanvas.width;
+      const tx   = flip ? cx - r - tw - 10 : cx + r + 4;
+      const ty   = cy + 4;
+      vaOverlayCtx.fillStyle = "rgba(12,13,16,.75)";
+      vaOverlayCtx.fillRect(tx - 2, ty - 11, tw + 6, 14);
+      vaOverlayCtx.fillStyle = color;
+      vaOverlayCtx.fillText(bp, tx + 1, ty);
+    }
+
+    function _vaHitTest(cx, cy) {
+      if (!_vaCurrentPoses.length) return null;
+      const natW  = vaFrameImg.naturalWidth  || 1;
+      const natH  = vaFrameImg.naturalHeight || 1;
+      const sx    = vaOverlayCanvas.width  / natW;
+      const sy    = vaOverlayCanvas.height / natH;
+      const hitR  = (_vaMarkerSize + 6) * Math.max(sx, sy);
+      for (const pose of _vaCurrentPoses) {
+        const dx = pose.x * sx - cx;
+        const dy = pose.y * sy - cy;
+        if (Math.sqrt(dx * dx + dy * dy) <= hitR) return pose.bp;
+      }
+      return null;
+    }
+
+    if (vaOverlayCanvas) {
+      // Enable pointer events on the canvas for hover detection only
+      vaOverlayCanvas.style.pointerEvents = "auto";
+      vaOverlayCanvas.style.cursor        = "default";
+
+      vaOverlayCanvas.addEventListener("mousemove", e => {
+        if (!_vaOverlayEnabled || !_vaCurrentPoses.length) return;
+        const rect = vaOverlayCanvas.getBoundingClientRect();
+        const hit  = _vaHitTest(e.clientX - rect.left, e.clientY - rect.top);
+        if (hit !== _vaHoverBp) {
+          _vaHoverBp = hit;
+          _vaDrawHoverLabel();
+        }
+        vaOverlayCanvas.style.cursor = hit ? "crosshair" : "default";
+      });
+
+      vaOverlayCanvas.addEventListener("mouseleave", () => {
+        if (_vaHoverBp) { _vaHoverBp = null; _vaDrawHoverLabel(); }
+        vaOverlayCanvas.style.cursor = "default";
+      });
+    }
+
+    // Fetch visible poses for the current frame (called after overlay frame loads)
+    async function _vaFetchPoses(frameNumber) {
+      if (!_vaH5Path) return;
+      const parts    = _vaSelectedParts.size > 0 ? [..._vaSelectedParts].join(",") : "";
+      const p        = new URLSearchParams({ h5: _vaH5Path, threshold: _vaThreshold.toFixed(2) });
+      if (parts) p.set("parts", parts);
+      try {
+        const res  = await fetch(`/dlc/viewer/frame-poses/${frameNumber}?${p}`);
+        const data = await res.json();
+        _vaCurrentPoses = data.poses || [];
+        _vaNBodyparts   = data.n_bodyparts || 1;
+      } catch (_) {
+        _vaCurrentPoses = [];
+      }
+      _vaHoverBp = null;
+      _vaDrawHoverLabel();
+    }
 
     // ── Kinematic overlay controls ────────────────────────────
     const vaOverlayToggle    = document.getElementById("va-overlay-toggle");

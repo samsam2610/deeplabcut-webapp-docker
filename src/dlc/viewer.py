@@ -292,6 +292,70 @@ def viewer_h5_info():
         return jsonify({"error": str(exc)}), 500
 
 
+@bp.route("/dlc/viewer/frame-poses/<int:frame_number>")
+def viewer_frame_poses(frame_number: int):
+    """
+    Return visible marker positions for a single frame as compact JSON.
+    Used by the client canvas overlay for hover hit-testing.
+
+    Query params:
+      h5        : absolute path to the .h5 analysis file
+      threshold : likelihood cutoff (default 0.6)
+      parts     : comma-separated body-part names (default: all)
+
+    Response: { "poses": [{"bp": "Snout", "x": 712.1, "y": 308.9, "lh": 0.98, "color_idx": 0}, ...],
+                "bodyparts": [...] }
+    """
+    h5_path = request.args.get("h5", "").strip()
+    if not h5_path:
+        return jsonify({"error": "h5 param required."}), 400
+
+    hp = Path(h5_path)
+    if not hp.is_file():
+        return jsonify({"error": "h5 file not found."}), 404
+    if not _viewer_sec_check(hp.parent):
+        return jsonify({"error": "Access denied."}), 403
+
+    try:
+        threshold = float(request.args.get("threshold", "0.6"))
+    except ValueError:
+        threshold = 0.6
+
+    parts_raw      = request.args.get("parts", "").strip()
+    selected_parts = {s.strip() for s in parts_raw.split(",") if s.strip()} or None
+
+    h5_data   = viewer_load_h5(h5_path)
+    df        = h5_data["df"]
+    scorer    = h5_data["scorer"]
+    bodyparts = h5_data["bodyparts"]
+
+    selected = selected_parts if selected_parts else set(bodyparts)
+
+    poses = []
+    if frame_number < len(df):
+        row = df.iloc[frame_number][scorer]
+        for i, bp in enumerate(bodyparts):
+            if bp not in selected:
+                continue
+            try:
+                x  = float(row[bp]["x"])
+                y  = float(row[bp]["y"])
+                lh = float(row[bp]["likelihood"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if lh < threshold:
+                continue
+            poses.append({
+                "bp":        bp,
+                "x":         round(x, 2),
+                "y":         round(y, 2),
+                "lh":        round(lh, 4),
+                "color_idx": i,           # index into bodyparts list for palette
+            })
+
+    return jsonify({"poses": poses, "bodyparts": bodyparts, "n_bodyparts": len(bodyparts)})
+
+
 @bp.route("/dlc/viewer/frame-annotated/<int:frame_number>")
 def viewer_frame_annotated(frame_number: int):
     """
