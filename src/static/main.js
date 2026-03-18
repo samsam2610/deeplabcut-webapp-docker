@@ -5068,7 +5068,7 @@
 
     async function _vaRefreshBrowse(path) {
       _vaBrowsePath = path;
-      vaBrowseBreadcrumb.textContent = path;
+      vaBrowseBreadcrumb.value = path;
       vaBrowseList.innerHTML = '<p class="explorer-empty">Loading…</p>';
       try {
         const res  = await fetch(`/fs/ls?path=${encodeURIComponent(path)}`);
@@ -5131,6 +5131,33 @@
       if (!_vaBrowsePath) return;
       const parent = _vaBrowsePath.split("/").slice(0, -1).join("/") || "/";
       if (parent !== _vaBrowsePath) _vaRefreshBrowse(parent);
+    });
+
+    // ── Editable address bar ───────────────────────────────────
+    async function _vaNavigateTo(raw) {
+      const p = raw.trim();
+      if (!p) return;
+      // Check if the path looks like a video file
+      const ext = p.slice(p.lastIndexOf(".")).toLowerCase();
+      if (_VA_VIDEO_EXTS.has(ext)) {
+        // Navigate the browser to the parent folder first, then open the video
+        const dir  = p.substring(0, p.lastIndexOf("/")) || "/";
+        const name = p.substring(p.lastIndexOf("/") + 1);
+        await _vaRefreshBrowse(dir);
+        _vaOpenBrowseVideo(p, name);
+      } else {
+        _vaRefreshBrowse(p);
+      }
+    }
+
+    vaBrowseBreadcrumb?.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); _vaNavigateTo(vaBrowseBreadcrumb.value); }
+      if (e.key === "Escape") { vaBrowseBreadcrumb.value = _vaBrowsePath || ""; vaBrowseBreadcrumb.blur(); }
+    });
+    // Also handle paste: navigate immediately after the clipboard text lands
+    vaBrowseBreadcrumb?.addEventListener("paste", e => {
+      // Let the paste complete, then navigate
+      setTimeout(() => _vaNavigateTo(vaBrowseBreadcrumb.value), 0);
     });
 
     // ── Kinematic overlay canvas ──────────────────────────────
