@@ -337,14 +337,14 @@ import { folderSelect } from './anipose.js';
     overlay.classList.remove("hidden");
   });
 
-})();
-
 function closeInspector() {
   const overlay = document.getElementById("inspector-overlay");
   const frame   = document.getElementById("inspector-frame");
   overlay.classList.add("hidden");
   frame.src = "";
 }
+// Expose globally so the inline onclick="closeInspector()" in base.html can call it
+window.closeInspector = closeInspector;
 
 // Handle close message posted from inside the inspector iframe
 window.addEventListener("message", e => {

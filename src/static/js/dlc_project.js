@@ -65,6 +65,7 @@ import { state } from './state.js';
   // ── Open/close project manager card ─────────────────────────
   btnManageDlc.addEventListener("click", () => {
     dlcProjectCard.classList.remove("hidden");
+    dlcProjectCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
     // Auto-open folder browser if user data is available
     if (state.userDataDir && dlcFolderNav.classList.contains("hidden")) {
       dlcFolderNav.classList.remove("hidden");

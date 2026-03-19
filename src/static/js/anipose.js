@@ -1,6 +1,6 @@
 "use strict";
 import { state } from './state.js';
-import { applyDlcProjectState, browseProject, showProgress } from './dlc_project.js';
+import { applyDlcProjectState, browseProject, showProgress, loadProjects, _initConfig, sourceBtnUserData } from './dlc_project.js';
 
   // ── Session DOM refs ────────────────────────────────────────
   const sessionDot   = document.getElementById("session-dot");

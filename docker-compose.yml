@@ -108,7 +108,10 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    restart: unless-stopped
+    # on-failure: restart only on crash (non-zero exit).
+    # The worker shuts itself down cleanly (exit 0) when the queue is empty,
+    # so Docker will NOT restart it automatically after idle shutdown.
+    restart: on-failure
 
   # ── Celery Worker — TensorFlow (GPU-enabled) ────────────────────
   # Handles: legacy TF DLC projects (tensorflow queue)
@@ -151,7 +154,10 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    restart: unless-stopped
+    # on-failure: restart only on crash (non-zero exit).
+    # The worker shuts itself down cleanly (exit 0) when the queue is empty,
+    # so Docker will NOT restart it automatically after idle shutdown.
+    restart: on-failure
 
 volumes:
   redis-data:

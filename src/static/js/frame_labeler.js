@@ -1292,7 +1292,9 @@ import { _populateGpuSelect } from './training.js';
           try {
             const tr   = await fetch(`/status/${taskId}`);
             const td   = await tr.json();
-            if (td.state === "SUCCESS") {
+            if (td.state === "PENDING" || td.state === "STARTED") {
+              flSaveStatus.textContent = td.stage || (td.state === "PENDING" ? "Queued — waiting for worker…" : "Converting to H5…");
+            } else if (td.state === "SUCCESS") {
               clearInterval(poll);
               const r   = td.result || {};
               const cnt = (r.converted || []).length;

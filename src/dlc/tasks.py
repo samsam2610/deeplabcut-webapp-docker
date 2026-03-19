@@ -626,6 +626,45 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         except OSError:
             pass
 
+        # ── Shut down this worker when there is nothing left to do ───────────
+        # After a short delay (lets any prefetched task register itself in Redis
+        # before we decide to exit), check whether this worker's broker queues
+        # are empty and no other job is marked "running".  If so, send SIGTERM
+        # to the Celery worker process for a graceful warm shutdown.
+        #
+        # docker-compose uses `restart: on-failure`, so the container is only
+        # restarted after a crash (non-zero exit), not after a clean shutdown.
+        # This means the worker stays off until explicitly started again.
+        #
+        # acks_late=False on this task ensures the broker message is already
+        # acknowledged before we reach here, so SIGTERM cannot cause the
+        # current job to be re-queued.
+        _worker_queues = ("tensorflow",) if engine == "tensorflow" else ("celery", "pytorch")
+        _train_task_id = task_id   # capture for closure
+
+        def _shutdown_if_idle():
+            import time as _t_
+            _t_.sleep(5)
+            try:
+                pending = sum(_redis.llen(q) for q in _worker_queues)
+                # Check whether any *other* job is still running on this worker
+                other_running = 0
+                for _jid in _redis.zrevrange("dlc_train_jobs", 0, 99):
+                    if _jid != _train_task_id:
+                        _j = _redis.hgetall("dlc_train_job:" + _jid)
+                        if _j.get("status") == "running":
+                            other_running += 1
+                for _jid in _redis.zrevrange("dlc_analyze_jobs", 0, 99):
+                    _j = _redis.hgetall("dlc_analyze_job:" + _jid)
+                    if _j.get("status") == "running":
+                        other_running += 1
+                if pending == 0 and other_running == 0:
+                    os.kill(os.getpid(), _signal.SIGTERM)
+            except Exception:
+                pass  # never let a shutdown-check error surface
+
+        _threading.Thread(target=_shutdown_if_idle, daemon=True).start()
+
 
 # ── GPU stats probe ───────────────────────────────────────────────
 
