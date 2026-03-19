@@ -1,0 +1,59 @@
+    <section class="card hidden" id="explorer-card">
+      <h2>Project Explorer</h2>
+      <p class="subtitle">Browse and upload files into each pipeline folder for the selected project.</p>
+
+      <div class="create-project-row">
+        <input type="text" id="new-project-name" placeholder="new-project-name"
+               autocomplete="off" spellcheck="false" />
+        <button id="create-project-btn" class="btn-sm btn-create">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Project
+        </button>
+        <span id="create-project-status" class="create-project-status"></span>
+      </div>
+
+      <div style="margin-bottom:.9rem">
+        <label>Project source</label>
+        <div class="source-btn-row">
+          <button class="btn-source active" id="source-btn-local" title="Projects uploaded from your computer (app data directory)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            Client uploads
+          </button>
+          <button class="btn-source" id="source-btn-userdata" title="User data volume (not mounted)" disabled>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            User data
+          </button>
+        </div>
+      </div>
+
+      <!-- User-data folder navigator (breadcrumb + subfolder chips) -->
+      <div id="userdata-nav" class="userdata-nav hidden">
+        <div id="userdata-breadcrumb" class="userdata-breadcrumb"></div>
+        <div id="userdata-subfolders" class="userdata-subfolders"></div>
+      </div>
+
+      <div class="field" style="margin-bottom:.9rem">
+        <label for="explorer-folder-select">Project folder</label>
+        <div class="select-wrap">
+          <select id="explorer-folder-select">
+            <option value="">— select a project —</option>
+          </select>
+          <svg class="chevron" width="16" height="16" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+        </div>
+      </div>
+
+      <div class="explorer-actions-row hidden" id="explorer-project-actions">
+        <button class="btn-sm" id="refresh-explorer-btn" title="Refresh file list">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          Refresh
+        </button>
+        <button class="btn-sm" id="download-project-btn" title="Download entire project as ZIP">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="5 12 12 19 19 12"/></svg>
+          Download Project
+        </button>
+      </div>
+
+      <div id="explorer-folders">
+        <p class="explorer-empty">Select or create a project to browse its pipeline folders.</p>
+      </div>
+    </section>

@@ -50,7 +50,16 @@ _JS   = _REPO / "src" / "static" / "main.js"
 assert _HTML.is_file(), f"Template not found: {_HTML}"
 assert _JS.is_file(),   f"main.js not found: {_JS}"
 
-_html_text = _HTML.read_text(encoding="utf-8")
+# After the modular HTML refactor, index.html contains only Jinja {% include %}
+# directives. Concatenate index.html plus all partial templates so that the
+# same ID/tag checks work against the full rendered tree.
+_PARTIALS_DIR = _REPO / "src" / "templates" / "partials"
+_html_parts = [_HTML.read_text(encoding="utf-8")]
+if _PARTIALS_DIR.is_dir():
+    for p in sorted(_PARTIALS_DIR.glob("*.html")):
+        _html_parts.append(p.read_text(encoding="utf-8"))
+_html_text = "\n".join(_html_parts)
+
 _js_text   = _JS.read_text(encoding="utf-8")
 
 

@@ -1,0 +1,278 @@
+    <section class="card dlc-theme hidden" id="frame-labeler-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>Frame Labeler</h2>
+        <button class="btn-sm" id="btn-close-frame-labeler" title="Close frame labeler">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Labels are saved as <code id="fl-scorer-filename" style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">CollectedData_&lt;scorer&gt;.csv</code>.</p>
+      <div style="font-size:.75rem;color:var(--text-dim);background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:.45rem .65rem;margin-bottom:.75rem;display:grid;grid-template-columns:auto 1fr;gap:.2rem .75rem;line-height:1.5">
+        <span style="color:var(--text)"><kbd>Click</kbd></span>                                <span>Place selected body-part marker</span>
+        <span style="color:var(--text)"><kbd>→</kbd> <kbd>←</kbd></span>                      <span>Next / previous frame</span>
+        <span style="color:var(--text)"><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd></span>           <span>Next / previous body part</span>
+        <span style="color:var(--text)"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span> <span>Nudge selected marker 1 px (cursor inside canvas + marker placed) — hold <kbd>Shift</kbd> for 10 px</span>
+        <span style="color:var(--text)"><kbd>Space</kbd></span>                                <span>Toggle visibility of selected marker — hides from view, preserves data</span>
+        <span style="color:var(--text)"><kbd>⌫</kbd> Backspace</span>                          <span>Delete selected body-part marker</span>
+        <span style="color:var(--text)"><kbd>Del</kbd> / Right-click canvas</span>             <span>Delete selected marker (cursor inside canvas)</span>
+        <span style="color:var(--text)">Double-click chip</span>                               <span>Toggle marker visibility</span>
+        <span style="color:var(--text)">Double-click <em>Clear Frame</em></span>               <span>Erase all markers on the current frame</span>
+      </div>
+
+      <!-- ── Labeled-data folder selector ──────────────────────── -->
+      <div style="margin-bottom:.75rem">
+        <label style="display:block;font-size:.78rem;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.4rem">Labeled frames folder</label>
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <div class="select-wrap" style="flex:1">
+            <select id="fl-stem-select">
+              <option value="">— select video —</option>
+            </select>
+            <svg class="chevron" width="16" height="16" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+          </div>
+          <button class="btn-sm" id="fl-refresh-btn" title="Refresh labeled-data folder list">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh
+          </button>
+        </div>
+        <span id="fl-stem-status" class="fe-extract-status" style="margin-top:.3rem"></span>
+      </div>
+
+      <!-- ── Machine pre-labeling panel ──────────────────────────── -->
+      <div style="margin-bottom:.75rem">
+        <label style="display:flex;align-items:center;gap:.5rem;font-size:.82rem;cursor:pointer;user-select:none">
+          <input type="checkbox" id="fl-ml-checkbox" style="accent-color:var(--accent)">
+          Pre-label frames with trained model
+        </label>
+        <div id="fl-ml-opts" class="hidden" style="margin-top:.55rem;padding:.6rem .7rem;background:var(--surface);border:1px solid var(--border);border-radius:6px">
+          <!-- Model snapshot -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-snapshot" style="white-space:nowrap">Model snapshot</label>
+            <select id="fl-ml-snapshot" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+              <option value="-1">Latest (from config)</option>
+            </select>
+            <button class="btn-sm" id="fl-ml-refresh-snap" title="Refresh snapshot list" style="padding:.2rem .45rem;font-size:.75rem">↺</button>
+          </div>
+          <!-- Shuffle -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-shuffle">Shuffle</label>
+            <input type="number" id="fl-ml-shuffle" value="1" min="1" max="20" style="width:5rem" />
+          </div>
+          <!-- Training set index -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-tsidx">Training set index</label>
+            <input type="number" id="fl-ml-tsidx" value="0" min="0" style="width:5rem" />
+          </div>
+          <!-- GPU -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-gpu">GPU to use</label>
+            <select id="fl-ml-gpu" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+              <option value="">auto</option>
+            </select>
+          </div>
+          <!-- Likelihood threshold -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-ml-likelihood" title="Predictions below this confidence score will be discarded">Likelihood threshold</label>
+            <input type="number" id="fl-ml-likelihood" value="0.9" min="0" max="1" step="0.05" style="width:5rem" />
+          </div>
+          <!-- Update Threshold (shown only when raw predictions exist for current stem) -->
+          <div id="fl-ml-update-wrap" class="hidden" style="margin-bottom:.7rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+            <button id="fl-ml-update-btn" class="btn-sm btn-server-pick" style="gap:.4rem">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              Update Threshold
+            </button>
+            <span style="font-size:.75rem;color:var(--text-dim)">raw predictions saved — no re-run needed</span>
+            <span id="fl-ml-update-status" class="fe-extract-status" style="margin-left:auto"></span>
+          </div>
+          <!-- Run / Stop -->
+          <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.3rem">
+            <button id="fl-ml-run-btn" class="btn-sm btn-create">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run Machine Labels
+            </button>
+            <button id="fl-ml-run-all-btn" class="btn-sm btn-create">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+              Run All Folders
+            </button>
+            <button id="fl-ml-stop-btn" class="btn-sm btn-danger hidden">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+              Stop
+            </button>
+          </div>
+          <span id="fl-ml-status" class="fe-extract-status"></span>
+          <!-- Progress -->
+          <div id="fl-ml-progress" class="hidden" style="margin-top:.8rem">
+            <div class="progress-header">
+              <span>Machine Labeling</span>
+              <span id="fl-ml-task-id" class="task-id-badge"></span>
+            </div>
+            <div class="progress-track">
+              <div id="fl-ml-progress-bar" class="progress-fill"></div>
+            </div>
+            <div class="progress-meta">
+              <span id="fl-ml-progress-stage">Queued</span>
+              <span id="fl-ml-progress-pct">0 %</span>
+            </div>
+            <div class="log-panel">
+              <div class="log-title">Log</div>
+              <pre id="fl-ml-log-output">Waiting for output…</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── TAPNet label propagation panel ─────────────────────── -->
+      <div style="margin-bottom:.75rem">
+        <label style="display:flex;align-items:center;gap:.5rem;font-size:.82rem;cursor:pointer;user-select:none">
+          <input type="checkbox" id="fl-tap-checkbox" style="accent-color:var(--accent)">
+          Propagate labels with TAPNet
+        </label>
+        <div id="fl-tap-opts" class="hidden" style="margin-top:.55rem;padding:.6rem .7rem;background:var(--surface);border:1px solid var(--border);border-radius:6px">
+          <!-- Checkpoint path -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-tap-ckpt" title="Path to TAPIR .npy checkpoint file on the server">Checkpoint path</label>
+            <input type="text" id="fl-tap-ckpt" placeholder="~/.tapnet/tapir_checkpoint_panning.npy"
+              style="flex:1;min-width:0;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem" />
+          </div>
+          <!-- Anchor -->
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="fl-tap-anchor" title="Which labeled endpoint to track from">Anchor frame</label>
+            <select id="fl-tap-anchor" style="flex:1;min-width:0;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+              <option value="auto">Auto (first, else last)</option>
+              <option value="first">First frame</option>
+              <option value="last">Last frame</option>
+            </select>
+          </div>
+          <!-- Sequence preview -->
+          <div style="margin-bottom:.55rem">
+            <button id="fl-tap-check-btn" class="btn-sm btn-server-pick" style="gap:.4rem">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              Check sequences
+            </button>
+            <span id="fl-tap-check-status" class="fe-extract-status" style="margin-left:.5rem"></span>
+            <div id="fl-tap-seq-info" class="hidden" style="margin-top:.45rem;font-size:.78rem;color:var(--text-dim);line-height:1.5"></div>
+          </div>
+          <!-- Overwrite -->
+          <div style="margin-bottom:.55rem">
+            <label style="display:flex;align-items:center;gap:.5rem;font-size:.82rem;cursor:pointer;user-select:none">
+              <input type="checkbox" id="fl-tap-overwrite" style="accent-color:var(--accent)">
+              Overwrite existing labels
+            </label>
+          </div>
+          <!-- Run / Stop -->
+          <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.3rem">
+            <button id="fl-tap-run-btn" class="btn-sm btn-create">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run TAPNet
+            </button>
+            <button id="fl-tap-stop-btn" class="btn-sm btn-danger hidden">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+              Stop
+            </button>
+          </div>
+          <!-- Re-run with confirmed anchors -->
+          <div style="display:flex;align-items:center;gap:.7rem;margin-top:.5rem;margin-bottom:.3rem;flex-wrap:wrap">
+            <button id="fl-tap-rerun-btn" class="btn-sm hidden" title="Re-run TAPNet using confirmed anchor frames to interpolate between them">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.56"/></svg>
+              Re-run with confirmed anchors
+            </button>
+            <span id="fl-tap-confirmed-count" class="hidden" style="font-size:.78rem;color:var(--text-dim)"></span>
+          </div>
+          <span id="fl-tap-status" class="fe-extract-status"></span>
+          <!-- Progress -->
+          <div id="fl-tap-progress" class="hidden" style="margin-top:.8rem">
+            <div class="progress-header">
+              <span>TAPNet Propagation</span>
+              <span id="fl-tap-task-id" class="task-id-badge"></span>
+            </div>
+            <div class="progress-track">
+              <div id="fl-tap-progress-bar" class="progress-fill"></div>
+            </div>
+            <div class="progress-meta">
+              <span id="fl-tap-progress-stage">Queued</span>
+              <span id="fl-tap-progress-pct">0 %</span>
+            </div>
+            <div class="log-panel">
+              <div class="log-title">Log</div>
+              <pre id="fl-tap-log-output">Waiting for output…</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Player section (shown when a stem is selected) ─────── -->
+      <div id="fl-player-section" class="hidden">
+
+        <!-- Frame navigation -->
+        <div class="fl-frame-nav">
+          <button class="btn-sm fe-ctrl-btn" id="fl-btn-prev" title="Previous frame (←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/><line x1="9" y1="6" x2="9" y2="18"/></svg>
+          </button>
+          <span class="fe-frame-counter" id="fl-frame-info">Frame 0 / 0</span>
+          <button class="btn-sm fe-ctrl-btn" id="fl-btn-next" title="Next frame (→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
+          </button>
+          <span class="fe-time-display" id="fl-frame-name" style="font-size:.72rem"></span>
+          <!-- TAPNet per-frame status (shown when TAPNet panel is active) -->
+          <span id="fl-tap-frame-badge" class="hidden" style="font-size:.7rem;padding:.15rem .45rem;border-radius:3px;background:var(--surface-2);color:var(--text-dim);border:1px solid var(--border)"></span>
+          <button id="fl-tap-confirm-btn" class="btn-sm hidden" title="Toggle this frame as a TAPNet anchor for iterative re-labeling" style="font-size:.75rem;padding:.2rem .55rem">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <span id="fl-tap-confirm-label">Confirm as anchor</span>
+          </button>
+        </div>
+
+        <!-- Marker display controls -->
+        <div style="display:flex;align-items:center;gap:1.2rem;margin-bottom:.5rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Viewer size
+            <input type="range" id="fl-zoom" min="50" max="300" value="100" step="25" style="width:80px;accent-color:var(--accent)">
+            <span id="fl-zoom-val" style="min-width:2.5rem;text-align:right;color:var(--text)">100 %</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Marker size
+            <input type="range" id="fl-marker-size" min="1" max="24" value="4" style="width:80px;accent-color:var(--accent)">
+            <span id="fl-marker-size-val" style="min-width:1.4rem;text-align:right;color:var(--text)">4</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);cursor:pointer;user-select:none">
+            <input type="checkbox" id="fl-show-names" checked style="accent-color:var(--accent)">
+            Show names
+          </label>
+        </div>
+
+        <!-- Labeling canvas -->
+        <div class="fl-canvas-wrap">
+          <canvas id="fl-canvas"></canvas>
+          <p class="fl-canvas-empty hidden" id="fl-canvas-loading">Loading frame…</p>
+        </div>
+
+        <!-- Body-part selector (napari-style chip list) -->
+        <div style="margin-top:.75rem">
+          <label style="display:block;font-size:.75rem;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.4rem">Body parts — click to select, then click on the frame</label>
+          <div id="fl-bodypart-list" class="fl-bodypart-list"></div>
+          <p class="fl-bp-hint" id="fl-bp-hint">No body parts found. Make sure the DLC project has a valid config.yaml.</p>
+        </div>
+
+        <!-- Save row -->
+        <div style="display:flex;align-items:center;gap:.8rem;margin-top:1rem;flex-wrap:wrap">
+          <button id="fl-btn-save" class="btn-sm btn-create" style="justify-content:center;padding:.5rem 1rem">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Save Labels
+          </button>
+          <button id="fl-btn-save-h5" class="btn-sm" style="justify-content:center;padding:.5rem 1rem" title="Save current CSV labels then convert all labeled-data folders to HDF5 via DeepLabCut">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Save all to H5
+          </button>
+          <button id="fl-btn-clear-frame" class="btn-sm" title="Double-click to erase all markers on this frame"
+            style="padding:.5rem .8rem;border-color:var(--danger);color:var(--danger);opacity:.75">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            Clear Frame
+          </button>
+          <button id="fl-btn-delete-frame" class="btn-sm" title="Double-click to permanently delete this frame (image + CSV + H5)"
+            style="padding:.5rem .8rem;border-color:var(--danger);color:var(--danger);opacity:.75">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="12" y1="11" x2="12" y2="17"/></svg>
+            Delete Frame
+          </button>
+          <span id="fl-save-status" class="fl-save-status"></span>
+        </div>
+        <span id="fl-label-count" class="fl-label-count">0 / 0 frames labeled</span>
+      </div>
+    </section>

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Pose Processing Pipeline{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <!-- Modular CSS — load order: variables → base → layout → components → viewer -->
+  <link rel="stylesheet" href="/static/css/variables.css" />
+  <link rel="stylesheet" href="/static/css/base.css" />
+  <link rel="stylesheet" href="/static/css/layout.css" />
+  <link rel="stylesheet" href="/static/css/components.css" />
+  <link rel="stylesheet" href="/static/css/viewer.css" />
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+
+  <!-- ─── Background grain ──────────────────────────────────── -->
+  <div class="grain" aria-hidden="true"></div>
+
+  <!-- ─── Header ────────────────────────────────────────────── -->
+  <header class="site-header">
+    <div class="logo">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="5" r="2.5"/>
+        <line x1="12" y1="7.5" x2="12" y2="15"/>
+        <line x1="12" y1="10" x2="7" y2="12.5"/>
+        <line x1="12" y1="10" x2="17" y2="12.5"/>
+        <line x1="12" y1="15" x2="8" y2="21"/>
+        <line x1="12" y1="15" x2="16" y2="21"/>
+        <circle cx="7" cy="12.5" r="1" fill="currentColor"/>
+        <circle cx="17" cy="12.5" r="1" fill="currentColor"/>
+        <circle cx="8" cy="21" r="1" fill="currentColor"/>
+        <circle cx="16" cy="21" r="1" fill="currentColor"/>
+      </svg>
+      <span>Pose Processing Pipeline</span>
+    </div>
+    <span class="badge">v1.0</span>
+  </header>
+
+  {% block content %}{% endblock %}
+
+  <!-- ─── Footer ────────────────────────────────────────────── -->
+  <footer>
+    <p>Flask + Celery + Redis · GPU Worker with NVIDIA CUDA 11.8</p>
+  </footer>
+
+  {% block scripts %}
+  <!-- Modular JS entry point (ES module, deferred by default) -->
+  <script type="module" src="/static/js/main.js"></script>
+  {% endblock %}
+
+  <!-- ─── Behavior Inspector full-screen overlay ───────────────── -->
+  <div id="inspector-overlay" class="hidden">
+    <button id="inspector-close-btn" onclick="closeInspector()">&#x2715; Close</button>
+    <iframe id="inspector-frame" src="" allowfullscreen></iframe>
+  </div>
+</body>
+</html>

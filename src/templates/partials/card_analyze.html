@@ -1,0 +1,157 @@
+    <section class="card dlc-theme hidden" id="analyze-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>Analyze Video / Frames</h2>
+        <button class="btn-sm" id="btn-close-analyze" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Run pose estimation on a video file, image file, or folder using the trained model.</p>
+
+      <!-- Target path -->
+      <div style="margin-bottom:.5rem">
+        <label style="display:block;font-size:.78rem;color:var(--text-dim);margin-bottom:.3rem">Target (file or folder path)</label>
+        <div style="display:flex;gap:.4rem">
+          <input type="text" id="av-target-path" placeholder="/path/to/video.mp4  or  /path/to/folder"
+            style="flex:1;font-family:var(--mono);font-size:.78rem;padding:.35rem .55rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+          <button class="btn-sm" id="av-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
+          <button class="btn-sm" id="av-browse-btn" title="Browse project folders">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Browse
+          </button>
+        </div>
+        <div id="av-browser" class="hidden" style="margin-top:.5rem;max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem"></div>
+      </div>
+
+      <!-- Output folder -->
+      <div style="margin-bottom:.7rem">
+        <label style="display:block;font-size:.78rem;color:var(--text-dim);margin-bottom:.3rem">Output folder <span style="opacity:.6">(analysis data + labeled video; default: same as target)</span></label>
+        <div style="display:flex;gap:.4rem">
+          <input type="text" id="clv-destfolder" placeholder="/path/to/output  (default: same as target)"
+            style="flex:1;font-family:var(--mono);font-size:.78rem;padding:.35rem .55rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+          <button class="btn-sm" id="clv-dest-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
+          <button class="btn-sm" id="clv-dest-browse-btn" title="Browse output folder">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Browse
+          </button>
+          <button class="btn-sm" id="clv-dest-clear-btn" title="Clear" style="opacity:.7">✕</button>
+        </div>
+        <div id="clv-dest-browser" class="hidden" style="margin-top:.5rem;max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem"></div>
+      </div>
+
+      <!-- Model snapshot -->
+      <div class="scorer-row" style="margin-bottom:.7rem">
+        <label for="av-snapshot">Model snapshot</label>
+        <select id="av-snapshot" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+          <option value="-1">Latest (from config)</option>
+        </select>
+        <button class="btn-sm" id="av-refresh-snapshots" title="Refresh snapshot list" style="padding:.2rem .45rem;font-size:.75rem">↺</button>
+      </div>
+
+      <!-- Common params -->
+      <div class="scorer-row" style="margin-bottom:.7rem">
+        <label for="av-shuffle">Shuffle</label>
+        <input type="number" id="av-shuffle" value="1" min="1" max="20" style="width:5rem" />
+      </div>
+      <div class="scorer-row" style="margin-bottom:.7rem">
+        <label for="av-trainingsetindex">Training set index</label>
+        <input type="number" id="av-trainingsetindex" value="0" min="0" style="width:5rem" />
+      </div>
+      <div class="scorer-row" style="margin-bottom:.7rem">
+        <label for="av-batch-size">Batch size</label>
+        <input type="number" id="av-batch-size" value="" min="1" placeholder="default" style="width:6rem" />
+      </div>
+      <div class="scorer-row" style="margin-bottom:.7rem">
+        <label for="av-gputouse">GPU to use</label>
+        <select id="av-gputouse" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+          <option value="">auto</option>
+        </select>
+      </div>
+      <div class="scorer-row" style="margin-bottom:.7rem">
+        <label for="av-save-csv">Save as CSV</label>
+        <input type="checkbox" id="av-save-csv" style="width:auto" checked />
+      </div>
+      <div class="scorer-row" style="margin-bottom:.9rem">
+        <label for="av-create-labeled">Create labeled video / frame</label>
+        <input type="checkbox" id="av-create-labeled" style="width:auto" />
+      </div>
+
+      <!-- Parameters for labeled videos (shared by checkbox and standalone button) -->
+      <div style="margin-bottom:.9rem;padding:.7rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)">
+        <div style="font-size:.78rem;font-weight:600;color:var(--text-2);margin-bottom:.6rem;text-transform:uppercase;letter-spacing:.04em">Parameters for labeled videos</div>
+        <div class="scorer-row" style="margin-bottom:.5rem">
+          <label for="clv-pcutoff">P-cutoff</label>
+          <input type="number" id="clv-pcutoff" step="0.01" min="0" max="1" placeholder="from config" style="width:7rem" />
+        </div>
+        <div class="scorer-row" style="margin-bottom:.5rem">
+          <label for="clv-dotsize">Dot size</label>
+          <input type="number" id="clv-dotsize" value="8" min="1" max="50" style="width:5rem" />
+        </div>
+        <div class="scorer-row" style="margin-bottom:.5rem">
+          <label for="clv-colormap">Colormap</label>
+          <select id="clv-colormap" style="flex:1;background:var(--surface-3,#1e1e1e);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+            <option value="rainbow">rainbow</option>
+            <option value="jet">jet</option>
+            <option value="viridis">viridis</option>
+            <option value="plasma">plasma</option>
+            <option value="inferno">inferno</option>
+            <option value="Blues">Blues</option>
+            <option value="Reds">Reds</option>
+            <option value="hsv">hsv</option>
+          </select>
+        </div>
+        <div class="scorer-row" style="margin-bottom:.5rem">
+          <label for="clv-modelprefix">Model prefix</label>
+          <input type="text" id="clv-modelprefix" placeholder="(default)" style="flex:1" />
+        </div>
+        <div class="scorer-row" style="margin-bottom:.5rem">
+          <label for="clv-filtered">Use filtered predictions</label>
+          <input type="checkbox" id="clv-filtered" style="width:auto" />
+        </div>
+        <div class="scorer-row" style="margin-bottom:.5rem">
+          <label for="clv-draw-skeleton">Draw skeleton</label>
+          <input type="checkbox" id="clv-draw-skeleton" style="width:auto" />
+        </div>
+        <div class="scorer-row" style="margin-bottom:0">
+          <label for="clv-overwrite">Overwrite existing</label>
+          <input type="checkbox" id="clv-overwrite" style="width:auto" />
+        </div>
+      </div>
+
+      <!-- Run / Stop / Create Labeled Video -->
+      <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.3rem">
+        <button id="btn-run-analyze" class="btn-sm btn-create">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Start Analysis
+        </button>
+        <button id="btn-stop-analyze" class="btn-sm btn-danger hidden">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          Stop
+        </button>
+        <button id="btn-create-labeled-video" class="btn-sm" title="Requires analysis (.h5) to already exist for the selected video">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 10l4.553-2.069A1 1 0 0121 8.882V15.118a1 1 0 01-1.447.89L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>
+          Create Labeled Video
+        </button>
+      </div>
+      <span id="av-run-status" class="fe-extract-status"></span>
+      <span id="av-clv-status" class="fe-extract-status"></span>
+
+      <!-- Progress -->
+      <div id="av-progress" class="hidden" style="margin-top:1.2rem">
+        <div class="progress-header">
+          <span>Analysis</span>
+          <span id="av-task-id" class="task-id-badge"></span>
+        </div>
+        <div class="progress-track">
+          <div id="av-progress-bar" class="progress-fill"></div>
+        </div>
+        <div class="progress-meta">
+          <span id="av-progress-stage">Queued</span>
+          <span id="av-progress-pct">0 %</span>
+        </div>
+        <div class="log-panel">
+          <div class="log-title">Log</div>
+          <pre id="av-log-output">Waiting for output…</pre>
+        </div>
+      </div>
+    </section>

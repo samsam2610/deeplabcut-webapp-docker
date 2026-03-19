@@ -1,0 +1,292 @@
+    <section class="card dlc-theme hidden" id="view-analyzed-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>View Analyzed Videos / Frames</h2>
+        <button class="btn-sm" id="btn-close-view-analyzed" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Browse and play labeled videos or frame-by-frame labeled image folders produced by the analysis step.</p>
+
+      <!-- Source tabs -->
+      <div style="display:flex;gap:.4rem;margin-bottom:.6rem">
+        <button id="va-tab-project" class="btn-sm active" style="padding:.2rem .65rem;font-size:.75rem">Project Content</button>
+        <button id="va-tab-browse" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Browse Folders</button>
+      </div>
+
+      <!-- Tab: Project Content -->
+      <div id="va-tab-project-panel">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+          <label style="font-size:.78rem;color:var(--text-dim)">Labeled content</label>
+          <button class="btn-sm" id="va-refresh-btn" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
+        </div>
+        <div id="va-content-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
+          <p class="explorer-empty">Loading…</p>
+        </div>
+      </div>
+
+      <!-- Tab: Browse Folders -->
+      <div id="va-tab-browse-panel" class="hidden">
+        <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem">
+          <input id="va-browse-breadcrumb" type="text" spellcheck="false" autocomplete="off"
+            placeholder="/paste/a/path/here"
+            style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:5px;padding:.25rem .45rem" />
+          <button class="btn-sm" id="va-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
+        </div>
+        <div id="va-browse-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
+          <p class="explorer-empty">Loading…</p>
+        </div>
+      </div>
+
+      <!-- Player section (shown after a selection is made) -->
+      <div id="va-player-section" class="hidden">
+        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap">
+          <span id="va-selected-name" style="font-family:var(--mono);font-size:.78rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
+          <button class="btn-sm" id="va-btn-back" style="padding:.2rem .6rem;font-size:.75rem;flex-shrink:0">&#8592; Back</button>
+        </div>
+
+        <!-- Viewer size control -->
+        <div style="display:flex;align-items:center;gap:1.2rem;margin-bottom:.5rem">
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Viewer size
+            <input type="range" id="va-zoom" min="50" max="300" value="100" step="25" style="width:80px;accent-color:var(--accent)">
+            <span id="va-zoom-val" style="min-width:2.5rem;text-align:right;color:var(--text)">100 %</span>
+          </label>
+        </div>
+
+        <!-- ── Video Metadata Strip (companion CSV) ─────────── -->
+        <div id="va-metadata-panel" style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.5rem;padding:.32rem .55rem;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;font-size:.76rem">
+          <span style="color:var(--text-dim);flex-shrink:0">CSV</span>
+          <span id="va-meta-csv-info" style="color:var(--text-dim);font-family:var(--mono)">No companion CSV</span>
+          <div id="va-meta-frame-row" style="display:none;margin-left:auto;display:flex;gap:.45rem;align-items:center;font-size:.75rem">
+            <span style="color:var(--text-dim)">Note:</span>
+            <span id="va-meta-frame-note" style="color:var(--text);font-style:italic;max-width:18rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+            <span style="color:var(--text-dim);margin-left:.35rem">Status:</span>
+            <span id="va-meta-frame-status" style="font-family:var(--mono);color:var(--text)"></span>
+          </div>
+        </div>
+
+        <!-- ── Kinematic Overlay Panel ──────────────────────── -->
+        <div id="va-overlay-panel" style="margin-bottom:.6rem;padding:.5rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
+          <!-- Toggle row -->
+          <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:.45rem;font-size:.8rem;font-weight:500;cursor:pointer;user-select:none">
+              <input type="checkbox" id="va-overlay-toggle" style="accent-color:var(--accent);width:14px;height:14px" />
+              Show Kinematic Markers
+            </label>
+            <span id="va-overlay-status" class="fe-extract-status" style="font-size:.73rem"></span>
+          </div>
+
+          <!-- Controls (hidden until toggled on) -->
+          <div id="va-overlay-controls" class="hidden" style="margin-top:.5rem">
+
+            <!-- h5 file row -->
+            <div style="margin-bottom:.45rem">
+              <label style="display:block;font-size:.73rem;color:var(--text-dim);margin-bottom:.25rem">Analysis file (.h5)</label>
+              <div style="display:flex;gap:.35rem;align-items:center">
+                <input type="text" id="va-overlay-h5-path" readonly placeholder="auto-detected or browse…"
+                  style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;padding:.28rem .45rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+                <button class="btn-sm" id="va-overlay-h5-auto" title="Auto-detect h5 from video folder">Auto</button>
+                <button class="btn-sm" id="va-overlay-h5-browse" title="Browse for h5 file">Browse</button>
+                <button class="btn-sm" id="va-overlay-h5-clear" style="opacity:.7" title="Clear">✕</button>
+              </div>
+              <!-- h5 file browser -->
+              <div id="va-overlay-h5-browser" class="hidden"
+                style="margin-top:.4rem;max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.3rem .4rem;font-size:.75rem"></div>
+            </div>
+
+            <!-- Likelihood threshold -->
+            <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.35rem;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+                Threshold
+                <input type="range" id="va-overlay-threshold" min="0" max="1" step="0.05" value="0.6"
+                  style="width:90px;accent-color:var(--accent)">
+                <span id="va-overlay-threshold-val" style="font-family:var(--mono);font-size:.75rem;min-width:2.5rem">0.60</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+                Marker size
+                <input type="range" id="va-overlay-marker-size" min="1" max="30" step="1" value="6"
+                  style="width:70px;accent-color:var(--accent)">
+                <span id="va-overlay-marker-size-val" style="font-family:var(--mono);font-size:.75rem;min-width:1.8rem">6</span>px
+              </label>
+            </div>
+
+            <!-- Body part selector -->
+            <div>
+              <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.25rem">
+                <span style="font-size:.73rem;color:var(--text-dim)">Body parts</span>
+                <button class="btn-sm" id="va-overlay-parts-all" style="padding:.1rem .4rem;font-size:.7rem">All</button>
+                <button class="btn-sm" id="va-overlay-parts-none" style="padding:.1rem .4rem;font-size:.7rem">None</button>
+              </div>
+              <div id="va-overlay-bodyparts"
+                style="display:flex;flex-wrap:wrap;gap:.3rem .5rem;max-height:100px;overflow-y:auto;padding:.25rem .1rem;font-size:.75rem">
+                <span style="color:var(--text-dim);font-size:.73rem">Load an .h5 file to see body parts.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="va-video-wrap" style="position:relative;background:#000;border-radius:8px;border:1px solid var(--border);margin-bottom:.75rem">
+          <img id="va-frame-img" alt="" draggable="false" style="width:100%;display:block;height:auto" />
+          <!-- Transparent canvas for hover hit-testing and label display -->
+          <canvas id="va-overlay-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></canvas>
+          <div id="va-frame-spinner" class="fe-frame-spinner hidden"></div>
+        </div>
+
+        <!-- Controls row -->
+        <div class="fe-controls">
+          <button id="va-btn-play" class="btn-sm fe-ctrl-btn" title="Play / Pause (Space)">
+            <svg id="va-play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <svg id="va-pause-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" class="hidden"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          </button>
+          <button id="va-btn-prev" class="btn-sm fe-ctrl-btn" title="Previous frame (←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/><line x1="9" y1="6" x2="9" y2="18"/></svg>
+          </button>
+          <button id="va-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
+          </button>
+          <!-- Multi-frame skip -->
+          <button id="va-btn-skip-back" class="btn-sm fe-ctrl-btn" title="Skip backward N frames (Ctrl+←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="19 18 13 12 19 6"/><polyline points="13 18 7 12 13 6"/></svg>
+          </button>
+          <input type="number" id="va-skip-n" value="10" min="1" max="9999" step="1"
+            title="Frames to skip (Ctrl+← / Ctrl+→)"
+            style="width:72px;text-align:center;font-family:var(--mono);font-size:.78rem;padding:.18rem .3rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+          <button id="va-btn-skip-fwd" class="btn-sm fe-ctrl-btn" title="Skip forward N frames (Ctrl+→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="5 18 11 12 5 6"/><polyline points="11 18 17 12 11 6"/></svg>
+          </button>
+          <span class="fe-frame-counter" id="va-frame-counter">Frame 0 / 0</span>
+          <span class="fe-time-display" id="va-time-display">0.000 s</span>
+        </div>
+
+        <!-- Seek slider -->
+        <input type="range" id="va-seek" class="fe-seek" min="0" max="1000" value="0" step="1" />
+
+        <span id="va-status" class="fe-extract-status"></span>
+
+        <!-- ── Dataset Curation Panel ──────────────────────────────── -->
+        <div id="va-curation-panel" style="margin-top:.65rem;padding:.5rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
+
+          <!-- Header -->
+          <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.45rem">
+            <span style="font-size:.8rem;font-weight:600;color:var(--text)">Dataset Curation</span>
+            <span id="va-curation-status" class="fe-extract-status" style="font-size:.73rem;flex:1;min-width:0"></span>
+          </div>
+
+          <!-- Row 1: Quick-extract + Add to Dataset -->
+          <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.4rem">
+            <button class="btn-sm" id="va-extract-frame-btn"
+              title="Save the raw video frame as a lossless PNG in labeled-data/ (no CSV entry)">
+              Extract Frame
+            </button>
+            <button class="btn-sm" id="va-add-to-dataset-btn"
+              style="background:var(--accent);color:#fff;font-weight:500"
+              title="Extract frame + add blank entry to CollectedData CSV/H5">
+              + Add to Dataset
+            </button>
+          </div>
+
+          <!-- Row 2: Batch extraction controls -->
+          <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.4rem">
+            <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">Batch:</label>
+            <input type="number" id="va-batch-count" value="10" min="1" max="500"
+              style="width:4.2rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem"
+              title="Number of frames to add" />
+            <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">every</label>
+            <input type="number" id="va-batch-step" value="30" min="1" max="9999"
+              style="width:4.2rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem"
+              title="Frame step between additions" />
+            <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">frames</label>
+            <button class="btn-sm" id="va-batch-add-btn"
+              title="Add multiple frames to the dataset starting from the current frame">
+              Batch Add
+            </button>
+          </div>
+
+          <!-- Row 3: Companion CSV status -->
+          <div id="va-csv-section" style="border-top:1px solid var(--border);padding-top:.45rem;margin-top:.05rem">
+            <!-- No CSV found -->
+            <div id="va-csv-none">
+              <span style="font-size:.79rem;color:var(--text-dim)">No companion CSV found.</span>
+              <div style="margin-top:.35rem;display:flex;align-items:center;gap:.5rem">
+                <button class="btn-sm btn-create" id="va-create-csv-btn">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  Create CSV
+                </button>
+                <span id="va-csv-create-status" class="fe-extract-status"></span>
+              </div>
+            </div>
+            <!-- CSV loaded -->
+            <div id="va-csv-loaded" class="hidden" style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+              <span style="font-size:.74rem;color:var(--text-dim);flex-shrink:0">CSV:</span>
+              <span id="va-csv-path-display" style="font-family:var(--mono);font-size:.71rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
+            </div>
+          </div>
+
+          <!-- Row 3b: CSV timelines — status first, notes second -->
+          <div id="va-csv-bars" class="hidden" style="margin-top:.5rem">
+            <div id="va-status-bar-wrap" class="hidden">
+              <div style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;margin-bottom:.18rem">
+                <span class="fe-csv-bar-label" style="flex:1;margin:0">Status</span>
+                <button id="va-status-prev-btn" class="btn-sm" disabled title="Previous status frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">◀</button>
+                <button id="va-status-next-btn" class="btn-sm" disabled title="Next status frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">▶</button>
+              </div>
+              <canvas id="va-status-canvas" height="12"
+                style="width:100%;display:block;cursor:pointer;border-radius:3px;background:var(--surface)"
+                title="Click to jump to frame"></canvas>
+              <div id="va-status-chips" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
+            </div>
+            <div id="va-note-bar-wrap" class="hidden" style="margin-top:.4rem">
+              <div style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;margin-bottom:.18rem">
+                <span class="fe-csv-bar-label" style="flex:1;margin:0">Notes</span>
+                <button id="va-note-prev-btn" class="btn-sm" disabled title="Previous note frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">◀</button>
+                <button id="va-note-next-btn" class="btn-sm" disabled title="Next note frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">▶</button>
+              </div>
+              <canvas id="va-note-canvas" height="12"
+                style="width:100%;display:block;cursor:pointer;border-radius:3px;background:var(--surface)"
+                title="Click to jump to frame"></canvas>
+              <div id="va-note-chips" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
+            </div>
+          </div>
+
+          <!-- Row 4: Annotation panel (shown when CSV loaded) -->
+          <div id="va-annot-panel" class="hidden" style="margin-top:.5rem">
+            <div style="font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.4rem">
+              Annotate frame <span id="va-annot-frame-num" style="color:var(--text);font-family:var(--mono)">0</span>
+            </div>
+            <!-- Status row -->
+            <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem">
+              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0;min-width:3rem">Status</label>
+              <input type="number" id="va-status-input" value="0"
+                style="width:4.5rem;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .4rem" />
+              <button id="va-save-status-btn" class="btn-sm btn-create" style="padding:.28rem .65rem">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Save Status
+              </button>
+            </div>
+            <!-- Note row -->
+            <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.45rem">
+              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0;min-width:3rem">Note</label>
+              <input type="text" id="va-note-input" placeholder="Enter note…"
+                style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .45rem" />
+              <button id="va-save-note-btn" class="btn-sm btn-create" style="padding:.28rem .65rem">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Save Note
+              </button>
+            </div>
+            <span id="va-annot-save-status" class="fe-extract-status"></span>
+            <!-- Add note tag -->
+            <div style="margin-top:.45rem;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+              <input type="text" id="va-new-tag-input" placeholder="New note tag…"
+                style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.24rem .4rem" />
+              <button id="va-add-tag-btn" class="btn-sm">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add Tag
+              </button>
+            </div>
+          </div>
+        </div>
+        <!-- ── end Dataset Curation Panel ──────────────────────────── -->
+
+      </div>
+    </section>

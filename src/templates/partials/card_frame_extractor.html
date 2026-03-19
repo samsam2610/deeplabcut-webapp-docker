@@ -1,0 +1,195 @@
+    <section class="card dlc-theme hidden" id="frame-extractor-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>Frame Extractor</h2>
+        <button class="btn-sm" id="btn-close-frame-extractor" title="Close frame extractor">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Select or upload a video, then navigate frame-by-frame to extract frames into <code style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">labeled-data/</code>.</p>
+
+      <!-- ── Video source selector ──────────────────────────── -->
+      <div id="fe-source-section">
+        <label style="display:block;margin-bottom:.5rem">Video source</label>
+        <div class="source-btn-row" style="margin-bottom:1rem">
+          <button class="btn-source active" id="fe-btn-from-project">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            From Project
+          </button>
+          <button class="btn-source" id="fe-btn-upload">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+            Upload
+          </button>
+          <button class="btn-source" id="fe-btn-server">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            Browse Server
+          </button>
+        </div>
+
+        <!-- From Project: video list -->
+        <div id="fe-project-videos" style="margin-bottom:.8rem">
+          <div id="fe-video-list" class="fe-video-list">
+            <p class="explorer-empty" id="fe-video-empty">Loading videos…</p>
+          </div>
+        </div>
+
+        <!-- Upload: file input -->
+        <div id="fe-upload-section" class="hidden" style="margin-bottom:.8rem">
+          <label class="btn-sm btn-create" style="cursor:pointer;display:inline-flex;align-items:center;gap:.35rem" for="fe-video-file-input">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+            Choose Video
+          </label>
+          <input type="file" id="fe-video-file-input" accept=".mp4,.avi,.mov,.mkv,.mpg,.mpeg" style="display:none" />
+          <span id="fe-upload-status" style="font-size:.82rem;color:var(--text-dim);margin-left:.6rem"></span>
+        </div>
+
+        <!-- Browse Server: directory browser -->
+        <div id="fe-server-section" class="hidden" style="margin-bottom:.8rem">
+          <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem">
+            <input id="fe-server-breadcrumb" type="text" spellcheck="false" autocomplete="off"
+              placeholder="/paste/a/path/here"
+              style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:5px;padding:.25rem .45rem" />
+            <button class="btn-sm" id="fe-server-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
+          </div>
+          <div id="fe-server-browser"
+            style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.3rem .4rem;font-size:.77rem;margin-bottom:.4rem">
+            <p class="explorer-empty">Loading…</p>
+          </div>
+          <span id="fe-server-status" style="font-size:.82rem;color:var(--text-dim)"></span>
+        </div>
+      </div>
+
+      <!-- ── Video player (shown after selection) ───────────── -->
+      <div id="fe-player-section" class="hidden">
+        <div id="fe-video-wrap" class="fe-video-wrap">
+          <img id="fe-frame-img" alt="" draggable="false" style="width:100%;display:block;height:auto;user-select:none" />
+          <div id="fe-frame-spinner" class="fe-frame-spinner hidden"></div>
+        </div>
+
+        <!-- Controls row -->
+        <div class="fe-controls">
+          <button id="fe-btn-play" class="btn-sm fe-ctrl-btn" title="Play / Pause">
+            <svg id="fe-play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <svg id="fe-pause-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" class="hidden"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          </button>
+          <button id="fe-btn-prev" class="btn-sm fe-ctrl-btn" title="Previous frame (←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/><line x1="9" y1="6" x2="9" y2="18"/></svg>
+          </button>
+          <button id="fe-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
+          </button>
+          <button id="fe-btn-skip-back" class="btn-sm fe-ctrl-btn" title="Skip backward N frames (Ctrl+←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="19 18 13 12 19 6"/><polyline points="13 18 7 12 13 6"/></svg>
+          </button>
+          <input type="number" id="fe-skip-n" value="10" min="1" max="9999" step="1"
+            title="Frames to skip (Ctrl+← / Ctrl+→)"
+            style="width:72px;text-align:center;font-family:var(--mono);font-size:.78rem;padding:.18rem .3rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+          <button id="fe-btn-skip-fwd" class="btn-sm fe-ctrl-btn" title="Skip forward N frames (Ctrl+→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="5 18 11 12 5 6"/><polyline points="11 18 17 12 11 6"/></svg>
+          </button>
+          <span class="fe-frame-counter" id="fe-frame-counter" title="Double-click to jump to frame">Frame 0 / 0<input id="fe-frame-jump" class="fe-frame-jump hidden" type="number" min="0" step="1" /></span>
+          <span class="fe-time-display" id="fe-time-display">0.000 s</span>
+        </div>
+
+        <!-- Seek slider -->
+        <input type="range" id="fe-seek" class="fe-seek" min="0" max="1000" value="0" step="1" />
+
+        <!-- Viewer size control -->
+        <div style="display:flex;align-items:center;gap:1.2rem;margin-top:.4rem;margin-bottom:.2rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Viewer size
+            <input type="range" id="fe-zoom" min="50" max="300" value="100" step="25" style="width:80px;accent-color:var(--accent)">
+            <span id="fe-zoom-val" style="min-width:2.5rem;text-align:right;color:var(--text)">100 %</span>
+          </label>
+        </div>
+
+        <!-- CSV annotation bars (visible only when companion CSV exists) -->
+        <div id="fe-csv-bars" class="hidden">
+          <div id="fe-status-bar-wrap" class="hidden">
+            <div class="fe-csv-bar-label">Status</div>
+            <div id="fe-status-bar" class="fe-timeline-bar"></div>
+            <div class="fe-bar-controls">
+              <div class="fe-window-controls">
+                <span class="fe-window-label">Window:</span>
+                <label class="fe-window-input-label"><input type="number" id="fe-status-before" min="0" value="200" class="fe-window-input"> before</label>
+                <label class="fe-window-input-label"><input type="number" id="fe-status-after"  min="0" value="800" class="fe-window-input"> after</label>
+                <button id="fe-status-apply" class="btn-sm fe-window-apply">Apply</button>
+                <span class="fe-window-hint">frames · click=navigate to window start · shift+click=extract</span>
+              </div>
+              <div id="fe-status-tags" class="fe-tag-filter"></div>
+              <div id="fe-status-nav" class="fe-seg-nav hidden">
+                <button id="fe-status-prev" class="btn-sm fe-seg-nav-btn" title="Previous segment">&#8592; Prev</button>
+                <span id="fe-status-nav-info" class="fe-seg-nav-info"></span>
+                <button id="fe-status-next" class="btn-sm fe-seg-nav-btn" title="Next segment">Next &#8594;</button>
+              </div>
+            </div>
+          </div>
+          <div id="fe-note-bar-wrap" class="hidden">
+            <div class="fe-csv-bar-label">Notes</div>
+            <div id="fe-note-bar" class="fe-timeline-bar"></div>
+            <div class="fe-bar-controls">
+              <div class="fe-window-controls">
+                <span class="fe-window-label">Window:</span>
+                <label class="fe-window-input-label"><input type="number" id="fe-note-before" min="0" value="200" class="fe-window-input"> before</label>
+                <label class="fe-window-input-label"><input type="number" id="fe-note-after"  min="0" value="800" class="fe-window-input"> after</label>
+                <button id="fe-note-apply" class="btn-sm fe-window-apply">Apply</button>
+                <span class="fe-window-hint">frames · click=navigate to window start · shift+click=extract</span>
+              </div>
+              <div id="fe-note-tags" class="fe-tag-filter"></div>
+              <div id="fe-note-nav" class="fe-seg-nav hidden">
+                <button id="fe-note-prev" class="btn-sm fe-seg-nav-btn" title="Previous note window (same tag)">&#8592; Prev</button>
+                <span id="fe-note-nav-info" class="fe-seg-nav-info"></span>
+                <button id="fe-note-next" class="btn-sm fe-seg-nav-btn" title="Next note window (same tag)">Next &#8594;</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Extract button -->
+        <div style="display:flex;flex-direction:column;gap:.5rem;margin-top:1rem">
+          <div style="display:flex;align-items:center;gap:.8rem">
+            <button id="fe-btn-extract" class="btn-sm btn-create" style="flex:1;justify-content:center;padding:.5rem 1rem">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/></svg>
+              Extract Frame
+            </button>
+            <button id="fe-btn-stop-extract" class="btn-sm btn-danger hidden" style="flex-shrink:0;padding:.5rem .9rem">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+              Stop
+            </button>
+            <span id="fe-extract-count" class="fe-extract-count">0 frames saved</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:.6rem">
+            <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.78rem;opacity:.7;flex-shrink:0">
+              Count
+              <input type="number" id="fe-batch-count" min="2" value="10" style="width:4rem;padding:.35rem .5rem;background:var(--input-bg,var(--surface));border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:.85rem;text-align:center;box-sizing:border-box">
+            </label>
+            <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.78rem;opacity:.7;flex-shrink:0">
+              Step
+              <input type="number" id="fe-batch-step" min="1" value="1" style="width:4rem;padding:.35rem .5rem;background:var(--input-bg,var(--surface));border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:.85rem;text-align:center;box-sizing:border-box">
+            </label>
+            <button id="fe-btn-batch-extract" class="btn-sm btn-create" style="flex:1;justify-content:center;padding:.5rem 1rem;align-self:flex-end">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="12" y1="8" x2="12" y2="16"/></svg>
+              Extract Batch
+            </button>
+          </div>
+        </div>
+        <span id="fe-extract-status" class="fe-extract-status"></span>
+
+        <!-- Window-extract confirmation dialog -->
+        <dialog id="fe-extract-dialog" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.25rem 1.5rem;color:var(--text);max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.45)">
+          <p id="fe-dialog-msg" style="margin:0 0 .9rem;font-size:.9rem;line-height:1.4"></p>
+          <div id="fe-dialog-custom-wrap" style="display:none;margin-bottom:.85rem">
+            <label style="font-size:.82rem;display:block;margin-bottom:.35rem;opacity:.75">Frames to extract (from window start):</label>
+            <input id="fe-dialog-custom-input" type="number" min="1" style="width:100%;padding:.35rem .55rem;background:var(--input-bg,var(--surface));border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:.88rem;box-sizing:border-box">
+          </div>
+          <div style="display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap">
+            <button id="fe-dialog-cancel" class="btn-sm">Cancel</button>
+            <button id="fe-dialog-custom-btn" class="btn-sm">Custom amount…</button>
+            <button id="fe-dialog-confirm" class="btn-sm btn-create">Extract all</button>
+          </div>
+        </dialog>
+
+        <!-- Hidden canvas for frame capture -->
+        <canvas id="fe-canvas" style="display:none"></canvas>
+      </div>
+    </section>
