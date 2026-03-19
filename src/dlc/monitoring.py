@@ -234,7 +234,7 @@ def dlc_training_jobs():
     is no longer active (e.g. after a container restart), the Redis record is
     updated to 'dead' so the UI unblocks automatically.
     """
-    _LIVE_CELERY_STATES = {"PENDING", "RECEIVED", "STARTED", "RETRY"}
+    _LIVE_CELERY_STATES = {"PENDING", "RECEIVED", "STARTED", "RETRY", "PROGRESS"}
 
     def _reconcile(redis_key: str, jid: str) -> dict | None:
         job = _ctx.redis_client().hgetall(redis_key)
@@ -280,6 +280,119 @@ def dlc_training_jobs_clear():
             _ctx.redis_client().delete("dlc_analyze_job:" + jid)
             removed += 1
     return jsonify({"removed": removed})
+
+
+# ── Queue inspection helpers ──────────────────────────────────────────────
+
+def _read_broker_queues() -> list[dict]:
+    """Return a list of pending (queued) tasks across all Celery broker queues.
+
+    Each entry has: task_id, task_name, queue, args, kwargs, eta.
+    Tasks are read directly from the Redis broker lists so no worker is required.
+    Tasks already tracked as running jobs are excluded to prevent duplicates
+    that appear when acks_late requeues a task after a worker restart.
+    """
+    import json as _json
+    r = _ctx.redis_client()
+
+    # Collect all task IDs already tracked as active jobs
+    running_ids: set[str] = set()
+    for zset in ("dlc_train_jobs", "dlc_analyze_jobs"):
+        for jid in r.zrevrange(zset, 0, 99):
+            running_ids.add(jid)
+
+    _INTERNAL = {"tasks.dlc_probe_gpu_stats"}
+
+    queue_names = ("celery", "pytorch", "tensorflow")
+    tasks = []
+    for qname in queue_names:
+        raw_items = r.lrange(qname, 0, -1)  # read without consuming
+        for raw in raw_items:
+            try:
+                msg = _json.loads(raw)
+                # Kombu message envelope: body is base64 JSON or raw JSON
+                body = msg.get("body") or {}
+                if isinstance(body, str):
+                    import base64 as _b64
+                    try:
+                        body = _json.loads(_b64.b64decode(body).decode())
+                    except Exception:
+                        body = _json.loads(body)
+                # Celery task message layout: [args, kwargs, embed]
+                if isinstance(body, list) and len(body) >= 2:
+                    task_kwargs = body[1] if isinstance(body[1], dict) else {}
+                else:
+                    task_kwargs = {}
+                headers = msg.get("headers") or {}
+                task_id   = headers.get("id") or msg.get("properties", {}).get("correlation_id", "")
+                task_name = headers.get("task") or msg.get("headers", {}).get("task", "")
+                if task_id in running_ids or task_name in _INTERNAL:
+                    continue
+                tasks.append({
+                    "task_id":    task_id,
+                    "task_name":  task_name,
+                    "queue":      qname,
+                    "config_path": task_kwargs.get("config_path", ""),
+                    "eta":        headers.get("eta"),
+                })
+            except Exception:
+                pass
+    return tasks
+
+
+@bp.route("/dlc/training/queue")
+def dlc_training_queue():
+    """Return all pending (queued but not yet running) Celery tasks."""
+    tasks = _read_broker_queues()
+    return jsonify({"tasks": tasks, "count": len(tasks)})
+
+
+@bp.route("/dlc/training/queue/cancel", methods=["POST"])
+def dlc_training_queue_cancel():
+    """Revoke a queued task by task_id so it will not run when picked up."""
+    body    = request.get_json(force=True) or {}
+    task_id = (body.get("task_id") or "").strip()
+    if not task_id:
+        return jsonify({"error": "task_id required"}), 400
+
+    # Revoke via Celery control (broadcasts to all workers)
+    _ctx.celery().control.revoke(task_id, terminate=False)
+
+    # Also remove from broker queue directly so it doesn't linger
+    import json as _json
+    r = _ctx.redis_client()
+    for qname in ("celery", "pytorch", "tensorflow"):
+        raw_items = r.lrange(qname, 0, -1)
+        for raw in raw_items:
+            try:
+                msg = _json.loads(raw)
+                headers = msg.get("headers") or {}
+                tid = headers.get("id") or msg.get("properties", {}).get("correlation_id", "")
+                if tid == task_id:
+                    r.lrem(qname, 0, raw)
+                    break
+            except Exception:
+                pass
+
+    return jsonify({"revoked": task_id})
+
+
+@bp.route("/dlc/training/queue/cancel-all", methods=["POST"])
+def dlc_training_queue_cancel_all():
+    """Revoke and remove all pending queued tasks."""
+    tasks   = _read_broker_queues()
+    revoked = []
+    import json as _json
+    r = _ctx.redis_client()
+    for t in tasks:
+        tid = t["task_id"]
+        if tid:
+            _ctx.celery().control.revoke(tid, terminate=False)
+            revoked.append(tid)
+    # Flush entire queues (simpler than per-task removal when cancelling all)
+    for qname in ("celery", "pytorch", "tensorflow"):
+        r.delete(qname)
+    return jsonify({"revoked": len(revoked)})
 
 
 @bp.route("/dlc/project/tapnet-check")
@@ -402,6 +515,138 @@ def dlc_tapnet_propagate():
         queue=_get_engine_queue(engine),
     )
     return jsonify({"task_id": task.id, "operation": "tapnet_propagate"}), 202
+
+
+@bp.route("/dlc/project/tapnet-confirmed")
+def dlc_tapnet_confirmed():
+    """
+    Return confirmed anchor frames and TAPNet-labeled frames for a stem.
+
+    Query params: video_stem
+    Returns: { confirmed: [...], tapnet_frames: [...] }
+    """
+    raw = _ctx.redis_client().get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+    video_stem   = request.args.get("video_stem", "").strip()
+    if not video_stem:
+        return jsonify({"error": "video_stem required."}), 400
+
+    stem_dir = project_path / "labeled-data" / secure_filename(video_stem)
+    if not stem_dir.is_dir():
+        return jsonify({"error": f"Folder not found: {stem_dir}"}), 404
+
+    try:
+        from dlc_tapnet_tracker import load_confirmed_anchors, load_tapnet_frames
+        confirmed     = sorted(load_confirmed_anchors(stem_dir))
+        tapnet_frames = sorted(load_tapnet_frames(stem_dir))
+        return jsonify({"confirmed": confirmed, "tapnet_frames": tapnet_frames})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@bp.route("/dlc/project/tapnet-confirm-frame", methods=["POST"])
+def dlc_tapnet_confirm_frame():
+    """
+    Toggle a frame as a confirmed TAPNet anchor.
+
+    Body (JSON): { video_stem, frame_name }
+    Returns: { frame, confirmed, total }
+    """
+    raw = _ctx.redis_client().get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    project_path = Path(project_data.get("project_path", ""))
+
+    body       = request.get_json(force=True) or {}
+    video_stem = (body.get("video_stem") or "").strip()
+    frame_name = (body.get("frame_name") or "").strip()
+
+    if not video_stem or not frame_name:
+        return jsonify({"error": "video_stem and frame_name are required."}), 400
+
+    stem_dir = project_path / "labeled-data" / secure_filename(video_stem)
+    if not stem_dir.is_dir():
+        return jsonify({"error": f"Folder not found: {stem_dir}"}), 404
+
+    try:
+        from dlc_tapnet_tracker import toggle_confirmed_anchor
+        result = toggle_confirmed_anchor(stem_dir, frame_name)
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@bp.route("/dlc/project/tapnet-propagate-multi", methods=["POST"])
+def dlc_tapnet_propagate_multi():
+    """
+    Dispatch a multi-anchor TAPNet propagation task using confirmed anchors.
+
+    Body (JSON):
+        video_stem              (str, required)
+        tapnet_checkpoint_path  (str, required)
+        gpu_index               (int) default 0
+    """
+    raw = _ctx.redis_client().get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    config_path  = project_data.get("config_path", "")
+    engine       = project_data.get("engine", "pytorch")
+    project_path = Path(project_data.get("project_path", ""))
+
+    if not config_path or not Path(config_path).is_file():
+        return jsonify({"error": "No config.yaml in active project."}), 400
+
+    body       = request.get_json(force=True) or {}
+    video_stem = (body.get("video_stem") or "").strip()
+    ckpt_path  = (body.get("tapnet_checkpoint_path") or "").strip()
+
+    if not video_stem:
+        return jsonify({"error": "video_stem is required."}), 400
+    if not ckpt_path:
+        return jsonify({"error": "tapnet_checkpoint_path is required."}), 400
+
+    labeled_data_path = project_path / "labeled-data" / secure_filename(video_stem)
+    if not labeled_data_path.is_dir():
+        return jsonify({"error": f"Frames folder not found: {labeled_data_path}"}), 400
+
+    # Load confirmed anchors from sidecar
+    try:
+        from dlc_tapnet_tracker import load_confirmed_anchors
+        anchor_frames = sorted(load_confirmed_anchors(labeled_data_path))
+    except Exception as exc:
+        return jsonify({"error": f"Could not read confirmed anchors: {exc}"}), 500
+
+    if not anchor_frames:
+        return jsonify({"error": "No confirmed anchor frames found. Confirm at least one frame first."}), 400
+
+    params = {
+        "anchor_frames": anchor_frames,
+        "gpu_index":     int(body.get("gpu_index") or 0),
+    }
+
+    task = _ctx.celery().send_task(
+        "tasks.dlc_tapnet_propagate",
+        kwargs={
+            "config_path":            config_path,
+            "labeled_data_path":      str(labeled_data_path),
+            "tapnet_checkpoint_path": ckpt_path,
+            "params":                 params,
+        },
+        queue=_get_engine_queue(engine),
+    )
+    return jsonify({
+        "task_id":       task.id,
+        "operation":     "tapnet_propagate_multi",
+        "anchor_count":  len(anchor_frames),
+    }), 202
 
 
 @bp.route("/dlc/project/tapnet-propagate/stop", methods=["POST"])

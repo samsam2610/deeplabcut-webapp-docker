@@ -43,9 +43,9 @@ _TAPNET_GPU_INDEX: int = 0
 
 # ─── Frame filename regexes ──────────────────────────────────────────────────
 # Priority order matters: try most-specific pattern first.
-_RE_IMG_SEQ_ABS = re.compile(r"^img\d+-(\d+)\.png$", re.IGNORECASE)   # img0003-158302.png
-_RE_FRAME_N     = re.compile(r"^frame(\d+)\.png$",    re.IGNORECASE)   # frame0050.png
-_RE_IMG_SEQ     = re.compile(r"^img(\d+)\.png$",      re.IGNORECASE)   # img0042.png
+_RE_IMG_SEQ_ABS = re.compile(r"^img(\d+)-(\d+)\.png$", re.IGNORECASE)  # img0003-158302.png
+_RE_FRAME_N     = re.compile(r"^frame(\d+)\.png$",      re.IGNORECASE)  # frame0050.png
+_RE_IMG_SEQ     = re.compile(r"^img(\d+)\.png$",        re.IGNORECASE)  # img0042.png
 
 # ─── TAPNet default checkpoint URL ───────────────────────────────────────────
 TAPNET_CHECKPOINT_URL = (
@@ -59,19 +59,19 @@ TAPNET_CHECKPOINT_URL = (
 
 def parse_frame_number(filename: str) -> Optional[int]:
     """
-    Extract the canonical integer frame number from a DLC frame filename.
+    Extract the absolute frame number from a DLC frame filename.
 
     Returns None for non-image filenames or unrecognised patterns.
 
     Convention priority:
-      1. img{seq}-{abs}.png  → abs (the absolute frame number from the video)
+      1. img{seq}-{abs}.png  → abs (absolute video frame number)
       2. frame{N}.png        → N
       3. img{N}.png          → N
     """
     name = Path(filename).name
     m = _RE_IMG_SEQ_ABS.match(name)
     if m:
-        return int(m.group(1))
+        return int(m.group(2))   # group 2 = abs frame number
     m = _RE_FRAME_N.match(name)
     if m:
         return int(m.group(1))
@@ -81,10 +81,31 @@ def parse_frame_number(filename: str) -> Optional[int]:
     return None
 
 
+def _parse_extraction_index(filename: str) -> Optional[int]:
+    """
+    Extract the extraction-order index from a DLC frame filename.
+
+    For img{seq}-{abs}.png this is seq (the ordinal position within the
+    extraction batch), which increments by 1 regardless of how many video
+    frames were skipped between extracted frames.
+
+    For other formats falls back to parse_frame_number.
+    """
+    name = Path(filename).name
+    m = _RE_IMG_SEQ_ABS.match(name)
+    if m:
+        return int(m.group(1))   # group 1 = seq index, always 0,1,2,3...
+    return parse_frame_number(filename)
+
+
 def find_consecutive_sequences(frame_names: list[str]) -> list[list[str]]:
     """
-    Group a list of frame filenames into runs where absolute frame numbers
-    are consecutive (differ by exactly 1 between adjacent sorted frames).
+    Group frame filenames into runs that were extracted consecutively.
+
+    For img{seq}-{abs}.png files the extraction-order index (seq) is used
+    rather than the absolute frame number, because DLC often extracts every
+    Nth video frame so abs numbers can differ by 2 or more even for adjacent
+    extracted frames.
 
     Non-image files and frames with unparseable names are silently skipped.
     Runs of length < 2 are not returned.
@@ -93,20 +114,19 @@ def find_consecutive_sequences(frame_names: list[str]) -> list[list[str]]:
         frame_names: Unsorted list of filenames (may include CSV, H5, etc.).
 
     Returns:
-        List of groups, each group being a list of frame filenames sorted by
-        absolute frame number.
+        List of groups, each group sorted by extraction index.
     """
-    # Filter and parse
+    # Filter and parse using extraction index
     parsed: list[tuple[int, str]] = []
     for name in frame_names:
-        num = parse_frame_number(name)
-        if num is not None:
-            parsed.append((num, name))
+        idx = _parse_extraction_index(name)
+        if idx is not None:
+            parsed.append((idx, name))
 
     if not parsed:
         return []
 
-    # Sort by frame number
+    # Sort by extraction index
     parsed.sort(key=lambda t: t[0])
 
     sequences: list[list[str]] = []
@@ -393,6 +413,18 @@ def _tapnet_subprocess_worker(
                     f"Original error: {exc}"
                 )
 
+            # tapnet/__init__.py imports tensorflow_datasets (only needed for
+            # evaluation benchmarks, not inference). Stub it out so we can
+            # import tapnet.models.tapir_model without that dependency.
+            import types as _types
+            for _stub in [
+                "tensorflow_datasets",
+                "tensorflow_datasets.core",
+                "tensorflow_datasets.public_api",
+            ]:
+                if _stub not in _sys.modules:
+                    _sys.modules[_stub] = _types.ModuleType(_stub)
+
             try:
                 from tapnet.models import tapir_model
             except ImportError as exc:
@@ -404,21 +436,34 @@ def _tapnet_subprocess_worker(
 
             # ── Load checkpoint ──────────────────────────────────────────────
             _log.write("[tapnet] Loading checkpoint…\n"); _log.flush()
-            ckpt = _np.load(checkpoint_path, allow_pickle=True).item()
+            ckpt   = _np.load(checkpoint_path, allow_pickle=True).item()
             params = ckpt["params"]
             state  = ckpt.get("state", {})
 
-            model = tapir_model.TAPIR(
-                bilinear_interp_with_depthwise_conv=False,
-                pyramid_level=0,
-            )
+            # Haiku requires the module to be instantiated inside hk.transform_with_state
+            import haiku as hk
+            import functools
+
+            def _tapir_forward(frames, query_points):
+                model = tapir_model.TAPIR(
+                    bilinear_interp_with_depthwise_conv=False,
+                    pyramid_level=0,
+                )
+                # Actual signature: (self, video, is_training, query_points, query_chunk_size, ...)
+                # Returns a single dict (not a tuple)
+                outputs = model(frames, False, query_points, query_chunk_size=64)
+                return outputs
+
+            model_fn = hk.transform_with_state(_tapir_forward)
+
+            rng = jax.random.PRNGKey(42)
 
             @jax.jit
             def _inference(frames_jax, query_pts_jax):
-                outputs, _ = model.apply(
-                    {"params": params, "state": state},
-                    frames_jax,
-                    query_pts_jax,
+                # model_fn.apply returns (fn_output, new_state); fn_output is the dict
+                outputs, _ = model_fn.apply(
+                    params, state, rng,
+                    frames_jax, query_pts_jax,
                 )
                 return outputs
 
@@ -454,15 +499,14 @@ def _tapnet_subprocess_worker(
             _log.write("[tapnet] Running TAPIR inference…\n"); _log.flush()
             outputs = _inference(frames_jax, query_pts_jax)
 
-            # outputs["tracks"]:       (1, N, T, 2) — (x, y) pixel coords
-            # outputs["occlusion"]:    (1, N, T)   — logit; negative = visible
-            # outputs["expected_dist": (1, N, T)
-            tracks_raw = _np.array(outputs["tracks"])        # (1, N, T, 2)
-            occlusion  = _np.array(outputs["occlusion"])     # (1, N, T)
+            # outputs["tracks"]:    (1, N, T, 2) — (x, y) pixel coords
+            # outputs["occlusion"]: (1, N, T)    — logit; negative = visible
+            tracks_raw = _np.array(outputs["tracks"])    # (1, N, T, 2)
+            occlusion  = _np.array(outputs["occlusion"]) # (1, N, T)
 
             # Reshape to (T, N, 2) and (T, N)
-            tracks_out = tracks_raw[0].transpose(1, 0, 2)   # (T, N, 2)
-            vis_out    = (occlusion[0] < 0.0).T             # (T, N) bool
+            tracks_out = tracks_raw[0].transpose(1, 0, 2)  # (T, N, 2)
+            vis_out    = (occlusion[0] < 0.0).T            # (T, N) bool
 
             # ── Save results ─────────────────────────────────────────────────
             _np.save(output_tracks_path, tracks_out.astype(_np.float32))
@@ -777,6 +821,233 @@ def propagate_labels(
         "sequences_found": len(sequences),
         "frames_labeled": total_propagated,
         "log": "\n".join(log_lines),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Confirmed-anchor sidecar  (_tapnet_confirmed.json)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_CONFIRMED_FILE = "_tapnet_confirmed.json"
+_TAPNET_FRAMES_FILE = "_tapnet_frames.json"
+
+
+def load_confirmed_anchors(folder: Path | str) -> set[str]:
+    """Return the set of frame names confirmed as TAPNet anchors."""
+    p = Path(folder) / _CONFIRMED_FILE
+    if not p.is_file():
+        return set()
+    try:
+        return set(json.loads(p.read_text()))
+    except Exception:
+        return set()
+
+
+def save_confirmed_anchors(folder: Path | str, frames: set[str]) -> None:
+    p = Path(folder) / _CONFIRMED_FILE
+    p.write_text(json.dumps(sorted(frames), indent=2))
+
+
+def toggle_confirmed_anchor(folder: Path | str, frame_name: str) -> dict:
+    """Add frame_name to confirmed set; return updated state."""
+    confirmed = load_confirmed_anchors(folder)
+    if frame_name in confirmed:
+        confirmed.discard(frame_name)
+        added = False
+    else:
+        confirmed.add(frame_name)
+        added = True
+    save_confirmed_anchors(folder, confirmed)
+    return {"frame": frame_name, "confirmed": added, "total": len(confirmed)}
+
+
+def load_tapnet_frames(folder: Path | str) -> set[str]:
+    """Return set of frames that were labeled by TAPNet (not human)."""
+    p = Path(folder) / _TAPNET_FRAMES_FILE
+    if not p.is_file():
+        return set()
+    try:
+        return set(json.loads(p.read_text()))
+    except Exception:
+        return set()
+
+
+def save_tapnet_frames(folder: Path | str, frames: set[str]) -> None:
+    p = Path(folder) / _TAPNET_FRAMES_FILE
+    p.write_text(json.dumps(sorted(frames), indent=2))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Multi-anchor propagation
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _run_segment(
+    df: pd.DataFrame,
+    labeled_data_path: Path,
+    segment_frames: list[str],   # [anchor, f1, f2, ..., fn]  anchor is t=0
+    anchor_frame: str,
+    scorer: str,
+    video_stem: str,
+    tapnet_checkpoint_path: str,
+    gpu_index: int,
+    log_lines: list[str],
+) -> tuple[int, set[str]]:
+    """
+    Run TAPNet on one segment (anchor → end).
+    Returns (n_labeled, set_of_written_frame_names).
+    Anchor frame labels are never overwritten.
+    """
+    def _log(m): log_lines.append(m)
+
+    try:
+        query_pts, tracked_bps = dlc_to_tapnet_points(df, anchor_frame=anchor_frame)
+    except (KeyError, ValueError) as exc:
+        _log(f"  Skipping segment from {anchor_frame}: {exc}")
+        return 0, set()
+
+    clip_paths = [labeled_data_path / fn for fn in segment_frames]
+    try:
+        tracks, visibilities = run_tapnet_inference(
+            frame_paths=clip_paths,
+            query_points=query_pts,
+            checkpoint_path=tapnet_checkpoint_path,
+            gpu_index=gpu_index,
+        )
+    except Exception as exc:
+        _log(f"  TAPNet error on segment from {anchor_frame}: {exc}")
+        return 0, set()
+
+    result_df = tapnet_to_dlc_labels(
+        tracks, visibilities, tracked_bps, segment_frames, scorer, video_stem
+    )
+
+    written: set[str] = set()
+    n = 0
+    for fn in segment_frames:
+        if fn == anchor_frame:
+            continue  # never overwrite the anchor
+        src_idx = ("labeled-data", video_stem, fn)
+        if src_idx not in result_df.index:
+            continue
+        full_idx = ("labeled-data", video_stem, fn)
+        if full_idx not in df.index:
+            df.loc[full_idx] = pd.Series(np.nan, index=df.columns)
+        for bp in tracked_bps:
+            x_val = result_df.loc[src_idx, (scorer, bp, "x")]
+            y_val = result_df.loc[src_idx, (scorer, bp, "y")]
+            if not pd.isna(x_val) and not pd.isna(y_val):
+                df.loc[full_idx, (scorer, bp, "x")] = x_val
+                df.loc[full_idx, (scorer, bp, "y")] = y_val
+                n += 1
+        written.add(fn)
+    return n, written
+
+
+def propagate_labels_multi_anchor(
+    labeled_data_path: str | Path,
+    config_path: str | Path,
+    tapnet_checkpoint_path: str,
+    anchor_frames: list[str],
+    gpu_index: int = _TAPNET_GPU_INDEX,
+) -> dict:
+    """
+    Multi-anchor iterative refinement.
+
+    For a sorted list of confirmed anchor frames [A0, A1, A2, ...], runs TAPNet
+    independently for each segment:
+        A0 → A1  (frames strictly between A0 and A1 get new labels)
+        A1 → A2
+        ...
+        An → end (remaining frames after last anchor)
+
+    Anchor frames themselves are never overwritten.
+
+    Returns same dict shape as propagate_labels().
+    """
+    labeled_data_path = Path(labeled_data_path)
+    config_path       = Path(config_path)
+    log_lines: list[str] = []
+    def _log(m): log_lines.append(m)
+
+    scorer, _ = _read_config_scorer_bodyparts(config_path)
+    video_stem = labeled_data_path.name
+
+    csv_candidates = sorted(labeled_data_path.glob("CollectedData_*.csv"))
+    if not csv_candidates:
+        return {"status": "skipped", "sequences_found": 0, "frames_labeled": 0,
+                "log": f"No CollectedData_*.csv found in {labeled_data_path}"}
+
+    csv_path = csv_candidates[0]
+    df       = load_dlc_labels(csv_path)
+
+    all_pngs     = sorted(labeled_data_path.glob("*.png"), key=lambda p: _parse_extraction_index(p.name) or 0)
+    all_frames   = [p.name for p in all_pngs]
+    sequences    = find_consecutive_sequences([p.name for p in all_pngs])
+
+    if not sequences:
+        return {"status": "skipped", "sequences_found": 0, "frames_labeled": 0,
+                "log": "No consecutive sequences found."}
+
+    # Filter + sort anchors by their position in the full frame list
+    frame_order  = {fn: i for i, fn in enumerate(all_frames)}
+    valid_anchors = sorted(
+        [fn for fn in anchor_frames if fn in frame_order],
+        key=lambda fn: frame_order[fn],
+    )
+
+    if not valid_anchors:
+        return {"status": "no_anchor", "sequences_found": len(sequences),
+                "frames_labeled": 0, "log": "No valid anchor frames provided."}
+
+    _log(f"Multi-anchor mode: {len(valid_anchors)} anchors across {len(all_frames)} frames.")
+
+    total_written = 0
+    all_tapnet_frames: set[str] = set()
+
+    # Process each consecutive sequence separately
+    for seq in sequences:
+        seq_set = set(seq)
+        seq_anchors = [fn for fn in valid_anchors if fn in seq_set]
+        if not seq_anchors:
+            _log(f"  Sequence {seq[0]}…{seq[-1]}: no anchors — skipping.")
+            continue
+
+        _log(f"\n── Sequence {seq[0]} → {seq[-1]} ({len(seq)} frames, {len(seq_anchors)} anchors) ──")
+
+        # Build segments: [A0..A1], [A1..A2], ..., [An..end]
+        seq_idx_map = {fn: i for i, fn in enumerate(seq)}
+        boundaries  = [seq_idx_map[a] for a in seq_anchors]
+
+        segments = []
+        for k, start_idx in enumerate(boundaries):
+            end_idx = boundaries[k + 1] if k + 1 < len(boundaries) else len(seq) - 1
+            segment = seq[start_idx : end_idx + 1]  # inclusive on both ends
+            segments.append((seq_anchors[k], segment))
+
+        for anchor_fn, segment in segments:
+            _log(f"  Segment from {anchor_fn}: {len(segment)} frames")
+            n, written = _run_segment(
+                df, labeled_data_path, segment, anchor_fn,
+                scorer, video_stem, tapnet_checkpoint_path, gpu_index, log_lines,
+            )
+            total_written  += n
+            all_tapnet_frames |= written
+            _log(f"    → {len(written)} frames labeled")
+
+    if total_written > 0:
+        df.sort_index(inplace=True)
+        df.to_csv(csv_path)
+        _log(f"\nWrote updated CSV: {csv_path}")
+
+    # Persist which frames are TAPNet-generated (merge with existing record)
+    existing_tapnet = load_tapnet_frames(labeled_data_path)
+    save_tapnet_frames(labeled_data_path, existing_tapnet | all_tapnet_frames)
+
+    return {
+        "status":          "complete",
+        "sequences_found": len(sequences),
+        "frames_labeled":  total_written,
+        "log":             "\n".join(log_lines),
     }
 
 

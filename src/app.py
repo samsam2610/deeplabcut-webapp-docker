@@ -27,7 +27,7 @@ except ImportError:
     _ruamel_yaml_instance = None
 
 import redis as _redis
-from flask import Flask, request, jsonify, render_template, send_from_directory, send_file, Response, session as flask_session
+from flask import Flask, request, jsonify, render_template, send_from_directory, send_file, Response, session as flask_session, redirect, url_for
 from celery import Celery
 from celery.result import AsyncResult
 from werkzeug.utils import secure_filename
@@ -49,6 +49,21 @@ app = Flask(
 )
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # 2 GB max upload
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
+
+# ── Auth (Jupyter-style one-time token) ───────────────────────────
+# Set AUTH_DISABLED=true in your environment to let agents/tools access
+# the app without a token (e.g. for debugging sessions).
+_AUTH_DISABLED = os.environ.get("AUTH_DISABLED", "").lower() in ("1", "true", "yes")
+_APP_TOKEN = os.environ.get("APP_TOKEN") or secrets.token_hex(24)
+
+# Print token once at startup — readable via `docker logs <container>`
+print("\n" + "=" * 60, flush=True)
+if _AUTH_DISABLED:
+    print("  AUTH DISABLED — set AUTH_DISABLED=false to re-enable", flush=True)
+else:
+    print(f"  App token : {_APP_TOKEN}", flush=True)
+    print(f"  Login URL : http://localhost:5000/?token={_APP_TOKEN}", flush=True)
+print("=" * 60 + "\n", flush=True)
 
 # ── Redis (direct client for session storage) ─────────────────────
 _REDIS_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
@@ -126,6 +141,27 @@ def handle_exception(exc):
 
 
 @app.before_request
+def _require_auth():
+    """Jupyter-style token gate: authenticate once, session persists."""
+    if _AUTH_DISABLED:
+        return
+    if request.path.startswith("/static") or request.endpoint == "login":
+        return
+    if flask_session.get("authenticated"):
+        return
+    # Token passed in URL → validate, promote to session, strip from URL
+    token = request.args.get("token", "")
+    if token and secrets.compare_digest(token, _APP_TOKEN):
+        flask_session["authenticated"] = True
+        # Rebuild URL without the token parameter
+        clean_args = {k: v for k, v in request.args.items() if k != "token"}
+        from urllib.parse import urlencode
+        clean_url = request.path + ("?" + urlencode(clean_args) if clean_args else "")
+        return redirect(clean_url)
+    return redirect(url_for("login"))
+
+
+@app.before_request
 def _sync_dlc_ctx():
     """Keep DLC shared context in sync with app module globals."""
     _dlc_ctx.setup(DATA_DIR, USER_DATA_DIR, _redis_client, celery, _yaml, _ruamel_yaml_instance)
@@ -179,6 +215,20 @@ app.register_blueprint(_custom_script_bp)
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if _AUTH_DISABLED or flask_session.get("authenticated"):
+        return redirect(url_for("index"))
+    error = None
+    if request.method == "POST":
+        token = request.form.get("token", "")
+        if token and secrets.compare_digest(token, _APP_TOKEN):
+            flask_session["authenticated"] = True
+            return redirect(url_for("index"))
+        error = "Invalid token."
+    return render_template("login.html", error=error)
 
 
 @app.route("/upload", methods=["POST"])

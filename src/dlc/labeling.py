@@ -266,6 +266,67 @@ def dlc_save_labels(video_stem: str):
     return jsonify({"status": "saved", "csv_path": str(csv_path), "scorer": scorer})
 
 
+@bp.route("/dlc/project/frame", methods=["DELETE"])
+def dlc_delete_frame():
+    """Delete a labeled frame: PNG image, its CSV row, and the H5 file.
+
+    Body (JSON): { video_stem, frame_name }
+    The H5 is deleted (not patched) — re-run Save to H5 to rebuild it.
+    """
+    project_data, cfg, err = _get_dlc_project_and_config()
+    if err:
+        return err
+
+    scorer       = cfg.get("scorer", "User")
+    project_path = Path(project_data.get("project_path", ""))
+    if not _sec_check(project_path):
+        return jsonify({"error": "Access denied."}), 403
+
+    body       = request.get_json(force=True) or {}
+    video_stem = (body.get("video_stem") or "").strip()
+    frame_name = (body.get("frame_name") or "").strip()
+    if not video_stem or not frame_name:
+        return jsonify({"error": "video_stem and frame_name are required."}), 400
+
+    safe_stem  = secure_filename(video_stem)
+    stem_dir   = project_path / "labeled-data" / safe_stem
+    if not stem_dir.is_dir():
+        return jsonify({"error": "Stem folder not found."}), 404
+
+    deleted = []
+
+    # ── PNG ──────────────────────────────────────────────────────────────
+    png = stem_dir / secure_filename(frame_name)
+    if png.is_file():
+        png.unlink()
+        deleted.append("image")
+
+    # ── CSV row ──────────────────────────────────────────────────────────
+    csv_candidates = sorted(stem_dir.glob("CollectedData_*.csv"))
+    for csv_path in csv_candidates:
+        try:
+            with open(str(csv_path), newline="") as f:
+                rows = list(csv.reader(f))
+            # Data rows start at index 3; frame name is column 2
+            new_rows = rows[:3] + [r for r in rows[3:] if len(r) > 2 and r[2] != frame_name]
+            if len(new_rows) != len(rows):
+                with open(str(csv_path), "w", newline="") as f:
+                    csv.writer(f).writerows(new_rows)
+                deleted.append("csv")
+        except Exception as exc:
+            return jsonify({"error": f"CSV update failed: {exc}"}), 500
+
+    # ── H5 (delete; user must re-run Save to H5) ─────────────────────────
+    for h5_path in stem_dir.glob("CollectedData_*.h5"):
+        try:
+            h5_path.unlink()
+            deleted.append("h5")
+        except Exception as exc:
+            return jsonify({"error": f"H5 delete failed: {exc}"}), 500
+
+    return jsonify({"deleted": deleted, "frame": frame_name})
+
+
 @bp.route("/dlc/project/labels/convert-to-h5", methods=["POST"])
 def dlc_convert_labels_to_h5():
     """Dispatch a Celery task to run deeplabcut.convertcsv2h5 on the active project."""

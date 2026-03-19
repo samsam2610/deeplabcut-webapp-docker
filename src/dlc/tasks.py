@@ -5,6 +5,7 @@ All task names preserve the original `tasks.XXX` namespace.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 import traceback
@@ -15,10 +16,96 @@ import deeplabcut as dlc
 from celery_app import celery  # shared Celery instance
 
 
+def _sanitize_dlc_config_yaml(config_path: str | Path) -> None:
+    """Fix ruamel.yaml multi-line plain-scalar key bug in DLC config.yaml.
+
+    ruamel.yaml writes paths containing spaces as multi-line plain scalars or
+    explicit-key indicators that it then cannot re-parse.  Two patterns:
+
+    Pattern A — explicit key indicator:
+        ? /data/RatBox
+          Videos/foo.avi
+        : crop: 0, 1376, 0, 900
+
+    Pattern B — plain split scalar key:
+        /data/RatBox
+          Videos/foo.avi:
+          crop: 0, 1376, 0, 900
+
+    Both are normalised to:
+        "/data/RatBox Videos/foo.avi":
+          crop: 0, 1376, 0, 900
+    """
+    cfg_path = Path(config_path)
+    text = cfg_path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    changed = False
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].rstrip("\n\r")
+
+        # Pattern A: "  ? /path fragment"
+        ma = re.match(r'^(\s*)\? (/.+)$', stripped)
+        if ma:
+            indent = ma.group(1)
+            key_so_far = ma.group(2).rstrip()
+            j = i + 1
+            while j < len(lines):
+                cont = lines[j].rstrip("\n\r")
+                val_m = re.match(r'^\s*:\s*(.*)', cont)
+                if val_m:
+                    val = val_m.group(1).strip()
+                    quoted = key_so_far.replace('"', '\\"')
+                    out.append(f'{indent}"{quoted}":\n')
+                    out.append(f'{indent}    {val}\n')
+                    changed = True
+                    i = j + 1
+                    break
+                else:
+                    key_so_far = key_so_far.rstrip() + ' ' + cont.strip()
+                    j += 1
+            else:
+                out.append(lines[i])
+                i += 1
+            continue
+
+        # Pattern B: indented unquoted path fragment (no trailing ':') followed
+        # by a deeper-indented continuation ending with ':'
+        mb = re.match(r'^(\s+)(/[^"\':\n][^\n]*)$', stripped)
+        if mb and not stripped.rstrip().endswith(':'):
+            indent = mb.group(1)
+            key_so_far = mb.group(2).rstrip()
+            j = i + 1
+            if j < len(lines):
+                cont = lines[j].rstrip("\n\r")
+                cm = re.match(r'^(\s+)(.+):$', cont)
+                if cm and len(cm.group(1)) > len(indent):
+                    full_key = key_so_far + ' ' + cm.group(2).strip()
+                    quoted = full_key.replace('"', '\\"')
+                    out.append(f'{indent}"{quoted}":\n')
+                    changed = True
+                    i = j + 1
+                    continue
+
+        out.append(lines[i])
+        i += 1
+
+    if changed:
+        cfg_path.write_text("".join(out), encoding="utf-8")
+
+
 # ── DLC Create Training Dataset ───────────────────────────────────
 @celery.task(bind=True, name="tasks.dlc_create_training_dataset")
 def dlc_create_training_dataset(self, config_path: str, num_shuffles: int = 1, freeze_split: bool = True):
-    """Run deeplabcut.create_training_dataset() for the given DLC config.yaml."""
+    """Run deeplabcut.create_training_dataset() for the given DLC config.yaml.
+
+    freeze_split is accepted for API compatibility but ignored — it was previously
+    used to call mergeandsplit() before create_training_dataset(), but that reads
+    stale H5 files (H5 is only refreshed *inside* create_training_dataset) and
+    silently excludes any frames added since the last dataset creation.
+    DLC's create_training_dataset handles the split internally on fresh data.
+    """
     import io as _io
     import sys as _sys
 
@@ -37,41 +124,19 @@ def dlc_create_training_dataset(self, config_path: str, num_shuffles: int = 1, f
         if not os.path.isfile(config_path):
             raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
 
-        train_indices = None
-        test_indices  = None
-
-        if freeze_split:
-            self.update_state(
-                state="PROGRESS",
-                meta={
-                    "progress": 8,
-                    "stage": "Computing frozen train/test split via mergeandsplit…",
-                    "log": f"config_path: {config_path}\nnum_shuffles: {num_shuffles}\nfreeze_split: True\n",
-                },
-            )
-            train_indices, test_indices = dlc.mergeandsplit(config_path, trainindex=0, uniform=True)
+        # Fix any ruamel.yaml-written multi-line plain-scalar keys before DLC reads the config
+        _sanitize_dlc_config_yaml(config_path)
 
         self.update_state(
             state="PROGRESS",
             meta={
                 "progress": 10,
                 "stage": "Running deeplabcut.create_training_dataset…",
-                "log": f"config_path: {config_path}\nnum_shuffles: {num_shuffles}\nfreeze_split: {freeze_split}\n",
+                "log": f"config_path: {config_path}\nnum_shuffles: {num_shuffles}\n",
             },
         )
 
-        if freeze_split:
-            for shuffle_idx in range(1, num_shuffles + 1):
-                dlc.create_training_dataset(
-                    config_path,
-                    num_shuffles=1,
-                    Shuffles=[shuffle_idx],
-                    trainIndices=[train_indices],
-                    testIndices=[test_indices],
-                    userfeedback=False,
-                )
-        else:
-            dlc.create_training_dataset(config_path, num_shuffles=num_shuffles, userfeedback=False)
+        dlc.create_training_dataset(config_path, num_shuffles=num_shuffles, userfeedback=False)
 
         final_log = _log_buf.getvalue()[-5000:]
         return {
@@ -105,18 +170,22 @@ def dlc_add_datasets_to_video_list(self, config_path: str):
       4. Create project/videos/ and an empty dummy file for every video_sets
          entry whose path does not already exist on disk, so downstream DLC
          steps that scan the videos/ dir don't fail.
-    Config is read and written with ruamel.yaml to preserve key order and
-    comments.
+    Config is read and written via DLC's auxiliaryfunctions (which sets
+    ruamel.yaml width=1_000_000 to prevent line-wrapping of long paths).
     """
-    import ruamel.yaml as _ruamel
+    from deeplabcut.utils.auxiliaryfunctions import read_config as _dlc_read_config
+    from deeplabcut.utils.auxiliaryfunctions import write_config as _dlc_write_config
 
     try:
-        _ryaml = _ruamel.YAML()
-        _ryaml.preserve_quotes = True
         _cfg_path = Path(config_path)
-        _cfg = _ryaml.load(_cfg_path)
 
-        project_path    = Path(_cfg.get("project_path", _cfg_path.parent))
+        # Fix any pre-existing ruamel.yaml multi-line plain-scalar key corruption
+        # before DLC reads the file (DLC also uses ruamel.yaml internally).
+        _sanitize_dlc_config_yaml(_cfg_path)
+
+        _cfg = _dlc_read_config(str(_cfg_path))
+
+        project_path     = Path(_cfg.get("project_path", _cfg_path.parent))
         labeled_data_dir = project_path / "labeled-data"
         videos_dir       = project_path / "videos"
 
@@ -129,25 +198,25 @@ def dlc_add_datasets_to_video_list(self, config_path: str):
         current_video_sets = _cfg.get("video_sets") or {}
         stem_to_entry: dict = {}
         for vid_path, crop_data in current_video_sets.items():
-            stem = Path(vid_path).stem
-            stem_to_entry[stem] = (vid_path, crop_data)
+            stem = Path(str(vid_path)).stem
+            stem_to_entry[stem] = (str(vid_path), crop_data)
 
-        # Build the new video_sets, one entry per labeled-data folder
-        new_video_sets = _ruamel.comments.CommentedMap()
+        # Build the new video_sets dict, one entry per labeled-data folder.
+        # DLC's write_config uses ruamelFile.width=1_000_000, so paths with
+        # spaces will stay on one line and won't become multi-line plain scalars.
+        new_video_sets: dict = {}
         for stem in sorted(labeled_stems):
             if stem in stem_to_entry:
                 vid_path, crop_data = stem_to_entry[stem]
             else:
-                # No existing entry — point to project/videos/ with no crop info
                 vid_path  = str(videos_dir / f"{stem}.mp4")
                 crop_data = None
             new_video_sets[vid_path] = crop_data
 
         _cfg["video_sets"] = new_video_sets
 
-        # Persist config preserving order
-        with open(_cfg_path, "w") as _f:
-            _ryaml.dump(_cfg, _f)
+        # Persist via DLC's write_config (sets width=1_000_000, no line wrapping)
+        _dlc_write_config(str(_cfg_path), _cfg)
 
         # Ensure videos/ exists and create a dummy file for every entry whose
         # actual video is absent so DLC directory scans don't raise errors.
@@ -367,6 +436,9 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
     log_path = _tmp.name
     _tmp.close()
 
+    # Expose log path so external monitors (e.g. heartbeat) can tail it
+    _redis.hset(job_key, "log_path", log_path)
+
     try:
         self.update_state(
             state="PROGRESS",
@@ -468,6 +540,9 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
                         },
                     )
                     _progress = min(_progress + 1, 90)
+                    # Slide the TTL forward so long runs (>2 h) stay visible.
+                    _redis.expire(job_key, 7200)
+                    _redis.zadd(jobs_zset, {task_id: time.time()}, xx=False)
                 except Exception:
                     pass
 
@@ -640,10 +715,12 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
             import yaml as _yaml
             snapshot_path = params.get("snapshot_path")
             local_snap_index = None
+            snapshot_shuffle = None
             _cfg_patched_analyze = False
             _cfg_original_snap_analyze = None
             if snapshot_path:
                 try:
+                    import re as _re
                     project_path = _Path(config_path).parent
                     snap_file    = (project_path / snapshot_path).resolve()
                     train_folder = snap_file.parent
@@ -654,19 +731,45 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
                                             if sp == snap_file), None)
                     if local_snap_index is not None:
                         _f.write(f"Snapshot: {snap_file.name}  →  local index {local_snap_index} of {len(all_snaps)}\n\n")
+                        # Derive shuffle from the model folder name to avoid mismatch
+                        # when the user selects a snapshot from a different shuffle.
+                        _sm = _re.search(r'shuffle(\d+)', train_folder.parent.name, _re.IGNORECASE)
+                        if _sm:
+                            snapshot_shuffle = int(_sm.group(1))
+                        else:
+                            snapshot_shuffle = None
                     else:
                         _f.write(f"Warning: snapshot not found in train folder, using latest\n\n")
+                        snapshot_shuffle = None
                 except Exception as _spe:
                     _f.write(f"Warning: could not resolve snapshot_path ({_spe})\n\n")
+                    snapshot_shuffle = None
 
+            # kw for analyze_videos: exclude internal keys and clv_* (labeled-video-only) params
             _skip_keys = {"create_labeled", "snapshot_path", "snapshot_index"}
             kw = {k: v for k, v in params.items()
-                  if v is not None and k not in _skip_keys}
+                  if v is not None and k not in _skip_keys and not k.startswith("clv_")}
             if local_snap_index is not None:
                 kw["snapshot_index"] = local_snap_index
+            # Override shuffle to match the chosen snapshot's train folder
+            if snapshot_shuffle is not None:
+                kw["shuffle"] = snapshot_shuffle
 
-            # kwargs shared by create_labeled_video
-            label_kw = {k: kw[k] for k in ("shuffle", "trainingsetindex") if k in kw}
+            # kwargs for create_labeled_video: base params + destfolder + clv_* params
+            label_kw = {k: kw[k] for k in ("shuffle", "trainingsetindex", "snapshot_index", "destfolder") if k in kw}
+            _clv_map = {
+                "clv_pcutoff":       "pcutoff",
+                "clv_dotsize":       "dotsize",
+                "clv_colormap":      "colormap",
+                "clv_modelprefix":   "modelprefix",
+                "clv_filtered":      "filtered",
+                "clv_draw_skeleton": "draw_skeleton",
+                "clv_overwrite":     "overwrite",
+            }
+            for _src, _dst in _clv_map.items():
+                _v = params.get(_src)
+                if _v is not None:
+                    label_kw[_dst] = _v
 
             def _patch_cfg_snapshot(idx):
                 """Temporarily set snapshotindex in config.yaml for functions that
@@ -710,7 +813,11 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
                     _analyze_videos(config_path, [str(p)], **kw)
                     if create_labeled:
                         _f.write(f"\nCreating labeled video: {p}\n\n")
-                        _create_labeled_video(config_path, [str(p)], **label_kw)
+                        try:
+                            _create_labeled_video(config_path, [str(p)], **label_kw)
+                        except Exception as _clv_e:
+                            import traceback as _tb2
+                            _f.write(f"\n[create_labeled_video ERROR] {_clv_e}\n{_tb2.format_exc()}\n")
                 elif ext in {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}:
                     _f.write(f"Analyzing image directory (selected frame): {p.parent}\n\n")
                     _patch_cfg_snapshot(local_snap_index)
@@ -720,7 +827,11 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
                         _restore_cfg_snapshot()
                     if create_labeled:
                         _f.write(f"\nCreating labeled frames in: {p.parent}\n\n")
-                        _create_labeled_video(config_path, [str(p.parent)], save_frames=True, **label_kw)
+                        try:
+                            _create_labeled_video(config_path, [str(p.parent)], save_frames=True, **label_kw)
+                        except Exception as _clv_e:
+                            import traceback as _tb2
+                            _f.write(f"\n[create_labeled_video ERROR] {_clv_e}\n{_tb2.format_exc()}\n")
                 else:
                     raise ValueError(f"Unsupported file type: {ext}")
 
@@ -738,7 +849,11 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
                     _analyze_videos(config_path, video_paths, **kw)
                     if create_labeled:
                         _f.write(f"\nCreating labeled video(s)...\n\n")
-                        _create_labeled_video(config_path, video_paths, **label_kw)
+                        try:
+                            _create_labeled_video(config_path, video_paths, **label_kw)
+                        except Exception as _clv_e:
+                            import traceback as _tb2
+                            _f.write(f"\n[create_labeled_video ERROR] {_clv_e}\n{_tb2.format_exc()}\n")
 
                 if image_files:
                     _f.write(f"\nAnalyzing {len(image_files)} image(s) in: {p}\n\n")
@@ -749,7 +864,11 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
                         _restore_cfg_snapshot()
                     if create_labeled:
                         _f.write(f"\nCreating labeled frames in: {p}\n\n")
-                        _create_labeled_video(config_path, [str(p)], save_frames=True, **label_kw)
+                        try:
+                            _create_labeled_video(config_path, [str(p)], save_frames=True, **label_kw)
+                        except Exception as _clv_e:
+                            import traceback as _tb2
+                            _f.write(f"\n[create_labeled_video ERROR] {_clv_e}\n{_tb2.format_exc()}\n")
 
             else:
                 raise FileNotFoundError(f"Target not found: {target_path}")
@@ -818,6 +937,7 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
     )
     log_path = _tmp.name
     _tmp.close()
+    _redis.hset(job_key, "log_path", log_path)
 
     try:
         self.update_state(
@@ -855,6 +975,11 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
         _stop_emit   = _threading.Event()
         _user_killed = [False]
 
+        import re as _re
+        _RE_TQDM = _re.compile(
+            r'(\d+)%\|[^|]*\|\s*(\d+)/(\d+)\s*\[([^\]<]+)<([^\],\]]+)'
+        )
+
         def _emit_loop():
             import signal as _sig
             _progress = 12
@@ -882,15 +1007,32 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
                 try:
                     with open(log_path) as _lf:
                         _log = _lf.read()[-8000:]
+
+                    # Parse tqdm progress from log
+                    _tqdm_pct   = None
+                    _tqdm_stage = "Analyzing…"
+                    for _m in _RE_TQDM.finditer(_log):
+                        _tqdm_pct = int(_m.group(1))
+                        _done     = int(_m.group(2))
+                        _total    = int(_m.group(3))
+                        _eta      = _m.group(5).strip()
+                        _tqdm_stage = f"Frame {_done:,}/{_total:,} · ETA {_eta}"
+                    if _tqdm_pct is not None:
+                        _progress = max(10, min(int(_tqdm_pct * 0.85) + 10, 95))
+
                     self.update_state(
                         state="PROGRESS",
                         meta={
-                            "progress": min(_progress, 90),
-                            "stage":    "Analyzing…",
+                            "progress": min(_progress, 95),
+                            "stage":    _tqdm_stage,
                             "log":      _log,
                         },
                     )
-                    _progress = min(_progress + 1, 90)
+                    if _tqdm_pct is None:
+                        _progress = min(_progress + 1, 50)
+                    # Slide the TTL forward so long runs (>2 h) stay visible.
+                    _redis.expire(job_key, 7200)
+                    _redis.zadd(jobs_zset, {task_id: time.time()}, xx=False)
                 except Exception:
                     pass
 
@@ -952,6 +1094,159 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
             os.unlink(log_path)
         except OSError:
             pass
+
+
+# ── DLC Create Labeled Video ──────────────────────────────────────
+
+
+def _dlc_clv_subprocess(config_path: str, video_path: str, params: dict, log_path: str) -> None:
+    """Run create_labeled_video in a child process."""
+    import os as _os, sys, signal as _sig
+    _os.setpgrp()
+    _os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+
+    def _sigterm_handler(signum, frame):
+        raise SystemExit(0)
+    _sig.signal(_sig.SIGTERM, _sigterm_handler)
+
+    with open(log_path, "a", buffering=1) as _f:
+        sys.stdout = _f
+        sys.stderr = _f
+        try:
+            import importlib, deeplabcut as _dlc
+
+            def _dlc_fn(name):
+                if hasattr(_dlc, name):
+                    return getattr(_dlc, name)
+                for sub in ("deeplabcut.pose_estimation_pytorch",
+                            "deeplabcut.pose_estimation_tensorflow"):
+                    try:
+                        m = importlib.import_module(sub)
+                        if hasattr(m, name):
+                            return getattr(m, name)
+                    except Exception:
+                        pass
+                raise AttributeError(f"deeplabcut has no attribute '{name}'")
+
+            _create_labeled_video = _dlc_fn("create_labeled_video")
+
+            # Auto-detect snapshot_index so create_labeled_video finds the right h5.
+            # DLC derives the scorer (and looks for the matching h5) from snapshot_index;
+            # if the config's snapshotindex points to a different snapshot than what was
+            # used for analysis the file won't be found.
+            _snap_idx = None
+            try:
+                import re as _re, yaml as _yaml
+                from pathlib import Path as _Path
+                import deeplabcut.utils.auxiliaryfunctions as _af
+                from deeplabcut.core.engine import Engine as _Engine
+
+                _vstem = _Path(video_path).stem
+                _vdir  = _Path(video_path).parent
+                _h5s   = [p for p in _vdir.iterdir()
+                          if p.suffix == ".h5" and p.stem.startswith(_vstem)]
+                if _h5s:
+                    _scorer = _h5s[0].stem[len(_vstem):]
+                    _m = _re.search(r'snapshot[_-](.+)$', _scorer, _re.IGNORECASE)
+                    if _m:
+                        _snap_name = "snapshot-" + _m.group(1).replace("_", "-")
+                        _cfg_d     = _yaml.safe_load(open(config_path))
+                        _tfrac     = _cfg_d["TrainingFraction"][0]
+                        _shuffle   = 1
+                        _mfolder   = _af.get_model_folder(
+                            _tfrac, _shuffle, _cfg_d, engine=_Engine.PYTORCH
+                        )
+                        _train_dir = _Path(config_path).parent / _mfolder / "train"
+                        _snaps     = sorted(_train_dir.glob("snapshot-*"), key=lambda p: p.name)
+                        for _i, _sp in enumerate(_snaps):
+                            if _sp.stem == _snap_name:
+                                _snap_idx = _i
+                                _f.write(f"snapshot_index={_i} ({_sp.name})\n")
+                                break
+            except Exception as _e:
+                _f.write(f"snapshot auto-detect skipped: {_e}\n")
+
+            # Build kwargs from params, excluding internal keys
+            _skip_clv = {"snapshot_path", "snapshot_index"}
+            _kw = {k: v for k, v in params.items() if v is not None and k not in _skip_clv}
+            if _snap_idx is not None:
+                _kw["snapshot_index"] = _snap_idx
+
+            _f.write(f"Creating labeled video: {video_path}\nparams: {_kw}\n\n")
+            _create_labeled_video(config_path, [video_path], **_kw)
+            _f.write("\n__CLV_COMPLETE__\n")
+        except (SystemExit, KeyboardInterrupt):
+            _f.write("\n__CLV_STOPPED__\n")
+        except Exception:
+            import traceback as _tb
+            _f.write("\n__CLV_ERROR__\n")
+            _f.write(_tb.format_exc())
+
+
+@celery.task(bind=True, name="tasks.dlc_create_labeled_video", acks_late=False)
+def dlc_create_labeled_video(self, config_path: str, video_path: str, params: dict = None):
+    """Run deeplabcut.create_labeled_video on an already-analyzed video."""
+    import multiprocessing as _mp
+    import tempfile
+
+    if params is None:
+        params = {}
+
+    task_id  = self.request.id
+    log_path = None
+
+    try:
+        self.update_state(state="PROGRESS", meta={"progress": 5, "stage": "Starting…", "log": ""})
+
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video not found: {video_path}")
+
+        _tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", prefix="dlc_clv_", delete=False
+        )
+        log_path = _tmp.name
+        _tmp.close()
+
+        self.update_state(state="PROGRESS", meta={"progress": 10, "stage": "Rendering frames…", "log": ""})
+
+        ctx  = _mp.get_context("spawn")
+        proc = ctx.Process(
+            target=_dlc_clv_subprocess,
+            args=(config_path, video_path, params, log_path),
+            daemon=False,
+        )
+        proc.start()
+        proc.join()
+
+        try:
+            import signal as _sig
+            os.killpg(proc.pid, _sig.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+
+        try:
+            with open(log_path) as _lf:
+                final_log = _lf.read()
+        except OSError:
+            final_log = ""
+
+        if proc.exitcode != 0:
+            raise RuntimeError(final_log[-5000:] or f"Process exited with code {proc.exitcode}")
+
+        self.update_state(state="PROGRESS", meta={"progress": 100, "stage": "Done", "log": final_log[-8000:]})
+        return {"status": "complete", "operation": "create_labeled_video", "log": final_log[-8000:]}
+
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+    finally:
+        if log_path:
+            try:
+                os.unlink(log_path)
+            except OSError:
+                pass
 
 
 # ── DLC Machine Label Frames ──────────────────────────────────────
@@ -1050,6 +1345,7 @@ def _dlc_machine_label_subprocess(
             _cfg_original_snapshot = None
             if snapshot_path:
                 try:
+                    import re as _re_snap
                     project_path = Path(config_path).parent
                     snap_file    = (project_path / snapshot_path).resolve()
                     train_folder = snap_file.parent
@@ -1069,6 +1365,11 @@ def _dlc_machine_label_subprocess(
                             _yaml.dump(_cfg_data, _cf, default_flow_style=False, allow_unicode=True)
                         _cfg_patched = True
                         _f.write(f"Snapshot: {snap_file.name}  →  local index {local_idx} of {len(all_snaps)}\n")
+                        # Override shuffle to match the chosen snapshot's train folder
+                        _sm = _re_snap.search(r'shuffle(\d+)', train_folder.parent.name, _re_snap.IGNORECASE)
+                        if _sm:
+                            kw["shuffle"] = int(_sm.group(1))
+                            _f.write(f"Shuffle overridden to {kw['shuffle']} from snapshot path\n")
                 except Exception as _pe:
                     _f.write(f"Warning: could not resolve snapshot path ({_pe})\n")
 
@@ -1183,10 +1484,16 @@ def _dlc_machine_label_subprocess(
                                  if any(v is not None for v in fv.values()))
             _f.write(f"Frames with at least one labeled bodypart: {_labeled_count}\n")
 
-            # Load existing human labels so we can preserve them
+            # Merge rule (per bodypart):
+            #   • CSV has a non-NaN coordinate  →  keep it (user approved this position
+            #     by saving via "Save all to H5"; never overwrite)
+            #   • CSV is NaN or bodypart/frame is absent  →  use machine prediction
+            #     (user cleared or never placed a marker here; machine may fill it in)
             video_stem = frame_dir.name
             csv_path   = frame_dir / f"CollectedData_{scorer}.csv"
-            human_labels: dict = {}
+
+            # Read current CSV into per-frame, per-bodypart dict
+            csv_labels: dict = {}
             if csv_path.is_file():
                 try:
                     with open(str(csv_path), newline="") as _hf:
@@ -1199,9 +1506,8 @@ def _dlc_machine_label_subprocess(
                             if not _row:
                                 continue
                             _img   = _row[2]
-                            _vals  = _row[3:]
                             _bpmap: dict = {}
-                            for (_bp, _c), _v in zip(_col_pairs, _vals):
+                            for (_bp, _c), _v in zip(_col_pairs, _row[3:]):
                                 _bpmap.setdefault(_bp, {})[_c] = _v
                             _frame: dict = {}
                             for _bp, _cd in _bpmap.items():
@@ -1213,28 +1519,25 @@ def _dlc_machine_label_subprocess(
                                 except ValueError:
                                     _x = _y = None
                                 _frame[_bp] = [_x, _y] if _x is not None and _y is not None else None
-                            human_labels[_img] = _frame
-                    n_human = sum(1 for fv in human_labels.values()
-                                  if any(v is not None for v in fv.values()))
-                    _f.write(f"Found {n_human} existing human-labeled frame(s) — these will be preserved.\n")
+                            csv_labels[_img] = _frame
+                    n_csv = sum(1 for fv in csv_labels.values()
+                                if any(v is not None for v in fv.values()))
+                    _f.write(f"Found {n_csv} frame(s) with existing labels in CSV.\n")
                 except Exception as _e:
                     _f.write(f"Warning: could not read existing labels ({_e}), proceeding without merge.\n")
 
-            def _frame_has_human_label(fname: str) -> bool:
-                fv = human_labels.get(fname, {})
-                return any(v is not None for v in fv.values())
-
-            # Merge: keep human labels; fill unlabeled frames with machine predictions
+            # Per-bodypart merge across all frames seen by ML or in CSV
             merged: dict = {}
-            for fname, machine_frame in labels.items():
-                if _frame_has_human_label(fname):
-                    merged[fname] = human_labels[fname]
-                else:
-                    merged[fname] = machine_frame
-            # Include any frames present only in human labels (not in ML output)
-            for fname, human_frame in human_labels.items():
-                if fname not in merged:
-                    merged[fname] = human_frame
+            for fname in sorted(set(labels) | set(csv_labels), key=_nat_key):
+                mframe  = labels.get(fname, {})
+                csvframe = csv_labels.get(fname, {})
+                merged[fname] = {
+                    bp: (csvframe.get(bp) if csvframe.get(bp) is not None else mframe.get(bp))
+                    for bp in bodyparts
+                }
+
+            # human_labels alias used by metadata write below
+            human_labels = csv_labels
 
             # Write CollectedData CSV in DLC MultiIndex format
             frame_names = sorted(merged.keys(), key=_nat_key)
@@ -1308,14 +1611,17 @@ def _dlc_machine_label_subprocess(
                     except Exception:
                         pass
 
-            # Write metadata so the re-apply endpoint knows which frames were
-            # machine-labeled vs human-labeled.
+            # Write metadata for debugging / information only.
+            # Protection is now purely per-bodypart: non-NaN CSV value = approved.
             import json as _json_mod
+            def _bp_from_csv(fn):
+                """Bodyparts that had a non-NaN value in the original CSV for this frame."""
+                return [bp for bp, v in human_labels.get(fn, {}).items() if v is not None]
+
             _ml_meta = {
-                "ml_frames":    [fn for fn in merged if not _frame_has_human_label(fn)],
-                "human_frames": [fn for fn in merged if     _frame_has_human_label(fn)],
-                "scorer":       scorer,
-                "bodyparts":    bodyparts,
+                "scorer":    scorer,
+                "bodyparts": bodyparts,
+                "frames":    {fn: {"csv_bps": _bp_from_csv(fn)} for fn in merged},
             }
             try:
                 (frame_dir / "_ml_frames.json").write_text(
@@ -1327,9 +1633,13 @@ def _dlc_machine_label_subprocess(
 
             n_machine = sum(
                 1 for fname, fv in merged.items()
-                if not _frame_has_human_label(fname) and any(v is not None for v in fv.values())
+                if any(v is not None and human_labels.get(fname, {}).get(bp) is None
+                       for bp, v in fv.items())
             )
-            n_kept = sum(1 for fname in merged if _frame_has_human_label(fname))
+            n_kept = sum(
+                1 for fv in human_labels.values()
+                if any(v is not None for v in fv.values())
+            )
             _f.write(f"\nMachine-labeled {n_machine} frame(s), preserved {n_kept} human label(s).\n")
             _f.write(f"Output → {csv_path.name}  +  {h5_path.name}\n")
             _f.write("\n__ML_LABEL_COMPLETE__\n")
@@ -1530,11 +1840,10 @@ def dlc_machine_label_reapply(
 
     # Load metadata
     meta_file = stem_path / "_ml_frames.json"
-    human_frames_set: set = set()
+    meta: dict = {}
     if meta_file.is_file():
         try:
             meta = _json.loads(meta_file.read_text())
-            human_frames_set = set(meta.get("human_frames", []))
         except Exception:
             pass
 
@@ -1578,10 +1887,16 @@ def dlc_machine_label_reapply(
                 frame_labels[bp] = None
         machine_labels[img_name] = frame_labels
 
-    # Load existing human labels from CSV
+    # Per-bodypart merge rule (same as machine label run):
+    #   • CSV has a non-NaN coordinate for this (frame, bodypart)
+    #     → keep it; the user approved this position when they saved
+    #   • CSV is NaN or bodypart/frame absent
+    #     → apply updated threshold from raw predictions
+    # This means threshold changes only affect empty/rejected landmarks,
+    # never positions the user has explicitly saved.
     csv_path   = stem_path / f"CollectedData_{scorer}.csv"
-    human_labels: dict = {}
-    if csv_path.is_file() and human_frames_set:
+    csv_labels: dict = {}
+    if csv_path.is_file():
         try:
             with open(str(csv_path), newline="") as fh:
                 rows = list(_csv_mod.reader(fh))
@@ -1593,8 +1908,6 @@ def dlc_machine_label_reapply(
                     if not row:
                         continue
                     img = row[2]
-                    if img not in human_frames_set:
-                        continue
                     bpmap: dict = {}
                     for (bp, c), v in zip(col_pairs, row[3:]):
                         bpmap.setdefault(bp, {})[c] = v
@@ -1607,27 +1920,24 @@ def dlc_machine_label_reapply(
                         except ValueError:
                             xv = yv = None
                         frame[bp] = [xv, yv] if xv is not None and yv is not None else None
-                    human_labels[img] = frame
+                    csv_labels[img] = frame
         except Exception:
             pass
 
-    # Merge: for machine-labeled frames use machine labels directly;
-    # for human-labeled frames prefer the human label per bodypart,
-    # but fill in any missing (None) landmarks with the updated machine label.
-    merged: dict = {}
-    for fname in set(machine_labels) | set(human_labels):
-        mframe = machine_labels.get(fname, {})
-        hframe = human_labels.get(fname, {})
-        if fname in human_frames_set:
-            merged[fname] = {bp: (hframe.get(bp) if hframe.get(bp) is not None else mframe.get(bp))
-                             for bp in bodyparts}
-        else:
-            merged[fname] = mframe
-
-    def _nat_key(s):
+    def _nat_key_r(s):
         return [int(c) if c.isdigit() else c.lower() for c in _re.split(r"(\d+)", s)]
 
-    frame_names = sorted(merged.keys(), key=_nat_key)
+    # Per-bodypart merge across all frames in machine output or current CSV
+    merged: dict = {}
+    for fname in sorted(set(machine_labels) | set(csv_labels), key=_nat_key_r):
+        mframe   = machine_labels.get(fname, {})
+        csvframe = csv_labels.get(fname, {})
+        merged[fname] = {
+            bp: (csvframe.get(bp) if csvframe.get(bp) is not None else mframe.get(bp))
+            for bp in bodyparts
+        }
+
+    frame_names = sorted(merged.keys(), key=_nat_key_r)
 
     self.update_state(state="PROGRESS", meta={"progress": 70, "stage": "Writing CollectedData…"})
 
@@ -1670,26 +1980,22 @@ def dlc_machine_label_reapply(
         str(h5_path), key="df_with_missing", mode="w"
     )
 
-    # Update metadata
-    n_machine = sum(1 for fn in merged if fn not in human_frames_set
-                    and any(v is not None for v in merged[fn].values()))
-    n_human   = len(human_frames_set & set(merged))
-    try:
-        meta_file.write_text(_json.dumps({
-            "ml_frames":    [fn for fn in merged if fn not in human_frames_set],
-            "human_frames": list(human_frames_set & set(merged)),
-            "scorer":       scorer,
-            "bodyparts":    bodyparts,
-        }, indent=2))
-    except Exception:
-        pass
-
+    # Count stats: approved = had non-NaN in CSV; machine-filled = was NaN in CSV
+    n_approved = sum(
+        1 for fn, fv in csv_labels.items()
+        if any(v is not None for v in fv.values())
+    )
+    n_machine_filled = sum(
+        1 for fn, fv in merged.items()
+        if any(v is not None and csv_labels.get(fn, {}).get(bp) is None
+               for bp, v in fv.items())
+    )
     return {
-        "status":    "ok",
-        "threshold": threshold,
-        "n_machine": n_machine,
-        "n_human":   n_human,
-        "frames":    len(merged),
+        "status":           "ok",
+        "threshold":        threshold,
+        "n_approved":       n_approved,
+        "n_machine_filled": n_machine_filled,
+        "frames":           len(merged),
     }
 
 
@@ -1754,18 +2060,20 @@ def dlc_tapnet_propagate(
     VRAM is released when the subprocess exits.
 
     params keys:
-        anchor           (str)  "auto" | "first" | "last"
-        gpu_index        (int)  default 0 (RTX 5090)
-        overwrite        (bool) default False
+        anchor           (str)        "auto" | "first" | "last"   (single-anchor mode)
+        anchor_frames    (list[str])  explicit anchor frame names  (multi-anchor mode)
+        gpu_index        (int)        default 0 (RTX 5090)
+        overwrite        (bool)       default False
     """
     import tempfile as _tempfile
 
     if params is None:
         params = {}
 
-    anchor    = params.get("anchor", "auto")
-    gpu_index = int(params.get("gpu_index", 0))
-    overwrite = bool(params.get("overwrite", False))
+    anchor        = params.get("anchor", "auto")
+    anchor_frames = params.get("anchor_frames")   # list[str] or None
+    gpu_index     = int(params.get("gpu_index", 0))
+    overwrite     = bool(params.get("overwrite", False))
 
     _tmp = _tempfile.NamedTemporaryFile(
         mode="w", suffix=".log", prefix="tapnet_", delete=False
@@ -1789,23 +2097,38 @@ def dlc_tapnet_propagate(
                 f"Download with:\n  python -m dlc_tapnet_tracker --checkpoint {tapnet_checkpoint_path} <config> <frames>"
             )
 
-        self.update_state(
-            state="PROGRESS",
-            meta={"progress": 10, "stage": "Running TAPNet propagation…", "log": ""},
-        )
-
         import sys as _sys
         _sys.path.insert(0, "/app")
-        from dlc_tapnet_tracker import propagate_labels
 
-        result = propagate_labels(
-            labeled_data_path=labeled_data_path,
-            config_path=config_path,
-            tapnet_checkpoint_path=tapnet_checkpoint_path,
-            anchor=anchor,
-            gpu_index=gpu_index,
-            overwrite_existing=overwrite,
-        )
+        if anchor_frames:
+            self.update_state(
+                state="PROGRESS",
+                meta={"progress": 10,
+                      "stage": f"Running multi-anchor TAPNet ({len(anchor_frames)} anchors)…",
+                      "log": ""},
+            )
+            from dlc_tapnet_tracker import propagate_labels_multi_anchor
+            result = propagate_labels_multi_anchor(
+                labeled_data_path=labeled_data_path,
+                config_path=config_path,
+                tapnet_checkpoint_path=tapnet_checkpoint_path,
+                anchor_frames=anchor_frames,
+                gpu_index=gpu_index,
+            )
+        else:
+            self.update_state(
+                state="PROGRESS",
+                meta={"progress": 10, "stage": "Running TAPNet propagation…", "log": ""},
+            )
+            from dlc_tapnet_tracker import propagate_labels
+            result = propagate_labels(
+                labeled_data_path=labeled_data_path,
+                config_path=config_path,
+                tapnet_checkpoint_path=tapnet_checkpoint_path,
+                anchor=anchor,
+                gpu_index=gpu_index,
+                overwrite_existing=overwrite,
+            )
 
         self.update_state(
             state="PROGRESS",

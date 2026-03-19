@@ -329,6 +329,15 @@
           <button id="fe-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (→)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
           </button>
+          <button id="fe-btn-skip-back" class="btn-sm fe-ctrl-btn" title="Skip backward N frames (Ctrl+←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="19 18 13 12 19 6"/><polyline points="13 18 7 12 13 6"/></svg>
+          </button>
+          <input type="number" id="fe-skip-n" value="10" min="1" max="9999" step="1"
+            title="Frames to skip (Ctrl+← / Ctrl+→)"
+            style="width:72px;text-align:center;font-family:var(--mono);font-size:.78rem;padding:.18rem .3rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+          <button id="fe-btn-skip-fwd" class="btn-sm fe-ctrl-btn" title="Skip forward N frames (Ctrl+→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="5 18 11 12 5 6"/><polyline points="11 18 17 12 11 6"/></svg>
+          </button>
           <span class="fe-frame-counter" id="fe-frame-counter" title="Double-click to jump to frame">Frame 0 / 0<input id="fe-frame-jump" class="fe-frame-jump hidden" type="number" min="0" step="1" /></span>
           <span class="fe-time-display" id="fe-time-display">0.000 s</span>
         </div>
@@ -1234,7 +1243,7 @@
           </button>
           <input type="number" id="va-skip-n" value="10" min="1" max="9999" step="1"
             title="Frames to skip (Ctrl+← / Ctrl+→)"
-            style="width:46px;text-align:center;font-family:var(--mono);font-size:.78rem;padding:.18rem .3rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+            style="width:72px;text-align:center;font-family:var(--mono);font-size:.78rem;padding:.18rem .3rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
           <button id="va-btn-skip-fwd" class="btn-sm fe-ctrl-btn" title="Skip forward N frames (Ctrl+→)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="5 18 11 12 5 6"/><polyline points="11 18 17 12 11 6"/></svg>
           </button>
@@ -1306,16 +1315,29 @@
             </div>
           </div>
 
-          <!-- Row 3b: CSV timeline bars (hidden until annotations exist) -->
+          <!-- Row 3b: CSV timelines — status first, notes second -->
           <div id="va-csv-bars" class="hidden" style="margin-top:.5rem">
             <div id="va-status-bar-wrap" class="hidden">
-              <div class="fe-csv-bar-label">Status</div>
-              <div id="va-status-bar" class="fe-timeline-bar"></div>
+              <div style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;margin-bottom:.18rem">
+                <span class="fe-csv-bar-label" style="flex:1;margin:0">Status</span>
+                <button id="va-status-prev-btn" class="btn-sm" disabled title="Previous status frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">◀</button>
+                <button id="va-status-next-btn" class="btn-sm" disabled title="Next status frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">▶</button>
+              </div>
+              <canvas id="va-status-canvas" height="12"
+                style="width:100%;display:block;cursor:pointer;border-radius:3px;background:var(--surface)"
+                title="Click to jump to frame"></canvas>
+              <div id="va-status-chips" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
             </div>
-            <div id="va-note-bar-wrap" class="hidden">
-              <div class="fe-csv-bar-label">Notes</div>
-              <div id="va-note-bar" class="fe-timeline-bar"></div>
-              <div id="va-note-filter" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
+            <div id="va-note-bar-wrap" class="hidden" style="margin-top:.4rem">
+              <div style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;margin-bottom:.18rem">
+                <span class="fe-csv-bar-label" style="flex:1;margin:0">Notes</span>
+                <button id="va-note-prev-btn" class="btn-sm" disabled title="Previous note frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">◀</button>
+                <button id="va-note-next-btn" class="btn-sm" disabled title="Next note frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">▶</button>
+              </div>
+              <canvas id="va-note-canvas" height="12"
+                style="width:100%;display:block;cursor:pointer;border-radius:3px;background:var(--surface)"
+                title="Click to jump to frame"></canvas>
+              <div id="va-note-chips" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
             </div>
           </div>
 
@@ -1324,32 +1346,35 @@
             <div style="font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.4rem">
               Annotate frame <span id="va-annot-frame-num" style="color:var(--text);font-family:var(--mono)">0</span>
             </div>
-            <!-- Note + Status + Save -->
-            <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.45rem">
-              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Note</label>
-              <input type="text" id="va-note-input" placeholder="Enter note…"
-                style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .45rem" />
-              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Status</label>
+            <!-- Status row -->
+            <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem">
+              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0;min-width:3rem">Status</label>
               <input type="number" id="va-status-input" value="0"
                 style="width:4.5rem;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .4rem" />
-              <button id="va-save-note-btn" class="btn-sm btn-create" style="padding:.28rem .75rem">
+              <button id="va-save-status-btn" class="btn-sm btn-create" style="padding:.28rem .65rem">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                Save
+                Save Status
+              </button>
+            </div>
+            <!-- Note row -->
+            <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.45rem">
+              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0;min-width:3rem">Note</label>
+              <input type="text" id="va-note-input" placeholder="Enter note…"
+                style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .45rem" />
+              <button id="va-save-note-btn" class="btn-sm btn-create" style="padding:.28rem .65rem">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Save Note
               </button>
             </div>
             <span id="va-annot-save-status" class="fe-extract-status"></span>
-            <!-- Note tags -->
-            <div style="margin-top:.5rem;padding-top:.5rem;border-top:1px solid var(--border)">
-              <div style="font-size:.71rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim);margin-bottom:.35rem">Note tags — click to apply</div>
-              <div id="va-tag-chips" class="fe-tag-filter" style="margin-bottom:.35rem;min-height:1.4rem"></div>
-              <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
-                <input type="text" id="va-new-tag-input" placeholder="New tag name…"
-                  style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.24rem .4rem" />
-                <button id="va-add-tag-btn" class="btn-sm">
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                  Add Tag
-                </button>
-              </div>
+            <!-- Add note tag -->
+            <div style="margin-top:.45rem;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+              <input type="text" id="va-new-tag-input" placeholder="New note tag…"
+                style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.24rem .4rem" />
+              <button id="va-add-tag-btn" class="btn-sm">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add Tag
+              </button>
             </div>
           </div>
         </div>
@@ -1410,6 +1435,15 @@
           <button id="anv-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (→)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
           </button>
+          <button id="anv-btn-skip-back" class="btn-sm fe-ctrl-btn" title="Skip backward N frames (Ctrl+←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="19 18 13 12 19 6"/><polyline points="13 18 7 12 13 6"/></svg>
+          </button>
+          <input type="number" id="anv-skip-n" value="10" min="1" max="9999" step="1"
+            title="Frames to skip (Ctrl+← / Ctrl+→)"
+            style="width:72px;text-align:center;font-family:var(--mono);font-size:.78rem;padding:.18rem .3rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+          <button id="anv-btn-skip-fwd" class="btn-sm fe-ctrl-btn" title="Skip forward N frames (Ctrl+→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="5 18 11 12 5 6"/><polyline points="11 18 17 12 11 6"/></svg>
+          </button>
           <span class="fe-frame-counter" id="anv-frame-counter" title="Double-click to jump to frame">Frame 0 / 0<input id="anv-frame-jump" class="fe-frame-jump hidden" type="number" min="0" step="1" /></span>
           <span class="fe-time-display" id="anv-time-display">0.000 s</span>
         </div>
@@ -1433,12 +1467,26 @@
         <!-- ── CSV annotation bars ───────────────────────────── -->
         <div id="anv-csv-bars" class="hidden">
           <div id="anv-status-bar-wrap" class="hidden">
-            <div class="fe-csv-bar-label">Status</div>
-            <div id="anv-status-bar" class="fe-timeline-bar"></div>
+            <div style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;margin-bottom:.18rem">
+              <span class="fe-csv-bar-label" style="flex:1;margin:0">Status</span>
+              <button id="anv-status-prev-btn" class="btn-sm" disabled title="Previous status frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">◀</button>
+              <button id="anv-status-next-btn" class="btn-sm" disabled title="Next status frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">▶</button>
+            </div>
+            <canvas id="anv-status-canvas" height="12"
+              style="width:100%;display:block;cursor:pointer;border-radius:3px;background:var(--surface)"
+              title="Click to jump to frame"></canvas>
+            <div id="anv-status-chips" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
           </div>
-          <div id="anv-note-bar-wrap" class="hidden">
-            <div class="fe-csv-bar-label">Notes</div>
-            <div id="anv-note-bar" class="fe-timeline-bar"></div>
+          <div id="anv-note-bar-wrap" class="hidden" style="margin-top:.4rem">
+            <div style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;margin-bottom:.18rem">
+              <span class="fe-csv-bar-label" style="flex:1;margin:0">Notes</span>
+              <button id="anv-note-prev-btn" class="btn-sm" disabled title="Previous note frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">◀</button>
+              <button id="anv-note-next-btn" class="btn-sm" disabled title="Next note frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">▶</button>
+            </div>
+            <canvas id="anv-note-canvas" height="12"
+              style="width:100%;display:block;cursor:pointer;border-radius:3px;background:var(--surface)"
+              title="Click to jump to frame"></canvas>
+            <div id="anv-note-chips" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
           </div>
         </div>
 
@@ -1468,34 +1516,36 @@
             Annotate frame <span id="anv-annotate-frame-num" style="color:var(--text);font-family:var(--mono)">0</span>
           </div>
 
-          <!-- Note + Status row -->
-          <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.55rem">
-            <label style="font-size:.78rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Note</label>
-            <input type="text" id="anv-note-input" placeholder="Enter note…"
-              style="flex:1;min-width:120px;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.28rem .5rem" />
-            <label style="font-size:.78rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Status</label>
+          <!-- Status row -->
+          <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem">
+            <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0;min-width:3rem">Status</label>
             <input type="number" id="anv-status-input" value="0"
-              style="width:5rem;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.28rem .4rem" />
-            <button id="anv-save-annotation-btn" class="btn-sm btn-create" style="padding:.3rem .8rem">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-              Save
+              style="width:4.5rem;font-size:.8rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .4rem" />
+            <button id="anv-save-status-btn" class="btn-sm btn-create" style="padding:.28rem .65rem">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Save Status
+            </button>
+          </div>
+          <!-- Note row -->
+          <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.45rem">
+            <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0;min-width:3rem">Note</label>
+            <input type="text" id="anv-note-input" placeholder="Enter note…"
+              style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .45rem" />
+            <button id="anv-save-note-btn" class="btn-sm btn-create" style="padding:.28rem .65rem">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Save Note
             </button>
           </div>
           <span id="anv-save-status" class="fe-extract-status"></span>
 
-          <!-- ── Note tags panel ──────────────────────────────── -->
-          <div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border)">
-            <div style="font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim);margin-bottom:.4rem">Note tags — click to apply to current frame</div>
-            <div id="anv-tag-chips" class="fe-tag-filter" style="margin-bottom:.4rem;min-height:1.4rem"></div>
-            <!-- Add new tag -->
-            <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
-              <input type="text" id="anv-new-tag-input" placeholder="New tag name…"
-                style="flex:1;min-width:120px;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.25rem .45rem" />
-              <button id="anv-add-tag-btn" class="btn-sm">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Add Tag
-              </button>
-            </div>
+          <!-- ── Add note tag shortcut ────────────────────────── -->
+          <div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border);display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+            <input type="text" id="anv-new-tag-input" placeholder="New note tag…"
+              style="flex:1;min-width:120px;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.25rem .45rem" />
+            <button id="anv-add-tag-btn" class="btn-sm">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add Note Tag
+            </button>
           </div>
         </div>
 

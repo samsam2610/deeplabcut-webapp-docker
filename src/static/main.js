@@ -1569,6 +1569,9 @@
     const fePauseIcon     = document.getElementById("fe-pause-icon");
     const feBtnPrev       = document.getElementById("fe-btn-prev");
     const feBtnNext       = document.getElementById("fe-btn-next");
+    const feBtnSkipBack   = document.getElementById("fe-btn-skip-back");
+    const feBtnSkipFwd    = document.getElementById("fe-btn-skip-fwd");
+    const feSkipN         = document.getElementById("fe-skip-n");
     const feFrameCounter  = document.getElementById("fe-frame-counter");
     const feFrameJump     = document.getElementById("fe-frame-jump");
     const feTimeDisplay   = document.getElementById("fe-time-display");
@@ -2003,6 +2006,9 @@
 
     feBtnPrev.addEventListener("click", () => _feLoadFrame(_feCurrentFrame - 1));
     feBtnNext.addEventListener("click", () => _feLoadFrame(_feCurrentFrame + 1));
+    const _feSkipN = () => Math.max(1, parseInt(feSkipN?.value || "10", 10));
+    if (feBtnSkipBack) feBtnSkipBack.addEventListener("click", () => _feLoadFrame(_feCurrentFrame - _feSkipN()));
+    if (feBtnSkipFwd)  feBtnSkipFwd.addEventListener("click",  () => _feLoadFrame(_feCurrentFrame + _feSkipN()));
 
     feSeek.addEventListener("mousedown",  () => { _feSeekDragging = true; });
     feSeek.addEventListener("touchstart", () => { _feSeekDragging = true; });
@@ -2342,6 +2348,8 @@
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
 
       if (e.key === " ") { e.preventDefault(); feBtnPlay.click(); return; }
+      if (e.ctrlKey && e.key === "ArrowLeft")  { e.preventDefault(); _feLoadFrame(_feCurrentFrame - _feSkipN()); return; }
+      if (e.ctrlKey && e.key === "ArrowRight") { e.preventDefault(); _feLoadFrame(_feCurrentFrame + _feSkipN()); return; }
       if (e.key === "ArrowLeft")  { e.preventDefault(); feBtnPrev.click(); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); feBtnNext.click(); return; }
 
@@ -5717,27 +5725,40 @@
       const vaCsvBars         = document.getElementById("va-csv-bars");
       const vaStatusBarWrap   = document.getElementById("va-status-bar-wrap");
       const vaNoteBarWrap     = document.getElementById("va-note-bar-wrap");
-      const vaStatusBar       = document.getElementById("va-status-bar");
-      const vaNoteBar         = document.getElementById("va-note-bar");
-      const vaNoteFilter      = document.getElementById("va-note-filter");
+      const vaStatusCanvas    = document.getElementById("va-status-canvas");
+      const vaNoteCanvas      = document.getElementById("va-note-canvas");
+      const vaStatusChips     = document.getElementById("va-status-chips");
+      const vaNoteChips       = document.getElementById("va-note-chips");
       const vaAnnotPanel      = document.getElementById("va-annot-panel");
       const vaAnnotFrameNum   = document.getElementById("va-annot-frame-num");
       const vaNoteInput       = document.getElementById("va-note-input");
       const vaStatusInput     = document.getElementById("va-status-input");
+      const vaSaveStatusBtn   = document.getElementById("va-save-status-btn");
       const vaSaveNoteBtn     = document.getElementById("va-save-note-btn");
       const vaAnnotSaveStatus = document.getElementById("va-annot-save-status");
-      const vaTagChips        = document.getElementById("va-tag-chips");
+      const vaStatusPrevBtn   = document.getElementById("va-status-prev-btn");
+      const vaStatusNextBtn   = document.getElementById("va-status-next-btn");
+      const vaNoteStepPrevBtn = document.getElementById("va-note-prev-btn");
+      const vaNoteStepNextBtn = document.getElementById("va-note-next-btn");
       const vaNewTagInput     = document.getElementById("va-new-tag-input");
       const vaAddTagBtn       = document.getElementById("va-add-tag-btn");
 
       // Companion CSV state
-      let _vaCsvPath        = null;
-      let _vaCsvRows        = [];     // {frame_number, timestamp, frame_line_status, note}
-      let _vaUserTags       = [];
-      let _vaActiveNoteFilter = null; // active filter tag for the note timeline bar
+      let _vaCsvPath          = null;
+      let _vaCsvRows          = [];     // {frame_number, timestamp, frame_line_status, note}
+      let _vaUserTags         = [];
+      let _vaUserStatuses     = [];
+      let _vaActiveNoteFilter = null;
 
-      // Colour palette for timeline segments (matches anv palette)
-      const _vaCsvPalette = ["#60a5fa","#34d399","#f97316","#f472b6","#a78bfa","#facc15","#38bdf8","#fb7185"];
+      // Per-chip active sets and color maps (populated when chips are rendered)
+      let _vaActiveNoteChips   = new Set();
+      let _vaActiveStatusChips = new Set();
+      let _vaNoteColorMap      = {};
+      let _vaStatusColorMap    = {};
+
+      // Color palettes — status uses warm/green tones, notes use cool/blue tones
+      const _VA_STATUS_COLORS = ["#34d399","#f97316","#e879f9","#facc15","#f87171","#22d3ee","#a78bfa","#fb923c"];
+      const _VA_NOTE_COLORS   = ["#60a5fa","#f472b6","#4ade80","#38bdf8","#e879f9","#a78bfa","#facc15","#fb7185"];
 
       // ── Status helpers ──────────────────────────────────────────
       let _curationMsgTimer = null;
@@ -5867,74 +5888,74 @@
 
       // ── Timeline bars ────────────────────────────────────────────
 
+      // Canvas-based timeline: one fillRect per annotated frame, zero DOM nodes per frame.
+      // Only frames whose field value is in activeSet are drawn; each value uses its own color from colorMap.
+      function _vaDrawCanvas(canvas, rows, field, activeSet, colorMap) {
+        if (!canvas) return;
+        const total = Math.max(_vaFrameCount, 1);
+        const W = Math.round(canvas.getBoundingClientRect().width) || canvas.clientWidth || 600;
+        canvas.width = W;
+        const H    = canvas.height || 12;
+        const ctx  = canvas.getContext("2d");
+        const minW = Math.max(1, Math.round(W / total));
+        ctx.clearRect(0, 0, W, H);
+        if (!activeSet || activeSet.size === 0) return;
+        rows.forEach(row => {
+          const val = row[field];
+          if (!val || (field === "frame_line_status" && val === "0")) return;
+          if (!activeSet.has(val)) return;
+          ctx.fillStyle = colorMap[val] || "#888";
+          const x = Math.round((Number(row.frame_number) / total) * W);
+          ctx.fillRect(x, 0, minW, H);
+        });
+      }
+
+      function _vaRedrawNoteCanvas()   { _vaDrawCanvas(vaNoteCanvas,   _vaCsvRows, "note",              _vaActiveNoteChips,   _vaNoteColorMap);   }
+      function _vaRedrawStatusCanvas() { _vaDrawCanvas(vaStatusCanvas, _vaCsvRows, "frame_line_status", _vaActiveStatusChips, _vaStatusColorMap); }
+
       function _vaBuildCsvBars() {
         if (!vaCsvBars) return;
-        const total     = Math.max(_vaFrameCount, 1);
         const hasNote   = _vaCsvRows.some(r => r.note);
         const hasStatus = _vaCsvRows.some(r => r.frame_line_status && r.frame_line_status !== "0");
         vaCsvBars.classList.toggle("hidden", !hasNote && !hasStatus);
-
-        // Note bar
         vaNoteBarWrap?.classList.toggle("hidden", !hasNote);
-        if (hasNote && vaNoteBar) {
-          const vals = [...new Set(_vaCsvRows.filter(r => r.note).map(r => r.note))];
-          const colorMap = {};
-          vals.forEach((v, i) => { colorMap[v] = _vaCsvPalette[i % _vaCsvPalette.length]; });
-          vaNoteBar.innerHTML = "";
-          _vaCsvRows.forEach(row => {
-            if (!row.note) return;
-            if (_vaActiveNoteFilter && row.note !== _vaActiveNoteFilter) return;
-            const fn    = Number(row.frame_number);
-            const color = colorMap[row.note];
-            const seg   = document.createElement("div");
-            seg.className = "fe-timeline-seg";
-            seg.style.cssText = `left:${(fn / total) * 100}%;width:max(0.5%,3px);background:${color}40;border-color:${color};color:${color}`;
-            seg.textContent = row.note;
-            seg.title = `${row.note}  (frame ${fn})`;
-            seg.addEventListener("click", () => _vaLoadFrame(fn));
-            vaNoteBar.appendChild(seg);
-          });
-          // Note filter chips (only if 2+ distinct values)
-          if (vaNoteFilter) {
-            vaNoteFilter.innerHTML = "";
-            if (vals.length >= 2) {
-              vals.forEach(val => {
-                const chip = document.createElement("span");
-                chip.className = "fe-tag-chip" + (_vaActiveNoteFilter === val ? " active" : "");
-                chip.style.setProperty("--chip-color", colorMap[val]);
-                chip.textContent = val;
-                chip.title = _vaActiveNoteFilter === val ? `Show all notes` : `Filter to "${val}"`;
-                chip.addEventListener("click", () => {
-                  _vaActiveNoteFilter = (_vaActiveNoteFilter === val) ? null : val;
-                  _vaBuildCsvBars();
-                });
-                vaNoteFilter.appendChild(chip);
-              });
-            }
-          }
-        }
-
-        // Status bar
         vaStatusBarWrap?.classList.toggle("hidden", !hasStatus);
-        if (hasStatus && vaStatusBar) {
-          const vals = [...new Set(_vaCsvRows.filter(r => r.frame_line_status && r.frame_line_status !== "0").map(r => r.frame_line_status))];
-          const colorMap = {};
-          vals.forEach((v, i) => { colorMap[v] = _vaCsvPalette[(i + 3) % _vaCsvPalette.length]; });
-          vaStatusBar.innerHTML = "";
-          _vaCsvRows.forEach(row => {
-            if (!row.frame_line_status || row.frame_line_status === "0") return;
-            const fn    = Number(row.frame_number);
-            const color = colorMap[row.frame_line_status];
-            const seg   = document.createElement("div");
-            seg.className = "fe-timeline-seg";
-            seg.style.cssText = `left:${(fn / total) * 100}%;width:max(0.5%,3px);background:${color}40;border-color:${color};color:${color}`;
-            seg.textContent = row.frame_line_status;
-            seg.title = `status ${row.frame_line_status}  (frame ${fn})`;
-            seg.addEventListener("click", () => _vaLoadFrame(fn));
-            vaStatusBar.appendChild(seg);
-          });
+        // Canvases start empty; chips toggle individual values onto them.
+        _vaRedrawNoteCanvas();
+        _vaRedrawStatusCanvas();
+      }
+
+      // Click on either canvas — map x position to frame number and jump.
+      [vaNoteCanvas, vaStatusCanvas].forEach(canvas => {
+        if (!canvas) return;
+        canvas.addEventListener("click", e => {
+          const rect = canvas.getBoundingClientRect();
+          const fn = Math.round((e.clientX - rect.left) / rect.width * Math.max(_vaFrameCount - 1, 0));
+          _vaLoadFrame(fn);
+        });
+      });
+
+      // Prev/next navigation within the active chip set for a given field.
+      function _vaNavAnnot(field, activeSet, dir) {
+        if (!activeSet.size) return;
+        const frames = _vaCsvRows
+          .filter(r => { const v = r[field]; return v && (field !== "frame_line_status" || v !== "0") && activeSet.has(v); })
+          .map(r => r.frame_number)
+          .sort((a, b) => a - b);
+        if (!frames.length) return;
+        if (dir < 0) {
+          const prev = [...frames].reverse().find(f => f < _vaCurrentFrame);
+          if (prev != null) _vaLoadFrame(prev);
+        } else {
+          const next = frames.find(f => f > _vaCurrentFrame);
+          if (next != null) _vaLoadFrame(next);
         }
       }
+
+      if (vaStatusPrevBtn) vaStatusPrevBtn.addEventListener("click", () => _vaNavAnnot("frame_line_status", _vaActiveStatusChips, -1));
+      if (vaStatusNextBtn) vaStatusNextBtn.addEventListener("click", () => _vaNavAnnot("frame_line_status", _vaActiveStatusChips,  1));
+      if (vaNoteStepPrevBtn) vaNoteStepPrevBtn.addEventListener("click", () => _vaNavAnnot("note", _vaActiveNoteChips, -1));
+      if (vaNoteStepNextBtn) vaNoteStepNextBtn.addEventListener("click", () => _vaNavAnnot("note", _vaActiveNoteChips,  1));
 
       // ── Companion CSV helpers ────────────────────────────────────
 
@@ -5949,8 +5970,10 @@
       function _vaCsvApplyRows(rows, csvPath) {
         _vaCsvPath  = csvPath;
         _vaCsvRows  = rows;
-        const noteVals = [...new Set(rows.map(r => r.note).filter(v => v))];
-        _vaUserTags = [...new Set([..._vaUserTags, ...noteVals])];
+        const noteVals   = [...new Set(rows.map(r => r.note).filter(v => v))];
+        const statusVals = [...new Set(rows.map(r => r.frame_line_status).filter(v => v && v !== "0"))];
+        _vaUserTags     = [...new Set([..._vaUserTags,     ...noteVals])];
+        _vaUserStatuses = [...new Set([..._vaUserStatuses, ...statusVals])];
 
         if (vaCsvNone)        vaCsvNone.classList.add("hidden");
         if (vaCsvLoaded)      vaCsvLoaded.classList.remove("hidden");
@@ -5958,35 +5981,81 @@
         if (vaAnnotPanel)     vaAnnotPanel.classList.remove("hidden");
 
         _vaBuildCsvBars();
+        _vaCsvRenderStatusChips();
         _vaCsvRenderTags();
         _vaCsvSyncPanel();
       }
 
-      function _vaCsvRenderTags() {
-        if (!vaTagChips) return;
-        vaTagChips.innerHTML = "";
-        _vaUserTags.forEach(tag => {
+      function _vaCsvRenderStatusChips() {
+        if (!vaStatusChips) return;
+        vaStatusChips.innerHTML = "";
+        _vaStatusColorMap = {};
+        _vaUserStatuses.forEach((val, i) => {
+          const color = _VA_STATUS_COLORS[i % _VA_STATUS_COLORS.length];
+          _vaStatusColorMap[val] = color;
           const chip = document.createElement("span");
-          chip.className   = "fe-tag-chip";
-          chip.textContent = tag;
-          chip.style.setProperty("--chip-color", "#6ee7b7");
-          chip.title = `Click to annotate frame ${_vaCurrentFrame} with note "${tag}"`;
-          chip.addEventListener("click", () => _vaCsvApplyTag(tag));
-          vaTagChips.appendChild(chip);
+          chip.className = "fe-tag-chip" + (_vaActiveStatusChips.has(val) ? " active" : "");
+          chip.textContent = val;
+          chip.style.setProperty("--chip-color", color);
+          chip.title = `Click to show/hide "${val}" on timeline`;
+          chip.addEventListener("click", () => {
+            if (_vaActiveStatusChips.has(val)) _vaActiveStatusChips.delete(val);
+            else _vaActiveStatusChips.add(val);
+            _vaCsvRenderStatusChips();
+            _vaRedrawStatusCanvas();
+          });
+          vaStatusChips.appendChild(chip);
         });
+        const hasActive = _vaActiveStatusChips.size > 0;
+        if (vaStatusPrevBtn) vaStatusPrevBtn.disabled = !hasActive;
+        if (vaStatusNextBtn) vaStatusNextBtn.disabled = !hasActive;
       }
 
-      async function _vaCsvApplyTag(tag) {
-        if (!_vaCsvPath) return;
-        if (vaNoteInput) vaNoteInput.value = tag;
-        await _vaCsvSaveAnnotation();
+      function _vaCsvRenderTags() {
+        if (!vaNoteChips) return;
+        vaNoteChips.innerHTML = "";
+        _vaNoteColorMap = {};
+        _vaUserTags.forEach((tag, i) => {
+          const color = _VA_NOTE_COLORS[i % _VA_NOTE_COLORS.length];
+          _vaNoteColorMap[tag] = color;
+          const chip = document.createElement("span");
+          chip.className = "fe-tag-chip" + (_vaActiveNoteChips.has(tag) ? " active" : "");
+          chip.textContent = tag;
+          chip.style.setProperty("--chip-color", color);
+          chip.title = `Click to show/hide "${tag}" on timeline`;
+          chip.addEventListener("click", () => {
+            if (_vaActiveNoteChips.has(tag)) _vaActiveNoteChips.delete(tag);
+            else _vaActiveNoteChips.add(tag);
+            _vaCsvRenderTags();
+            _vaRedrawNoteCanvas();
+          });
+          vaNoteChips.appendChild(chip);
+        });
+        const hasActive = _vaActiveNoteChips.size > 0;
+        if (vaNoteStepPrevBtn) vaNoteStepPrevBtn.disabled = !hasActive;
+        if (vaNoteStepNextBtn) vaNoteStepNextBtn.disabled = !hasActive;
       }
 
-      async function _vaCsvSaveAnnotation() {
+      async function _vaCsvSaveStatus() {
         if (!_vaCsvPath) return;
-        if (vaAnnotSaveStatus) { vaAnnotSaveStatus.textContent = "Saving…"; vaAnnotSaveStatus.className = "fe-extract-status"; }
-        const note   = vaNoteInput   ? vaNoteInput.value.trim()     : "";
+        // Read existing note for this frame so saving status doesn't wipe it
+        const existingRow = _vaCsvRows.find(r => r.frame_number === _vaCurrentFrame);
+        const note   = vaNoteInput ? vaNoteInput.value.trim() : (existingRow?.note || "");
         const status = vaStatusInput ? (vaStatusInput.value || "0") : "0";
+        await _vaCsvDoSave(note, status);
+      }
+
+      async function _vaCsvSaveNote() {
+        if (!_vaCsvPath) return;
+        // Read existing status for this frame so saving note doesn't wipe it
+        const existingRow = _vaCsvRows.find(r => r.frame_number === _vaCurrentFrame);
+        const note   = vaNoteInput ? vaNoteInput.value.trim() : "";
+        const status = vaStatusInput ? (vaStatusInput.value || "0") : (existingRow?.frame_line_status || "0");
+        await _vaCsvDoSave(note, status);
+      }
+
+      async function _vaCsvDoSave(note, status) {
+        if (vaAnnotSaveStatus) { vaAnnotSaveStatus.textContent = "Saving…"; vaAnnotSaveStatus.className = "fe-extract-status"; }
         try {
           const res  = await fetch("/annotate/save-row", {
             method:  "POST",
@@ -6009,6 +6078,7 @@
             if (idx >= 0) _vaCsvRows[idx] = savedRow;
             else { _vaCsvRows.push(savedRow); _vaCsvRows.sort((a, b) => a.frame_number - b.frame_number); }
             if (note && !_vaUserTags.includes(note)) { _vaUserTags.push(note); _vaCsvRenderTags(); }
+            if (status && status !== "0" && !_vaUserStatuses.includes(status)) { _vaUserStatuses.push(status); _vaCsvRenderStatusChips(); }
           } else {
             if (idx >= 0) _vaCsvRows.splice(idx, 1);
           }
@@ -6027,7 +6097,9 @@
 
       async function _vaCsvLoad(videoPath) {
         // Reset CSV state
-        _vaCsvPath = null; _vaCsvRows = []; _vaUserTags = []; _vaActiveNoteFilter = null;
+        _vaCsvPath = null; _vaCsvRows = []; _vaUserTags = []; _vaUserStatuses = []; _vaActiveNoteFilter = null;
+        _vaActiveNoteChips = new Set(); _vaActiveStatusChips = new Set();
+        _vaNoteColorMap = {}; _vaStatusColorMap = {};
         if (vaCsvNone)        vaCsvNone.classList.remove("hidden");
         if (vaCsvLoaded)      vaCsvLoaded.classList.add("hidden");
         if (vaCsvBars)        vaCsvBars.classList.add("hidden");
@@ -6055,7 +6127,9 @@
           if (!vaPlayerSec.classList.contains("hidden") && _vaCurrentVideoPath) {
             await _vaCsvLoad(_vaCurrentVideoPath);
           } else if (vaPlayerSec.classList.contains("hidden")) {
-            _vaCsvPath = null; _vaCsvRows = []; _vaUserTags = []; _vaActiveNoteFilter = null;
+            _vaCsvPath = null; _vaCsvRows = []; _vaUserTags = []; _vaUserStatuses = []; _vaActiveNoteFilter = null;
+            _vaActiveNoteChips = new Set(); _vaActiveStatusChips = new Set();
+            _vaNoteColorMap = {}; _vaStatusColorMap = {};
             if (vaCsvNone)    vaCsvNone.classList.remove("hidden");
             if (vaCsvLoaded)  vaCsvLoaded.classList.add("hidden");
             if (vaCsvBars)    vaCsvBars.classList.add("hidden");
@@ -6086,8 +6160,11 @@
       }
 
       // Save annotation
+      if (vaSaveStatusBtn) {
+        vaSaveStatusBtn.addEventListener("click", _vaCsvSaveStatus);
+      }
       if (vaSaveNoteBtn) {
-        vaSaveNoteBtn.addEventListener("click", _vaCsvSaveAnnotation);
+        vaSaveNoteBtn.addEventListener("click", _vaCsvSaveNote);
       }
 
       // Add new tag
@@ -6188,6 +6265,9 @@
     const anvPauseIcon      = document.getElementById("anv-pause-icon");
     const anvBtnPrev        = document.getElementById("anv-btn-prev");
     const anvBtnNext        = document.getElementById("anv-btn-next");
+    const anvBtnSkipBack    = document.getElementById("anv-btn-skip-back");
+    const anvBtnSkipFwd     = document.getElementById("anv-btn-skip-fwd");
+    const anvSkipN          = document.getElementById("anv-skip-n");
     const anvFrameCounter   = document.getElementById("anv-frame-counter");
     const anvFrameJump      = document.getElementById("anv-frame-jump");
     const anvTimeDisplay    = document.getElementById("anv-time-display");
@@ -6195,8 +6275,8 @@
     const anvCsvBars        = document.getElementById("anv-csv-bars");
     const anvStatusBarWrap  = document.getElementById("anv-status-bar-wrap");
     const anvNoteBarWrap    = document.getElementById("anv-note-bar-wrap");
-    const anvStatusBar      = document.getElementById("anv-status-bar");
-    const anvNoteBar        = document.getElementById("anv-note-bar");
+    const anvStatusCanvas   = document.getElementById("anv-status-canvas");
+    const anvNoteCanvas     = document.getElementById("anv-note-canvas");
     const anvCsvSection     = document.getElementById("anv-csv-section");
     const anvCsvNone        = document.getElementById("anv-csv-none");
     const anvCsvLoaded      = document.getElementById("anv-csv-loaded");
@@ -6208,8 +6288,15 @@
     const anvNoteInput      = document.getElementById("anv-note-input");
     const anvStatusInput    = document.getElementById("anv-status-input");
     const anvSaveAnnotationBtn = document.getElementById("anv-save-annotation-btn");
+    const anvSaveStatusBtn  = document.getElementById("anv-save-status-btn");
+    const anvSaveNoteBtn    = document.getElementById("anv-save-note-btn");
     const anvSaveStatus     = document.getElementById("anv-save-status");
-    const anvTagChips       = document.getElementById("anv-tag-chips");
+    const anvNoteChips      = document.getElementById("anv-note-chips");
+    const anvStatusChips    = document.getElementById("anv-status-chips");
+    const anvStatusPrevBtn  = document.getElementById("anv-status-prev-btn");
+    const anvStatusNextBtn  = document.getElementById("anv-status-next-btn");
+    const anvNotePrevBtn    = document.getElementById("anv-note-prev-btn");
+    const anvNoteNextBtn    = document.getElementById("anv-note-next-btn");
     const anvNewTagInput    = document.getElementById("anv-new-tag-input");
     const anvAddTagBtn      = document.getElementById("anv-add-tag-btn");
     const anvZoomInput      = document.getElementById("anv-zoom");
@@ -6234,10 +6321,19 @@
     let _anvFrameBusy     = false;
     let _anvSeekDragging  = false;
     let _anvPlayTimer     = null;
-    let _anvCsvPath       = null;
-    let _anvCsvRows       = [];       // {frame_number, timestamp, frame_line_status, note}
-    let _anvUserTags      = [];       // user-defined tags (note values), populated from CSV + user input
-    const _anvCsvPalette = ["#6ee7b7","#60a5fa","#f472b6","#fbbf24","#a78bfa","#34d399","#fb923c","#e879f9"];
+    let _anvCsvPath           = null;
+    let _anvCsvRows           = [];   // {frame_number, timestamp, frame_line_status, note}
+    let _anvUserTags          = [];   // unique note values seen in CSV + user-added labels
+    let _anvUserStatuses      = [];   // unique status values seen in CSV
+
+    // Per-chip active sets and color maps (populated when chips are rendered)
+    let _anvActiveNoteChips   = new Set();
+    let _anvActiveStatusChips = new Set();
+    let _anvNoteColorMap      = {};
+    let _anvStatusColorMap    = {};
+
+    const _ANV_STATUS_COLORS = ["#34d399","#f97316","#e879f9","#facc15","#f87171","#22d3ee","#a78bfa","#fb923c"];
+    const _ANV_NOTE_COLORS   = ["#60a5fa","#f472b6","#4ade80","#38bdf8","#e879f9","#a78bfa","#facc15","#fb7185"];
 
     // ── Viewer sizing (can break out of card borders like VA card) ──
     function _anvFitViewer() {
@@ -6267,7 +6363,9 @@
       _anvZoom = 100; anvZoomInput.value = "100"; anvZoomVal.textContent = "100 %";
       _anvVideoPath = null; _anvFps = 30; _anvFrameCount = 0;
       _anvCurrentFrame = 0; _anvFrameBusy = false; _anvSeekDragging = false;
-      _anvCsvPath = null; _anvCsvRows = []; _anvUserTags = [];
+      _anvCsvPath = null; _anvCsvRows = []; _anvUserTags = []; _anvUserStatuses = [];
+      _anvActiveNoteChips = new Set(); _anvActiveStatusChips = new Set();
+      _anvNoteColorMap = {}; _anvStatusColorMap = {};
       anvPlayIcon.classList.remove("hidden"); anvPauseIcon.classList.add("hidden");
       anvFrameImg.onload = null; anvFrameImg.onerror = null;
       if (anvFrameImg.src && anvFrameImg.src.startsWith("blob:")) URL.revokeObjectURL(anvFrameImg.src);
@@ -6278,6 +6376,7 @@
       anvCsvBars.classList.add("hidden");
       anvStatusBarWrap.classList.add("hidden");
       anvNoteBarWrap.classList.add("hidden");
+      [anvStatusCanvas, anvNoteCanvas].forEach(c => { if (c) { const ctx = c.getContext("2d"); ctx.clearRect(0, 0, c.width, c.height); } });
       anvAnnotationPanel.classList.add("hidden");
       anvClipSection.classList.add("hidden");
       anvClipBrowser.classList.add("hidden");
@@ -6394,6 +6493,15 @@
     });
     anvBtnPrev.addEventListener("click", () => _anvLoadFrame(_anvCurrentFrame - 1));
     anvBtnNext.addEventListener("click", () => _anvLoadFrame(_anvCurrentFrame + 1));
+    const _anvSkipN = () => Math.max(1, parseInt(anvSkipN?.value || "10", 10));
+    if (anvBtnSkipBack) anvBtnSkipBack.addEventListener("click", () => _anvLoadFrame(_anvCurrentFrame - _anvSkipN()));
+    if (anvBtnSkipFwd)  anvBtnSkipFwd.addEventListener("click",  () => _anvLoadFrame(_anvCurrentFrame + _anvSkipN()));
+    document.addEventListener("keydown", e => {
+      if (!anvCard || anvCard.classList.contains("hidden")) return;
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.ctrlKey && e.key === "ArrowLeft")  { e.preventDefault(); _anvLoadFrame(_anvCurrentFrame - _anvSkipN()); }
+      if (e.ctrlKey && e.key === "ArrowRight") { e.preventDefault(); _anvLoadFrame(_anvCurrentFrame + _anvSkipN()); }
+    });
 
     anvSeek.addEventListener("mousedown",  () => { _anvSeekDragging = true; });
     anvSeek.addEventListener("touchstart", () => { _anvSeekDragging = true; });
@@ -6411,56 +6519,56 @@
       if (e.key === "ArrowRight") { e.preventDefault(); _anvLoadFrame(_anvCurrentFrame + 1); }
     });
 
-    // ── Build CSV bars — one segment per annotated frame ─────────
+    // ── Build CSV bars — canvas, one fillRect per annotated frame ──
+    // Only frames whose value is in activeSet are drawn; each value uses colorMap.
+    function _anvDrawCanvas(canvas, rows, field, activeSet, colorMap) {
+      if (!canvas) return;
+      const total = Math.max(_anvFrameCount, 1);
+      const W = Math.round(canvas.getBoundingClientRect().width) || canvas.clientWidth || 600;
+      canvas.width = W;
+      const H    = canvas.height || 12;
+      const ctx  = canvas.getContext("2d");
+      const minW = Math.max(1, Math.round(W / total));
+      ctx.clearRect(0, 0, W, H);
+      if (!activeSet || activeSet.size === 0) return;
+      rows.forEach(row => {
+        const val = row[field];
+        if (!val || (field === "frame_line_status" && val === "0")) return;
+        if (!activeSet.has(val)) return;
+        ctx.fillStyle = colorMap[val] || "#888";
+        const x = Math.round((Number(row.frame_number) / total) * W);
+        ctx.fillRect(x, 0, minW, H);
+      });
+    }
+
+    function _anvRedrawNoteCanvas()   { _anvDrawCanvas(anvNoteCanvas,   _anvCsvRows, "note",              _anvActiveNoteChips,   _anvNoteColorMap);   }
+    function _anvRedrawStatusCanvas() { _anvDrawCanvas(anvStatusCanvas, _anvCsvRows, "frame_line_status", _anvActiveStatusChips, _anvStatusColorMap); }
+
     function _anvBuildCsvBars() {
-      const total     = Math.max(_anvFrameCount, 1);
       const hasNote   = _anvCsvRows.some(r => r.note);
       const hasStatus = _anvCsvRows.some(r => r.frame_line_status && r.frame_line_status !== "0");
-
       anvCsvBars.classList.toggle("hidden", !hasNote && !hasStatus);
-
-      // Note bar
       anvNoteBarWrap.classList.toggle("hidden", !hasNote);
-      anvNoteBar.innerHTML = "";
-      if (hasNote) {
-        const vals = [...new Set(_anvCsvRows.filter(r => r.note).map(r => r.note))];
-        const colorMap = {};
-        vals.forEach((v, i) => { colorMap[v] = _anvCsvPalette[i % _anvCsvPalette.length]; });
-        _anvCsvRows.forEach(row => {
-          if (!row.note) return;
-          const fn    = Number(row.frame_number);
-          const color = colorMap[row.note];
-          const seg   = document.createElement("div");
-          seg.className = "fe-timeline-seg";
-          seg.style.cssText = `left:${(fn / total) * 100}%;width:max(0.5%,3px);background:${color}40;border-color:${color};color:${color}`;
-          seg.textContent = row.note;
-          seg.title = `${row.note}  (frame ${fn})`;
-          seg.addEventListener("click", () => _anvLoadFrame(fn));
-          anvNoteBar.appendChild(seg);
-        });
-      }
-
-      // Status bar
       anvStatusBarWrap.classList.toggle("hidden", !hasStatus);
-      anvStatusBar.innerHTML = "";
-      if (hasStatus) {
-        const vals = [...new Set(_anvCsvRows.filter(r => r.frame_line_status && r.frame_line_status !== "0").map(r => r.frame_line_status))];
-        const colorMap = {};
-        vals.forEach((v, i) => { colorMap[v] = _anvCsvPalette[i % _anvCsvPalette.length]; });
-        _anvCsvRows.forEach(row => {
-          if (!row.frame_line_status || row.frame_line_status === "0") return;
-          const fn    = Number(row.frame_number);
-          const color = colorMap[row.frame_line_status];
-          const seg   = document.createElement("div");
-          seg.className = "fe-timeline-seg";
-          seg.style.cssText = `left:${(fn / total) * 100}%;width:max(0.5%,3px);background:${color}40;border-color:${color};color:${color}`;
-          seg.textContent = row.frame_line_status;
-          seg.title = `${row.frame_line_status}  (frame ${fn})`;
-          seg.addEventListener("click", () => _anvLoadFrame(fn));
-          anvStatusBar.appendChild(seg);
-        });
-      }
+      // Canvases start empty; chips toggle individual values onto them.
+      _anvRedrawNoteCanvas();
+      _anvRedrawStatusCanvas();
     }
+
+    // Click on canvas — snap to nearest annotated frame for that field and jump.
+    [anvNoteCanvas, anvStatusCanvas].forEach((canvas, ci) => {
+      if (!canvas) return;
+      const field = ci === 0 ? "note" : "frame_line_status";
+      canvas.addEventListener("click", e => {
+        const rect   = canvas.getBoundingClientRect();
+        const target = Math.round((e.clientX - rect.left) / rect.width * Math.max(_anvFrameCount - 1, 0));
+        const annotated = _anvCsvRows
+          .filter(r => { const v = r[field]; return v && (field !== "frame_line_status" || v !== "0"); })
+          .map(r => r.frame_number);
+        if (!annotated.length) return;
+        _anvLoadFrame(annotated.reduce((a, b) => Math.abs(b - target) < Math.abs(a - target) ? b : a));
+      });
+    });
 
     // ── Sync annotation panel to current frame ───────────────────
     function _anvSyncAnnotationPanel() {
@@ -6476,57 +6584,80 @@
       _anvCsvPath  = csvPath;
       _anvCsvRows  = rows;
 
-      // Collect unique note tags
-      const noteVals = [...new Set(rows.map(r => r.note).filter(v => v))];
-      _anvUserTags  = [...new Set([..._anvUserTags, ...noteVals])];
+      const noteVals   = [...new Set(rows.map(r => r.note).filter(v => v))];
+      const statusVals = [...new Set(rows.map(r => r.frame_line_status).filter(v => v && v !== "0"))];
+      _anvUserTags     = [...new Set([..._anvUserTags,     ...noteVals])];
+      _anvUserStatuses = [...new Set([..._anvUserStatuses, ...statusVals])];
 
-      // Show CSV status
       anvCsvNone.classList.add("hidden");
       anvCsvLoaded.classList.remove("hidden");
       anvCsvPathDisplay.textContent = csvPath;
       anvCsvPathDisplay.title       = csvPath;
-
-      // Show annotation panel
       anvAnnotationPanel.classList.remove("hidden");
 
-      // Build CSV bars
       _anvBuildCsvBars();
-
-      // Render tag chips
+      _anvRenderStatusChips();
       _anvRenderTagChips();
-
-      // Sync to current frame
       _anvSyncAnnotationPanel();
     }
 
-    // ── Render clickable note tag chips ──────────────────────────
-    function _anvRenderTagChips() {
-      anvTagChips.innerHTML = "";
-      _anvUserTags.forEach(tag => {
+    // ── Render status chips — each unique value, unique color, toggle timeline ─
+    function _anvRenderStatusChips() {
+      if (!anvStatusChips) return;
+      anvStatusChips.innerHTML = "";
+      _anvStatusColorMap = {};
+      _anvUserStatuses.forEach((val, i) => {
+        const color = _ANV_STATUS_COLORS[i % _ANV_STATUS_COLORS.length];
+        _anvStatusColorMap[val] = color;
         const chip = document.createElement("span");
-        chip.className = "fe-tag-chip";
-        chip.textContent = tag;
-        chip.style.setProperty("--chip-color", "#6ee7b7");
-        chip.title = `Click to annotate frame ${_anvCurrentFrame} with note "${tag}"`;
-        chip.addEventListener("click", () => _anvApplyTag(tag));
-        anvTagChips.appendChild(chip);
+        chip.className = "fe-tag-chip" + (_anvActiveStatusChips.has(val) ? " active" : "");
+        chip.textContent = val;
+        chip.style.setProperty("--chip-color", color);
+        chip.title = `Click to show/hide "${val}" on timeline`;
+        chip.addEventListener("click", () => {
+          if (_anvActiveStatusChips.has(val)) _anvActiveStatusChips.delete(val);
+          else _anvActiveStatusChips.add(val);
+          _anvRenderStatusChips();
+          _anvRedrawStatusCanvas();
+        });
+        anvStatusChips.appendChild(chip);
       });
+      const hasActive = _anvActiveStatusChips.size > 0;
+      if (anvStatusPrevBtn) anvStatusPrevBtn.disabled = !hasActive;
+      if (anvStatusNextBtn) anvStatusNextBtn.disabled = !hasActive;
     }
 
-    // ── Apply a note tag to the current frame ────────────────────
-    async function _anvApplyTag(tag) {
-      if (!_anvCsvPath) return;
-      anvNoteInput.value = tag;
-      await _anvSaveAnnotation();
+    // ── Render note chips — each unique value, unique color, toggle timeline ──
+    function _anvRenderTagChips() {
+      if (!anvNoteChips) return;
+      anvNoteChips.innerHTML = "";
+      _anvNoteColorMap = {};
+      _anvUserTags.forEach((tag, i) => {
+        const color = _ANV_NOTE_COLORS[i % _ANV_NOTE_COLORS.length];
+        _anvNoteColorMap[tag] = color;
+        const chip = document.createElement("span");
+        chip.className = "fe-tag-chip" + (_anvActiveNoteChips.has(tag) ? " active" : "");
+        chip.textContent = tag;
+        chip.style.setProperty("--chip-color", color);
+        chip.title = `Click to show/hide "${tag}" on timeline`;
+        chip.addEventListener("click", () => {
+          if (_anvActiveNoteChips.has(tag)) _anvActiveNoteChips.delete(tag);
+          else _anvActiveNoteChips.add(tag);
+          _anvRenderTagChips();
+          _anvRedrawNoteCanvas();
+        });
+        anvNoteChips.appendChild(chip);
+      });
+      const hasActive = _anvActiveNoteChips.size > 0;
+      if (anvNotePrevBtn) anvNotePrevBtn.disabled = !hasActive;
+      if (anvNoteNextBtn) anvNoteNextBtn.disabled = !hasActive;
     }
 
-    // ── Save annotation for current frame ────────────────────────
-    async function _anvSaveAnnotation() {
+    // ── Core save — writes note+status for current frame ─────────
+    async function _anvDoSave(note, status) {
       if (!_anvCsvPath) return;
       anvSaveStatus.textContent = "Saving…";
       anvSaveStatus.className   = "fe-extract-status";
-      const note   = anvNoteInput.value.trim();
-      const status = anvStatusInput.value || "0";
       try {
         const res  = await fetch("/annotate/save-row", {
           method:  "POST",
@@ -6542,8 +6673,6 @@
         const data = await res.json();
         if (data.error) throw new Error(data.error);
 
-        // Update _anvCsvRows in-place — only "interesting" rows are tracked
-        // (non-empty note OR status that isn't the default "0")
         const isInteresting = note || (status && status !== "0");
         const idx = _anvCsvRows.findIndex(r => r.frame_number === _anvCurrentFrame);
         if (isInteresting) {
@@ -6554,23 +6683,13 @@
             note,
           };
           if (idx >= 0) _anvCsvRows[idx] = savedRow;
-          else {
-            _anvCsvRows.push(savedRow);
-            _anvCsvRows.sort((a, b) => a.frame_number - b.frame_number);
-          }
-          // Add new note to user tags if needed
-          if (note && !_anvUserTags.includes(note)) {
-            _anvUserTags.push(note);
-            _anvRenderTagChips();
-          }
+          else { _anvCsvRows.push(savedRow); _anvCsvRows.sort((a, b) => a.frame_number - b.frame_number); }
+          if (note && !_anvUserTags.includes(note)) { _anvUserTags.push(note); _anvRenderTagChips(); }
+          if (status && status !== "0" && !_anvUserStatuses.includes(status)) { _anvUserStatuses.push(status); _anvRenderStatusChips(); }
         } else {
-          // Row is now default — remove it from the tracked list
           if (idx >= 0) _anvCsvRows.splice(idx, 1);
         }
-
-        // Rebuild the timeline bars to reflect the change
         _anvBuildCsvBars();
-
         anvSaveStatus.textContent = "Saved";
         anvSaveStatus.className   = "fe-extract-status ok";
         setTimeout(() => { if (anvSaveStatus.textContent === "Saved") anvSaveStatus.textContent = ""; }, 2000);
@@ -6580,7 +6699,44 @@
       }
     }
 
-    anvSaveAnnotationBtn.addEventListener("click", _anvSaveAnnotation);
+    async function _anvSaveStatus() {
+      const existingRow = _anvCsvRows.find(r => r.frame_number === _anvCurrentFrame);
+      const note   = anvNoteInput   ? anvNoteInput.value.trim()       : (existingRow?.note || "");
+      const status = anvStatusInput ? (anvStatusInput.value || "0")   : "0";
+      await _anvDoSave(note, status);
+    }
+
+    async function _anvSaveNote() {
+      const existingRow = _anvCsvRows.find(r => r.frame_number === _anvCurrentFrame);
+      const note   = anvNoteInput   ? anvNoteInput.value.trim()                        : "";
+      const status = anvStatusInput ? (anvStatusInput.value || "0") : (existingRow?.frame_line_status || "0");
+      await _anvDoSave(note, status);
+    }
+
+    if (anvSaveStatusBtn) anvSaveStatusBtn.addEventListener("click", _anvSaveStatus);
+    if (anvSaveNoteBtn)   anvSaveNoteBtn.addEventListener("click",   _anvSaveNote);
+    // Keep old single-button ref working if present (graceful fallback)
+    if (anvSaveAnnotationBtn) anvSaveAnnotationBtn.addEventListener("click", () => _anvDoSave(
+      anvNoteInput ? anvNoteInput.value.trim() : "",
+      anvStatusInput ? (anvStatusInput.value || "0") : "0",
+    ));
+
+    // ── Prev / next navigation within active chip set ─────────────
+    function _anvNavAnnot(field, activeSet, dir) {
+      if (!activeSet.size) return;
+      const frames = _anvCsvRows
+        .filter(r => { const v = r[field]; return v && (field !== "frame_line_status" || v !== "0") && activeSet.has(v); })
+        .map(r => r.frame_number)
+        .sort((a, b) => a - b);
+      if (!frames.length) return;
+      if (dir < 0) { const prev = [...frames].reverse().find(f => f < _anvCurrentFrame); if (prev != null) _anvLoadFrame(prev); }
+      else         { const next = frames.find(f => f > _anvCurrentFrame);                if (next != null) _anvLoadFrame(next); }
+    }
+
+    if (anvStatusPrevBtn) anvStatusPrevBtn.addEventListener("click", () => _anvNavAnnot("frame_line_status", _anvActiveStatusChips, -1));
+    if (anvStatusNextBtn) anvStatusNextBtn.addEventListener("click", () => _anvNavAnnot("frame_line_status", _anvActiveStatusChips,  1));
+    if (anvNotePrevBtn)   anvNotePrevBtn.addEventListener("click",   () => _anvNavAnnot("note", _anvActiveNoteChips, -1));
+    if (anvNoteNextBtn)   anvNoteNextBtn.addEventListener("click",   () => _anvNavAnnot("note", _anvActiveNoteChips,  1));
 
     // ── Add new tag ──────────────────────────────────────────────
     anvAddTagBtn.addEventListener("click", () => {

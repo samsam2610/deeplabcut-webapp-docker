@@ -81,7 +81,7 @@ def dlc_list_videos():
 
 @bp.route("/dlc/project/video-info/<path:filename>")
 def dlc_video_info(filename: str):
-    """Return FPS, frame count, width, height for a video in the videos folder."""
+    """Return FPS, frame count, width, height, abs_path for a video in the videos folder."""
     import cv2
 
     raw = _ctx.redis_client().get(_dlc_key())
@@ -109,7 +109,7 @@ def dlc_video_info(filename: str):
     height      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
-    return jsonify({"fps": fps, "frame_count": frame_count, "width": width, "height": height})
+    return jsonify({"fps": fps, "frame_count": frame_count, "width": width, "height": height, "abs_path": str(video_path)})
 
 
 @bp.route("/dlc/project/video-csv/<path:filename>")

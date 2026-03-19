@@ -79,13 +79,34 @@ def dlc_project_analyze():
         except (ValueError, TypeError):
             return None
 
+    def _float_or_none(key):
+        v = body.get(key)
+        try:
+            return float(v) if v is not None and v != "" else None
+        except (ValueError, TypeError):
+            return None
+
+    clv_destfolder = (body.get("destfolder") or "").strip() or None
+    if clv_destfolder and not Path(clv_destfolder).is_dir():
+        return jsonify({"error": f"destfolder not found: {clv_destfolder}"}), 400
+
     params = {
         "shuffle":          _int_or_none("shuffle") or 1,
         "trainingsetindex": _int_or_none("trainingsetindex") if _int_or_none("trainingsetindex") is not None else 0,
         "gputouse":         _int_or_none("gputouse"),
+        "batch_size":       _int_or_none("batch_size"),
         "save_as_csv":      bool(body.get("save_as_csv", False)),
         "create_labeled":   bool(body.get("create_labeled", False)),
         "snapshot_path":    (body.get("snapshot_path") or "").strip() or None,
+        "destfolder":       clv_destfolder,
+        # labeled video params (used when create_labeled=True)
+        "clv_pcutoff":      _float_or_none("pcutoff"),
+        "clv_dotsize":      _int_or_none("dotsize") or 8,
+        "clv_colormap":     (body.get("colormap") or "rainbow").strip(),
+        "clv_modelprefix":  (body.get("modelprefix") or "").strip(),
+        "clv_filtered":     bool(body.get("filtered", False)),
+        "clv_draw_skeleton":bool(body.get("draw_skeleton", False)),
+        "clv_overwrite":    bool(body.get("overwrite", False)),
     }
 
     task = _ctx.celery().send_task(
@@ -120,6 +141,82 @@ def dlc_project_analyze_stop():
     _ctx.redis_client().expire("dlc_analyze_job:" + task_id, 3600)
 
     return jsonify({"status": "stop_requested", "task_id": task_id}), 200
+
+
+@bp.route("/dlc/project/create-labeled-video", methods=["POST"])
+def dlc_create_labeled_video():
+    """
+    Dispatch a Celery task to run deeplabcut.create_labeled_video on an
+    already-analyzed video.  Checks that at least one .h5 analysis file
+    exists next to the video before dispatching.
+
+    Body (JSON) fields:
+      video_path      : absolute path to the video file
+      shuffle         : int (default 1)
+      trainingsetindex: int (default 0)
+      snapshot_index  : int (optional)
+    """
+    raw = _ctx.redis_client().get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+
+    project_data = json.loads(raw)
+    config_path  = project_data.get("config_path", "")
+    engine       = project_data.get("engine", "pytorch")
+    if not config_path or not Path(config_path).is_file():
+        return jsonify({"error": "No config.yaml in active project."}), 400
+
+    body       = request.get_json(force=True) or {}
+    video_path = (body.get("video_path") or "").strip()
+    if not video_path:
+        return jsonify({"error": "video_path is required."}), 400
+    video_p = Path(video_path)
+    if not video_p.is_file():
+        return jsonify({"error": f"Video not found: {video_path}"}), 400
+
+    # Check analyzed h5 exists in same folder
+    h5_files = list(video_p.parent.glob("*.h5"))
+    if not h5_files:
+        return jsonify({"error": "No analysis data (.h5) found next to the video. Run analysis first."}), 400
+
+    def _int_or_none(key):
+        v = body.get(key)
+        try:
+            return int(v) if v is not None and v != "" else None
+        except (ValueError, TypeError):
+            return None
+
+    def _float_or_none(key):
+        v = body.get(key)
+        try:
+            return float(v) if v is not None and v != "" else None
+        except (ValueError, TypeError):
+            return None
+
+    destfolder = (body.get("destfolder") or "").strip() or None
+    if destfolder and not Path(destfolder).is_dir():
+        return jsonify({"error": f"destfolder not found: {destfolder}"}), 400
+
+    params = {
+        "shuffle":          _int_or_none("shuffle") or 1,
+        "trainingsetindex": _int_or_none("trainingsetindex") if _int_or_none("trainingsetindex") is not None else 0,
+        "snapshot_index":   _int_or_none("snapshot_index"),
+        "pcutoff":          _float_or_none("pcutoff"),
+        "dotsize":          _int_or_none("dotsize") or 8,
+        "colormap":         (body.get("colormap") or "rainbow").strip(),
+        "modelprefix":      (body.get("modelprefix") or "").strip(),
+        "filtered":         bool(body.get("filtered", False)),
+        "draw_skeleton":    bool(body.get("draw_skeleton", False)),
+        "overwrite":        bool(body.get("overwrite", False)),
+        "destfolder":       destfolder,
+    }
+
+    task = _ctx.celery().send_task(
+        "tasks.dlc_create_labeled_video",
+        kwargs={"config_path": config_path, "video_path": video_path, "params": params},
+        queue=_get_engine_queue(engine),
+    )
+    return jsonify({"task_id": task.id, "operation": "create_labeled_video"}), 202
 
 
 @bp.route("/dlc/project/labeled-content")

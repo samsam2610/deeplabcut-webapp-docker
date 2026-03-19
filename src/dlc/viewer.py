@@ -2,15 +2,25 @@
 DLC Viewer Blueprint — kinematic pose overlay on original videos.
 
 Routes:
-  GET /dlc/viewer/h5-find        ?dir=<abs-path>&stem=<video-stem>[&prefix=<scorer-prefix>]
-                                 OR ?h5=<abs-path>  (direct path validation)
-  GET /dlc/viewer/h5-info        ?h5=<abs-path>
-  GET /dlc/viewer/frame-annotated/<int:frame_number>
-                                   ?video=<abs-path>&h5=<abs-path>
-                                   [&threshold=<0.0-1.0>]
-                                   [&parts=<comma-separated body-part names>]
-                                   [&marker_size=<int px>]
-                                   [&scale=<float 0.1-4.0>]
+  GET /dlc/viewer/h5-find              ?dir=<abs-path>&stem=<video-stem>[&prefix=<scorer-prefix>]
+                                       OR ?h5=<abs-path>  (direct path validation)
+  GET /dlc/viewer/h5-info              ?h5=<abs-path>
+  GET /dlc/viewer/frame-poses/<frame>  ?h5=&threshold=&parts=
+  GET /dlc/viewer/frame-poses-batch    ?h5=&start=&count=&threshold=&parts=
+  GET /dlc/viewer/frame-annotated/<frame>
+                                         ?video=<abs-path>&h5=<abs-path>
+                                         [&threshold=<0.0-1.0>]
+                                         [&parts=<comma-separated body-part names>]
+                                         [&marker_size=<int px>]
+                                         [&scale=<float 0.1-4.0>]
+
+Performance notes:
+  - viewer_load_h5 loads the full DataFrame once and caches it (LRU, max 5 files).
+    It also pre-computes a compact NumPy array (n_frames × n_bodyparts × 3) so that
+    per-frame pose lookups avoid repeated pandas MultiIndex navigation.
+  - frame-poses-batch lets the client prefetch pose data for a window of upcoming
+    frames in a single HTTP round trip, eliminating per-frame pose requests during
+    video playback.
 
 Rendering uses raw cv2.VideoCapture + cv2.circle — no matplotlib.
 All caches use the `viewer_` prefix to avoid collisions with dlc/videos.py.
@@ -21,6 +31,8 @@ import collections as _collections
 import colorsys as _colorsys
 import threading as _threading
 import uuid
+
+import numpy as _np
 
 from pathlib import Path
 from flask import Blueprint, request, jsonify, Response, session as flask_session
@@ -80,10 +92,22 @@ def viewer_load_h5(h5_path: str) -> dict:
             return _viewer_h5_cache[h5_path]
 
     # Load outside lock — can take a few seconds for large files
-    df = pd.read_hdf(h5_path)
-    scorer = df.columns.get_level_values("scorer")[0]
+    df        = pd.read_hdf(h5_path)
+    scorer    = df.columns.get_level_values("scorer")[0]
     bodyparts = df[scorer].columns.get_level_values("bodyparts").unique().tolist()
-    entry = {"df": df, "scorer": scorer, "bodyparts": bodyparts}
+
+    # Pre-compute a compact NumPy array: shape (n_frames, n_bodyparts, 3)
+    # Dim-2 encoding: 0 = x, 1 = y, 2 = likelihood
+    # This avoids repeated pandas MultiIndex navigation on every frame request.
+    n_frames = len(df)
+    n_bps    = len(bodyparts)
+    poses_np = _np.empty((n_frames, n_bps, 3), dtype=_np.float32)
+    for i, bp in enumerate(bodyparts):
+        poses_np[:, i, 0] = df[scorer][bp]["x"].values
+        poses_np[:, i, 1] = df[scorer][bp]["y"].values
+        poses_np[:, i, 2] = df[scorer][bp]["likelihood"].values
+
+    entry = {"df": df, "scorer": scorer, "bodyparts": bodyparts, "poses_np": poses_np}
 
     with _viewer_h5_lock:
         if len(_viewer_h5_cache) >= _VIEWER_H5_CACHE_MAX:
@@ -134,9 +158,8 @@ def viewer_render_frame(
 
     # ── Load pose data (cached) ───────────────────────────────────
     h5_data   = viewer_load_h5(h5_path)
-    df        = h5_data["df"]
-    scorer    = h5_data["scorer"]
     bodyparts = h5_data["bodyparts"]
+    poses_np  = h5_data["poses_np"]   # (n_frames, n_bps, 3): x, y, likelihood
 
     selected  = set(selected_parts) if selected_parts else set(bodyparts)
     palette   = viewer_palette(len(bodyparts))
@@ -182,18 +205,15 @@ def viewer_render_frame(
     sx = w_fr / orig_w
     sy = h_fr / orig_h
 
-    # ── Draw markers ──────────────────────────────────────────────
-    if frame_number < len(df):
-        row = df.iloc[frame_number][scorer]
-        for bp in bodyparts:
+    # ── Draw markers (NumPy array lookup — faster than pandas iloc) ───
+    if frame_number < len(poses_np):
+        frame_poses = poses_np[frame_number]       # shape (n_bps, 3)
+        for i, bp in enumerate(bodyparts):
             if bp not in selected:
                 continue
-            try:
-                x  = float(row[bp]["x"])
-                y  = float(row[bp]["y"])
-                lh = float(row[bp]["likelihood"])
-            except (KeyError, TypeError, ValueError):
-                continue
+            x  = float(frame_poses[i, 0])
+            y  = float(frame_poses[i, 1])
+            lh = float(frame_poses[i, 2])
             if lh < threshold:
                 continue
             cx    = int(x * sx)
@@ -325,24 +345,20 @@ def viewer_frame_poses(frame_number: int):
     selected_parts = {s.strip() for s in parts_raw.split(",") if s.strip()} or None
 
     h5_data   = viewer_load_h5(h5_path)
-    df        = h5_data["df"]
-    scorer    = h5_data["scorer"]
     bodyparts = h5_data["bodyparts"]
+    poses_np  = h5_data["poses_np"]   # (n_frames, n_bps, 3)
 
     selected = selected_parts if selected_parts else set(bodyparts)
 
     poses = []
-    if frame_number < len(df):
-        row = df.iloc[frame_number][scorer]
+    if frame_number < len(poses_np):
+        frame_poses = poses_np[frame_number]   # (n_bps, 3)
         for i, bp in enumerate(bodyparts):
             if bp not in selected:
                 continue
-            try:
-                x  = float(row[bp]["x"])
-                y  = float(row[bp]["y"])
-                lh = float(row[bp]["likelihood"])
-            except (KeyError, TypeError, ValueError):
-                continue
+            x  = float(frame_poses[i, 0])
+            y  = float(frame_poses[i, 1])
+            lh = float(frame_poses[i, 2])
             if lh < threshold:
                 continue
             poses.append({
@@ -350,10 +366,92 @@ def viewer_frame_poses(frame_number: int):
                 "x":         round(x, 2),
                 "y":         round(y, 2),
                 "lh":        round(lh, 4),
-                "color_idx": i,           # index into bodyparts list for palette
+                "color_idx": i,
             })
 
     return jsonify({"poses": poses, "bodyparts": bodyparts, "n_bodyparts": len(bodyparts)})
+
+
+@bp.route("/dlc/viewer/frame-poses-batch")
+def viewer_frame_poses_batch():
+    """
+    Return visible marker positions for a contiguous window of frames as JSON.
+
+    Designed for client-side pose caching: fetch a batch up-front so the browser
+    can display hover labels without a per-frame HTTP round trip during playback.
+
+    Query params:
+      h5        : absolute path to the .h5 analysis file
+      start     : first frame index (default 0)
+      count     : number of frames to return (default 30, capped at 300)
+      threshold : likelihood cutoff (default 0.6)
+      parts     : comma-separated body-part names (default: all)
+
+    Response:
+      {
+        "frames": {
+          "0": {"poses": [{"bp":…,"x":…,"y":…,"lh":…,"color_idx":…}, …],
+                "n_bodyparts": N},
+          "1": { … },
+          …
+        },
+        "bodyparts": […]
+      }
+    """
+    h5_path = request.args.get("h5", "").strip()
+    if not h5_path:
+        return jsonify({"error": "h5 param required."}), 400
+
+    hp = Path(h5_path)
+    if not hp.is_file():
+        return jsonify({"error": "h5 file not found."}), 404
+    if not _viewer_sec_check(hp.parent):
+        return jsonify({"error": "Access denied."}), 403
+
+    try:
+        start = max(0, int(request.args.get("start", 0)))
+        count = min(max(1, int(request.args.get("count", 30))), 300)
+    except ValueError:
+        start, count = 0, 30
+
+    try:
+        threshold = float(request.args.get("threshold", "0.6"))
+    except ValueError:
+        threshold = 0.6
+
+    parts_raw      = request.args.get("parts", "").strip()
+    selected_parts = {s.strip() for s in parts_raw.split(",") if s.strip()} or None
+
+    h5_data   = viewer_load_h5(h5_path)
+    bodyparts = h5_data["bodyparts"]
+    poses_np  = h5_data["poses_np"]   # (n_frames, n_bps, 3)
+    n_frames  = len(poses_np)
+    n_bps     = len(bodyparts)
+    selected  = selected_parts if selected_parts else set(bodyparts)
+
+    frames_out: dict = {}
+    end = min(start + count, n_frames)
+    for fn in range(start, end):
+        frame_poses = poses_np[fn]   # (n_bps, 3)
+        poses = []
+        for i, bp in enumerate(bodyparts):
+            if bp not in selected:
+                continue
+            x  = float(frame_poses[i, 0])
+            y  = float(frame_poses[i, 1])
+            lh = float(frame_poses[i, 2])
+            if lh < threshold:
+                continue
+            poses.append({
+                "bp":        bp,
+                "x":         round(x, 2),
+                "y":         round(y, 2),
+                "lh":        round(lh, 4),
+                "color_idx": i,
+            })
+        frames_out[str(fn)] = {"poses": poses, "n_bodyparts": n_bps}
+
+    return jsonify({"frames": frames_out, "bodyparts": bodyparts})
 
 
 @bp.route("/dlc/viewer/frame-annotated/<int:frame_number>")

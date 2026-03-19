@@ -142,12 +142,14 @@ def dlc_project_snapshots():
         raw_snaps.append({
             "stem":         snap.stem,
             "folder_iter":  _parse_folder_iter(snap),
+            "shuffle":      _parse_shuffle(snap),
             "rel_path":     str(snap.relative_to(project_path)),
             "mtime":        snap.stat().st_mtime,
         })
 
-    # Sort: by folder iteration ascending (None last), then mtime
-    raw_snaps.sort(key=lambda s: (s["folder_iter"] is None, s["folder_iter"] or 0, s["mtime"]))
+    # Sort: by folder iteration ascending (None last), then shuffle, then mtime
+    raw_snaps.sort(key=lambda s: (s["folder_iter"] is None, s["folder_iter"] or 0,
+                                  s["shuffle"] is None, s["shuffle"] or 0, s["mtime"]))
 
     # index here is positional within the sorted list for this shuffle —
     # this matches what DLC's snapshot_index parameter expects.
@@ -155,6 +157,7 @@ def dlc_project_snapshots():
         {
             "label":      s["stem"],
             "iteration":  s["folder_iter"],
+            "shuffle":    s["shuffle"],
             "index":      i,
             "rel_path":   s["rel_path"],
         }
@@ -168,6 +171,8 @@ def dlc_project_snapshots():
         "engine":           engine,
         "latest_label":     latest["stem"]        if latest else None,
         "latest_iteration": latest["folder_iter"] if latest else None,
+        "latest_shuffle":   latest["shuffle"]     if latest else None,
+        "latest_rel_path":  latest["rel_path"]    if latest else None,
     })
 
 
