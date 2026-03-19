@@ -35,7 +35,21 @@
 - **TAPNet subprocess isolation** — Parent writes query points as `.npy` to tempdir, spawns subprocess with `CUDA_VISIBLE_DEVICES=0`, subprocess exits after saving `tracks.npy`/`visibilities.npy`, parent reads results. Hard-kill on timeout. Stubs `tensorflow_datasets` to avoid unused-dep crash.
 - **CSV is source of truth** — H5 is always a derived artifact rebuilt from CSV via `rebuild_h5_from_csv()`. Never edit H5 directly.
 - **Frame naming** — Primary: `img{seq:04d}-{abs:05d}.png`. `seq`=extraction order; `abs`=video frame index. TAPNet uses `seq` for consecutive sequence detection, not `abs`.
-- **Frontend IIFEs** — `main.js` uses one `(() => { ... })()` per UI card. No global state except `window._vaLoadH5Info`, `window._vaReset`. DOM IDs are the API surface.
+- **Frontend IIFEs (legacy)** — Original `src/static/main.js` used one `(() => { ... })()` per UI card. Superseded by ES module split (see Frontend Design Patterns below). DOM IDs remain the API surface.
+
+---
+
+## Frontend Design Patterns
+
+- **CSS custom properties** — All theme tokens defined in `src/static/css/variables.css` under `:root` (`--bg`, `--surface`, `--accent`, `--border`, `--text-dim`, etc.). Never hardcode colors; always reference variables.
+- **DLC theme override** — Sections using DLC-specific UI apply `.dlc-theme` class, which overrides `--accent` to indigo. Defined in `components.css`.
+- **No BEM** — Flat, descriptive class names (`fe-video-item`, `fe-extract-status`, `fe-tag-chip`). Mirrors original IIFE card structure. Do not introduce BEM.
+- **ES modules** — `src/static/js/` uses `<script type="module">` (deferred; DOM is ready at run time). Each card file is its own module scope — no IIFE wrapper needed.
+- **`state.js` singleton** — Cross-module mutable state lives in `export const state = { ... }` in `state.js`. Replaces shared IIFE-scope `let` variables. Import with `import { state } from './state.js'`.
+- **Canvas-based timelines** — Annotation timelines (`anv-status-canvas`, `anv-note-canvas`, `va-status-canvas`, `va-note-canvas`) draw one `fillRect` per annotated frame. NEVER create a DOM node per frame (see `feedback_timeline_dom_antipattern.md`). Regression test: `tests/test_timeline_canvas_rendering.py`.
+- **Template hierarchy** — `base.html` is the shell (5 CSS links, `<script type="module" src="/static/js/main.js">`). `index.html` extends `base.html` with `{% block content %}` and 17 `{% include "partials/<name>.html" %}` calls. Each partial is one UI card.
+- **Responsive breakpoint** — `@media (max-width: 600px)` in `base.css`. Single breakpoint; no CSS grid framework.
+- **No `window.*` globals** — Legacy refs (`window._vaLoadH5Info`, `window._vaReset`) removed. Use module imports for cross-module calls.
 
 ---
 

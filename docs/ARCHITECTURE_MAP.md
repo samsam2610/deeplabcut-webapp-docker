@@ -57,12 +57,52 @@ src/
 │   └── config.yaml             # DLC project template
 │
 ├── templates/
-│   ├── index.html              # SPA shell (all cards)
-│   └── inspector.html          # Behavior inspector page
+│   ├── base.html               # Shell: head (5 CSS links), header, footer, <script type="module">
+│   ├── index.html              # Extends base.html; {% block content %} with 17 {% include %} calls
+│   ├── inspector.html          # Behavior inspector page
+│   ├── login.html              # Token auth login page
+│   └── partials/               # 17 Jinja2 partial files (one per UI card/section)
+│       ├── session_dlc_bar.html
+│       ├── session_anipose_bar.html
+│       ├── card_dlc_project.html
+│       ├── card_frame_extractor.html
+│       ├── card_frame_labeler.html
+│       ├── card_training_dataset.html
+│       ├── card_train_network.html
+│       ├── card_analyze.html
+│       ├── card_viewer.html
+│       ├── card_annotator.html
+│       ├── card_gpu_monitor.html
+│       ├── card_dlc_config.html
+│       ├── card_custom_script.html
+│       ├── card_project_explorer.html
+│       ├── card_session_actions.html
+│       ├── card_config_editor.html
+│       └── card_admin.html
 │
 └── static/
-    ├── main.js                 # All frontend logic (~6500 lines, IIFEs per card)
-    └── style.css
+    ├── main.js                 # Legacy monolith (kept; new entry point is js/main.js)
+    ├── style.css               # Legacy monolith (kept; new entry point is css/variables.css)
+    ├── css/                    # Modular CSS (5 files)
+    │   ├── variables.css       # CSS custom properties (:root)
+    │   ├── base.css            # Reset, html/body, grain, header, footer, responsive
+    │   ├── layout.css          # Session bar, cards, form fields
+    │   ├── components.css      # Buttons, progress, log, explorer, config editors, DLC theme, inspector
+    │   └── viewer.css          # Frame extractor + frame labeler player UI
+    └── js/                     # ES modules (13 files)
+        ├── main.js             # Entry point: imports all card modules
+        ├── state.js            # Exported singleton state object
+        ├── api.js              # Placeholder for shared HTTP helpers
+        ├── dlc_project.js      # DLC project CRUD, folder nav, project explorer
+        ├── anipose.js          # Anipose session management + pipeline actions
+        ├── frame_extractor.js  # Frame extractor card
+        ├── frame_labeler.js    # Frame labeler card + TAPNet integration
+        ├── training.js         # DLC config editor + create-dataset + train-network
+        ├── analyze.js          # Analyze video/frames card
+        ├── viewer.js           # View analyzed videos, kinematic overlay, timeline
+        ├── annotator.js        # Video annotator (ANV card), annotation timelines
+        ├── gpu_monitor.js      # GPU & training monitor card
+        └── custom_script.js    # Custom script runner + inspector iframe handler
 
 tests/
 ├── conftest.py                 # Fixtures: sandbox dirs, GPU env, DLC project paths
@@ -157,6 +197,38 @@ Engine routing function: `dlc.utils._get_engine_queue(engine: str) → str`
 | vcap (video) | `dlc/videos.py` | LRU, max 20 | Per-session VideoCapture objects |
 | vcap (viewer) | `dlc/viewer.py` | LRU, max 10 | Viewer-specific VideoCapture |
 | H5 DataFrame | `dlc/viewer.py` | LRU, max 5 | Loaded pose DataFrames |
+
+---
+
+## Frontend Modules
+
+### CSS Files (`src/static/css/`)
+
+| File | Primary Responsibility |
+|------|----------------------|
+| `variables.css` | CSS custom properties (`:root`): `--bg`, `--surface`, `--accent`, `--border`, `--text-dim`, etc. |
+| `base.css` | Reset, `html`/`body`, grain overlay, header, footer, `@media (max-width: 600px)` breakpoint |
+| `layout.css` | Session bar, card grid, form field groups (original lines 77–379) |
+| `components.css` | Buttons, progress bars, log output, file explorer, config editors, `.dlc-theme` accent override, inspector |
+| `viewer.css` | Frame extractor player UI and frame labeler player UI |
+
+### JS Modules (`src/static/js/`)
+
+| File | Primary Responsibility | Backend APIs |
+|------|----------------------|-------------|
+| `state.js` | Exported singleton: `{ sessionPollTimer, dlcBrowsePath, dlcEngine, dlcTrainingActive, currentRoot, userDataDir, dataDir, currentProjectId, pollTimer }` | — |
+| `api.js` | Placeholder for shared HTTP helpers | — |
+| `dlc_project.js` | DLC project CRUD, folder nav, project explorer; exports `applyDlcProjectState`, `browseProject`, `showProgress` | `POST/GET /dlc/project`, `GET /projects/<id>/browse` |
+| `anipose.js` | Anipose session lifecycle, pipeline action cards; imports from `dlc_project.js` | `POST /session/create`, `GET /session/status`, `POST /run`, `GET /status/<task_id>` |
+| `frame_extractor.js` | Frame extraction card | `GET /dlc/videos/list`, `GET /dlc/videos/frame`, `GET /dlc/videos/stream` |
+| `frame_labeler.js` | Frame labeler + TAPNet label propagation | `GET /dlc/labeling/frames`, `POST /dlc/labeling/save`, `GET /dlc/labeling/bodyparts` |
+| `training.js` | DLC config editor, create-training-dataset card, train-network card | `POST /dlc/project/create-training-dataset`, `POST /dlc/project/train-network` |
+| `analyze.js` | Analyze video/frames card, snapshot selector | `POST /dlc/project/analyze`, `GET /dlc/inference/labeled-content` |
+| `viewer.js` | Analyzed video viewer (VA card), kinematic overlay canvas, canvas-based annotation timeline, dataset curation sub-panel | `GET /dlc/viewer/h5-find`, `GET /dlc/viewer/frame-annotated/<n>`, `POST /dlc/curator/add-to-dataset`, `POST /dlc/curator/save-annotation`, `GET /annotate/csv`, `POST /annotate/save-row` |
+| `annotator.js` | Video annotator (ANV card), canvas-based annotation timelines, clip extractor | `GET /annotate/load`, `POST /annotate/save`, `GET /dlc/videos/stream`, `POST /annotate/crop-video` |
+| `gpu_monitor.js` | GPU status + job list card, auto-poll every 5 s | `GET /dlc/monitoring/gpu-status`, `GET /dlc/monitoring/jobs` |
+| `custom_script.js` | Custom script runner, file/folder browser, inspector iframe message handler | `POST /custom-script/run` |
+| `main.js` | Entry point: imports all card modules; loaded via `<script type="module">` in `base.html` | — |
 
 ---
 
