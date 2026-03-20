@@ -58,7 +58,6 @@ import { state } from './state.js';
     let _vaOverlayEnabled   = false;
     let _vaH5Path           = null;       // absolute path to loaded .h5 file
     let _vaAllBodyParts     = [];         // all body parts from h5-info
-    let _vaSelectedParts    = new Set();  // empty = show all (server-side filter)
     let _vaSelectedBp       = null;       // currently active/selected bodypart
     const _vaHiddenParts    = new Set();  // client-side per-bodypart visibility toggle
     let _vaThreshold        = 0.60;
@@ -122,6 +121,9 @@ import { state } from './state.js';
       _vaHiddenParts.clear();
       _vaDragBp       = null;
       _vaDragging     = false;
+      if (vaBpListWrap) vaBpListWrap.classList.add("hidden");
+      if (vaBpChips)    vaBpChips.innerHTML = "";
+      if (vaOverlayCanvas) vaOverlayCanvas.style.cursor = "default";
       if (typeof _vaLocalEdits !== "undefined") _vaLocalEdits.clear();
       _vaUpdateEditBanner();
       _vaClearPoseCache();
@@ -216,6 +218,7 @@ import { state } from './state.js';
         _vaCurrentPoses = cached.poses;
         _vaNBodyparts   = cached.n_bodyparts;
         _vaDrawPoseMarkers();
+        _vaUpdateBpChipStatus();
       }
       // Only hit the server when paused
       if (!_vaPlayTimer && (!cached || cached.key !== key)) _vaFetchPoses(n);
@@ -599,36 +602,41 @@ import { state } from './state.js';
     }
 
     if (vaOverlayCanvas) {
-      // Enable pointer events on the canvas for hover + drag
       vaOverlayCanvas.style.pointerEvents = "auto";
-      vaOverlayCanvas.style.cursor        = "default";
 
-      vaOverlayCanvas.addEventListener("mousedown", e => {
-        if (!_vaOverlayEnabled || e.button !== 0) return;
+      // Click: select marker near cursor OR place selected bodypart
+      vaOverlayCanvas.addEventListener("click", e => {
+        if (!_vaOverlayEnabled || !_vaCurrentPoses.length) return;
         const rect = vaOverlayCanvas.getBoundingClientRect();
         const cx   = e.clientX - rect.left;
         const cy   = e.clientY - rect.top;
         const hit  = _vaHitTestWithEdits(cx, cy);
-        e.preventDefault();
         if (hit) {
-          // Clicked near an existing marker → select it and begin drag
-          _vaSelectedBp = hit;
-          _vaDragBp     = hit;
-          _vaDragging   = true;
-          vaOverlayCanvas.style.cursor = "grabbing";
-          _vaRebuildPartsChecklist();
-          _vaDrawPoseMarkers();
-        } else if (_vaSelectedBp) {
-          // Clicked empty space → place the currently selected bodypart here
-          const { x, y } = _vaCanvasToVideo(cx, cy);
-          if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
-          _vaLocalEdits.get(_vaCurrentFrame)[_vaSelectedBp] = { x, y };
-          _vaSyncCanvas();
-          vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
-          _vaDrawPoseMarkers();
-          _vaFlushMarkerEdit(_vaCurrentFrame, _vaSelectedBp, x, y);
-          _vaUpdateEditBanner();
+          _vaSelectBp(hit);
+          return;
         }
+        if (!_vaSelectedBp) return;
+        const { x, y } = _vaCanvasToVideo(cx, cy);
+        if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
+        _vaLocalEdits.get(_vaCurrentFrame)[_vaSelectedBp] = { x, y };
+        _vaSyncCanvas();
+        vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+        _vaDrawPoseMarkers();
+        _vaFlushMarkerEdit(_vaCurrentFrame, _vaSelectedBp, x, y);
+        _vaUpdateEditBanner();
+        _vaUpdateBpChipStatus();
+      });
+
+      // Mousedown on a marker → begin drag; otherwise ignored
+      vaOverlayCanvas.addEventListener("mousedown", e => {
+        if (!_vaOverlayEnabled || !_vaCurrentPoses.length || e.button !== 0) return;
+        const rect = vaOverlayCanvas.getBoundingClientRect();
+        const hit  = _vaHitTestWithEdits(e.clientX - rect.left, e.clientY - rect.top);
+        if (!hit) return;
+        e.preventDefault();
+        _vaDragBp   = hit;
+        _vaDragging = true;
+        vaOverlayCanvas.style.cursor = "grabbing";
       });
 
       vaOverlayCanvas.addEventListener("mousemove", e => {
@@ -638,47 +646,35 @@ import { state } from './state.js';
         const cy   = e.clientY - rect.top;
 
         if (_vaDragging && _vaDragBp) {
-          // Update local edit position in real-time (no server round-trip during drag)
           const { x, y } = _vaCanvasToVideo(cx, cy);
           if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
           _vaLocalEdits.get(_vaCurrentFrame)[_vaDragBp] = { x, y };
-          // Redraw canvas immediately for zero-latency feedback
           _vaSyncCanvas();
           vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
           _vaDrawPoseMarkers();
           return;
         }
 
-        // Hover detection (only when not dragging)
-        if (!_vaCurrentPoses.length) return;
         const hit = _vaHitTestWithEdits(cx, cy);
-        if (hit !== _vaHoverBp) {
-          _vaHoverBp = hit;
-          _vaDrawHoverLabel();
-        }
-        vaOverlayCanvas.style.cursor = hit ? "grab" : "default";
+        if (hit !== _vaHoverBp) { _vaHoverBp = hit; _vaDrawHoverLabel(); }
+        vaOverlayCanvas.style.cursor = hit ? "pointer" : (_vaSelectedBp && _vaOverlayEnabled ? "crosshair" : "default");
       });
 
       vaOverlayCanvas.addEventListener("mouseup", async e => {
         if (!_vaDragging || !_vaDragBp) return;
         _vaDragging = false;
         const rect  = vaOverlayCanvas.getBoundingClientRect();
-        const { x, y } = _vaCanvasToVideo(
-          e.clientX - rect.left,
-          e.clientY - rect.top,
-        );
-        // Final position already in _vaLocalEdits; flush to server
+        const { x, y } = _vaCanvasToVideo(e.clientX - rect.left, e.clientY - rect.top);
         await _vaFlushMarkerEdit(_vaCurrentFrame, _vaDragBp, x, y);
         _vaUpdateEditBanner();
+        _vaUpdateBpChipStatus();
         _vaDragBp = null;
-        vaOverlayCanvas.style.cursor = "default";
+        vaOverlayCanvas.style.cursor = _vaSelectedBp ? "crosshair" : "default";
         _vaDrawHoverLabel();
       });
 
-      // Cancel drag if mouse leaves the canvas
       vaOverlayCanvas.addEventListener("mouseleave", () => {
         if (_vaDragging && _vaDragBp) {
-          // Persist whatever position was last recorded
           const edits = _vaLocalEdits.get(_vaCurrentFrame);
           if (edits && _vaDragBp in edits) {
             const { x, y } = edits[_vaDragBp];
@@ -689,7 +685,11 @@ import { state } from './state.js';
           _vaDragBp   = null;
         }
         if (_vaHoverBp) { _vaHoverBp = null; _vaDrawHoverLabel(); }
-        vaOverlayCanvas.style.cursor = "default";
+        vaOverlayCanvas.style.cursor = _vaSelectedBp ? "crosshair" : "default";
+      });
+
+      vaOverlayCanvas.addEventListener("mouseenter", () => {
+        vaOverlayCanvas.style.cursor = _vaSelectedBp && _vaOverlayEnabled ? "crosshair" : "default";
       });
 
       // Right-click → delete (NaN) the currently selected marker
@@ -703,6 +703,7 @@ import { state } from './state.js';
         _vaDrawPoseMarkers();
         _vaFlushMarkerDelete(_vaCurrentFrame, _vaSelectedBp);
         _vaUpdateEditBanner();
+        _vaUpdateBpChipStatus();
       });
     }
 
@@ -786,7 +787,7 @@ import { state } from './state.js';
 
     // Pose cache key encodes everything that affects pose data
     function _vaPoseCacheKey() {
-      return `${_vaH5Path}:${_vaThreshold.toFixed(2)}:${[..._vaSelectedParts].sort().join(",")}`;
+      return `${_vaH5Path}:${_vaThreshold.toFixed(2)}`;
     }
 
     // Fetch poses for frameNumber from cache or server; draw overlay; start background prefetch.
@@ -799,9 +800,7 @@ import { state } from './state.js';
         _vaCurrentPoses = cached.poses;
         _vaNBodyparts   = cached.n_bodyparts;
       } else {
-        const parts = _vaSelectedParts.size > 0 ? [..._vaSelectedParts].join(",") : "";
-        const p     = new URLSearchParams({ h5: _vaH5Path, threshold: _vaThreshold.toFixed(2) });
-        if (parts) p.set("parts", parts);
+        const p = new URLSearchParams({ h5: _vaH5Path, threshold: _vaThreshold.toFixed(2) });
         try {
           const res  = await fetch(`/dlc/viewer/frame-poses/${frameNumber}?${p}`);
           const data = await res.json();
@@ -812,6 +811,7 @@ import { state } from './state.js';
       }
       _vaHoverBp = null;
       _vaDrawHoverLabel();
+      _vaUpdateBpChipStatus();
       if (!_vaPrefetchCtrl) _vaFetchPosesWindow(frameNumber);
     }
 
@@ -825,14 +825,12 @@ import { state } from './state.js';
         if (!c || c.key !== key) missing++;
       }
       if (missing === 0) return;
-      if (_vaPrefetchCtrl) return;  // let the current batch finish
+      if (_vaPrefetchCtrl) return;
       _vaPrefetchCtrl = new AbortController();
-      const ctrl  = _vaPrefetchCtrl;
-      const parts = _vaSelectedParts.size > 0 ? [..._vaSelectedParts].join(",") : "";
-      const p = new URLSearchParams({
+      const ctrl = _vaPrefetchCtrl;
+      const p    = new URLSearchParams({
         h5: _vaH5Path, start: fromFrame, count: _POSE_WINDOW, threshold: _vaThreshold.toFixed(2),
       });
-      if (parts) p.set("parts", parts);
       try {
         const res  = await fetch(`/dlc/viewer/frame-poses-batch?${p}`, { signal: ctrl.signal });
         if (!res.ok) return;
@@ -861,9 +859,11 @@ import { state } from './state.js';
     const vaOverlayThreshVal = document.getElementById("va-overlay-threshold-val");
     const vaOverlayMarkerSz  = document.getElementById("va-overlay-marker-size");
     const vaOverlayMarkerVal = document.getElementById("va-overlay-marker-size-val");
-    const vaOverlayPartsBox  = document.getElementById("va-overlay-bodyparts");
     const vaOverlayPartsAll  = document.getElementById("va-overlay-parts-all");
     const vaOverlayPartsNone = document.getElementById("va-overlay-parts-none");
+    // Body-part chip list (below the canvas)
+    const vaBpChips     = document.getElementById("va-bp-chips");
+    const vaBpListWrap  = document.getElementById("va-bp-list-wrap");
 
     function _vaOverlayStatus(msg, isErr = false) {
       vaOverlayStatus.textContent = msg;
@@ -871,8 +871,8 @@ import { state } from './state.js';
     }
 
     async function _vaLoadH5Info(h5Path) {
-      vaOverlayPartsBox.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">Loading…</span>';
-      _vaSelectedParts.clear();
+      _vaSelectedBp = null;
+      if (vaBpChips) vaBpChips.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">Loading…</span>';
       try {
         const res  = await fetch(`/dlc/viewer/h5-info?h5=${encodeURIComponent(h5Path)}`);
         const data = await res.json();
@@ -885,66 +885,65 @@ import { state } from './state.js';
       }
     }
 
+    // Select a bodypart: set active chip, update canvas cursor.
+    function _vaSelectBp(bp) {
+      _vaSelectedBp = bp;
+      if (vaOverlayCanvas) vaOverlayCanvas.style.cursor = bp ? "crosshair" : "default";
+      _vaUpdateBpChipStatus();
+      vaCard.focus();
+    }
+
+    // Update chip .active / .labeled / .vis-hidden states.
+    function _vaUpdateBpChipStatus() {
+      if (!vaBpChips) return;
+      const posedBps = new Set(_vaCurrentPoses.map(p => p.bp));
+      vaBpChips.querySelectorAll(".fl-bp-chip").forEach(c => {
+        const bp = c.dataset.bp;
+        const hasEdit = (typeof _vaLocalEdits !== "undefined") &&
+          _vaLocalEdits.has(_vaCurrentFrame) &&
+          bp in _vaLocalEdits.get(_vaCurrentFrame) &&
+          _vaLocalEdits.get(_vaCurrentFrame)[bp].x != null;
+        const isLabeled  = posedBps.has(bp) || hasEdit;
+        const isHidden   = _vaHiddenParts.has(bp);
+        c.classList.toggle("active",     c.dataset.bp === _vaSelectedBp);
+        c.classList.toggle("labeled",    isLabeled);
+        c.classList.toggle("vis-hidden", isLabeled && isHidden);
+      });
+    }
+
+    // Build the fl-bp-chip list in the panel below the canvas.
     function _vaRebuildPartsChecklist() {
-      vaOverlayPartsBox.innerHTML = "";
+      if (!vaBpChips) return;
+      vaBpChips.innerHTML = "";
       if (!_vaAllBodyParts.length) {
-        vaOverlayPartsBox.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">No body parts loaded.</span>';
+        if (vaBpListWrap) vaBpListWrap.classList.add("hidden");
         return;
       }
       _vaAllBodyParts.forEach((bp, idx) => {
-        const row = document.createElement("div");
-        row.style.cssText = "display:flex;align-items:center;gap:.3rem;white-space:nowrap";
-
-        // Checkbox for server-side fetch filter (All / None buttons interact with this)
-        const chk = document.createElement("input");
-        chk.type  = "checkbox";
-        chk.value = bp;
-        chk.style.accentColor = "var(--accent)";
-        chk.checked = _vaSelectedParts.size === 0 || !_vaSelectedParts.has(bp);
-        chk.addEventListener("change", () => {
-          if (chk.checked) _vaSelectedParts.delete(bp);
-          else             _vaSelectedParts.add(bp);
-          if ([...vaOverlayPartsBox.querySelectorAll("input[type=checkbox]")].every(c => c.checked))
-            _vaSelectedParts.clear();
-          _vaClearPoseCache();
-          if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
-        });
-
-        // Chip span: click = select bodypart, dblclick = toggle visibility
-        const chip = document.createElement("span");
-        chip.textContent = bp;
-        chip.style.cssText = [
-          "cursor:pointer",
-          "user-select:none",
-          "padding:.05rem .25rem",
-          "border-radius:4px",
-          `opacity:${_vaHiddenParts.has(bp) ? "0.35" : "1"}`,
-          `text-decoration:${_vaHiddenParts.has(bp) ? "line-through" : "none"}`,
-          bp === _vaSelectedBp
-            ? "background:rgba(250,204,21,.18);color:#facc15;font-weight:600;outline:1px solid #facc1580"
-            : "",
-        ].filter(Boolean).join(";");
-        chip.title = "Click: select  •  Dbl-click: toggle visibility  •  Space: toggle visibility of selected";
-
-        chip.addEventListener("click", e => {
-          if (e.detail >= 2) return;  // dblclick fires click twice; ignore 2nd click
-          _vaSelectedBp = (_vaSelectedBp === bp) ? null : bp;
-          _vaRebuildPartsChecklist();
-          _vaDrawHoverLabel();
-          vaCard.focus();  // keep card focused so hotkeys work
-        });
+        const chip = document.createElement("button");
+        chip.className  = "fl-bp-chip";
+        chip.dataset.bp = bp;
+        chip.style.setProperty("--fl-color", _vaPaletteColor(idx, _vaAllBodyParts.length));
+        chip.innerHTML =
+          `<span class="fl-bp-dot"></span>` +
+          `<span class="fl-bp-name">${bp}</span>` +
+          `<svg class="fl-bp-check" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>` +
+          `<svg class="fl-bp-eye-slash" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+        chip.title = "Click: select  •  Dbl-click: toggle visibility";
+        chip.addEventListener("click", () => _vaSelectBp(bp));
         chip.addEventListener("dblclick", e => {
           e.preventDefault();
           if (_vaHiddenParts.has(bp)) _vaHiddenParts.delete(bp);
           else _vaHiddenParts.add(bp);
-          _vaRebuildPartsChecklist();
           _vaDrawHoverLabel();
+          _vaUpdateBpChipStatus();
         });
-
-        row.appendChild(chk);
-        row.appendChild(chip);
-        vaOverlayPartsBox.appendChild(row);
+        vaBpChips.appendChild(chip);
       });
+      if (vaBpListWrap) vaBpListWrap.classList.toggle("hidden", !_vaOverlayEnabled);
+      _vaUpdateBpChipStatus();
+      // Auto-select first bodypart (like the labeler does)
+      if (_vaAllBodyParts.length && !_vaSelectedBp) _vaSelectBp(_vaAllBodyParts[0]);
     }
 
     async function _vaAutoDetectH5(videoPath) {
@@ -973,8 +972,11 @@ import { state } from './state.js';
       vaOverlayControls.classList.toggle("hidden", !_vaOverlayEnabled);
       if (!_vaOverlayEnabled) {
         if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+        if (vaBpListWrap) vaBpListWrap.classList.add("hidden");
+        if (vaOverlayCanvas) vaOverlayCanvas.style.cursor = "default";
         return;
       }
+      if (_vaAllBodyParts.length && vaBpListWrap) vaBpListWrap.classList.remove("hidden");
       if (!_vaH5Path && _vaCurrentVideoPath) _vaAutoDetectH5(_vaCurrentVideoPath);
       if (_vaH5Path && !_vaPlayTimer) _vaFetchPoses(_vaCurrentFrame);
     });
@@ -987,9 +989,12 @@ import { state } from './state.js';
       _vaH5Path = null;
       vaOverlayH5Path.value = "";
       _vaAllBodyParts = [];
-      _vaSelectedParts.clear();
+      _vaHiddenParts.clear();
+      _vaSelectedBp = null;
       _vaClearPoseCache();
-      vaOverlayPartsBox.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">Load an .h5 file to see body parts.</span>';
+      if (vaBpChips)    vaBpChips.innerHTML = "";
+      if (vaBpListWrap) vaBpListWrap.classList.add("hidden");
+      if (vaOverlayCanvas) vaOverlayCanvas.style.cursor = "default";
       _vaOverlayStatus("");
       _vaCurrentPoses = [];
       if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
@@ -1013,20 +1018,14 @@ import { state } from './state.js';
     });
 
     vaOverlayPartsAll?.addEventListener("click", () => {
-      _vaSelectedParts.clear();
-      vaOverlayPartsBox.querySelectorAll("input").forEach(c => { c.checked = true; });
-      _vaClearPoseCache();
-      if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
+      _vaHiddenParts.clear();
+      _vaDrawHoverLabel();
+      _vaUpdateBpChipStatus();
     });
     vaOverlayPartsNone?.addEventListener("click", () => {
-      _vaAllBodyParts.forEach(bp => _vaSelectedParts.add(bp));
-      vaOverlayPartsBox.querySelectorAll("input").forEach(c => { c.checked = false; });
-      // "none selected" still shows all — reset to prevent empty render
-      _vaSelectedParts.clear();
-      vaOverlayPartsBox.querySelectorAll("input").forEach(c => { c.checked = false; });
-      // keep _vaSelectedParts empty but mark first part as explicit include for "none" visual
-      // Actually: show nothing when all unchecked — use a sentinel
-      _vaAllBodyParts.forEach(bp => _vaSelectedParts.add("__none__"));
+      _vaAllBodyParts.forEach(bp => _vaHiddenParts.add(bp));
+      _vaDrawHoverLabel();
+      _vaUpdateBpChipStatus();
     });
 
     // h5 file browser (shows .h5 files and dirs)
@@ -1216,7 +1215,7 @@ import { state } from './state.js';
           if (_vaHiddenParts.has(_vaSelectedBp)) _vaHiddenParts.delete(_vaSelectedBp);
           else _vaHiddenParts.add(_vaSelectedBp);
           _vaDrawHoverLabel();
-          _vaRebuildPartsChecklist();
+          _vaUpdateBpChipStatus();
         } else {
           vaBtnPlay.click();
         }
@@ -1240,14 +1239,13 @@ import { state } from './state.js';
       // ── Tab: cycle bodyparts (only when overlay is active) ────────────────────
       if (e.key === "Tab" && overlayActive) {
         e.preventDefault();
-        const parts = _vaCurrentPoses.map(p => p.bp);
-        if (!parts.length) return;
-        const idx = parts.indexOf(_vaSelectedBp);
-        _vaSelectedBp = e.shiftKey
-          ? parts[(idx - 1 + parts.length) % parts.length]
-          : parts[(idx + 1) % parts.length];
+        if (!_vaAllBodyParts.length) return;
+        const idx = _vaAllBodyParts.indexOf(_vaSelectedBp);
+        const next = e.shiftKey
+          ? (_vaAllBodyParts.length + idx - 1) % _vaAllBodyParts.length
+          : (idx + 1) % _vaAllBodyParts.length;
+        _vaSelectBp(_vaAllBodyParts[next]);
         _vaDrawHoverLabel();
-        _vaRebuildPartsChecklist();
         return;
       }
 
@@ -1261,6 +1259,7 @@ import { state } from './state.js';
         _vaDrawPoseMarkers();
         _vaFlushMarkerDelete(_vaCurrentFrame, _vaSelectedBp);
         _vaUpdateEditBanner();
+        _vaUpdateBpChipStatus();
         return;
       }
 

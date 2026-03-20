@@ -111,17 +111,11 @@
               </label>
             </div>
 
-            <!-- Body part selector -->
-            <div>
-              <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.25rem">
-                <span style="font-size:.73rem;color:var(--text-dim)">Body parts</span>
-                <button class="btn-sm" id="va-overlay-parts-all" style="padding:.1rem .4rem;font-size:.7rem">All</button>
-                <button class="btn-sm" id="va-overlay-parts-none" style="padding:.1rem .4rem;font-size:.7rem">None</button>
-              </div>
-              <div id="va-overlay-bodyparts"
-                style="display:flex;flex-wrap:wrap;gap:.3rem .5rem;max-height:100px;overflow-y:auto;padding:.25rem .1rem;font-size:.75rem">
-                <span style="color:var(--text-dim);font-size:.73rem">Load an .h5 file to see body parts.</span>
-              </div>
+            <!-- Body part visibility shortcuts -->
+            <div style="display:flex;align-items:center;gap:.5rem">
+              <span style="font-size:.73rem;color:var(--text-dim)">Body parts</span>
+              <button class="btn-sm" id="va-overlay-parts-all" style="padding:.1rem .4rem;font-size:.7rem" title="Show all body parts">Show all</button>
+              <button class="btn-sm" id="va-overlay-parts-none" style="padding:.1rem .4rem;font-size:.7rem" title="Hide all body parts">Hide all</button>
             </div>
           </div>
         </div>
@@ -145,11 +139,16 @@
             title="Double-click to erase all markers on the current frame">Clear Frame</button>
         </div>
 
-        <div id="va-video-wrap" style="position:relative;background:#000;border-radius:8px;border:1px solid var(--border);margin-bottom:.75rem">
+        <div id="va-video-wrap" style="position:relative;background:#000;border-radius:8px;border:1px solid var(--border);margin-bottom:.5rem">
           <img id="va-frame-img" alt="" draggable="false" style="width:100%;display:block;height:auto" />
           <!-- Canvas for hover hit-testing, label display, and drag-to-edit markers -->
           <canvas id="va-overlay-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></canvas>
           <div id="va-frame-spinner" class="fe-frame-spinner hidden"></div>
+        </div>
+
+        <!-- Body-part chip selector (visible when overlay is on and H5 is loaded) -->
+        <div id="va-bp-list-wrap" class="hidden" style="margin-bottom:.55rem">
+          <div class="fl-bodypart-list" id="va-bp-chips"></div>
         </div>
 
         <!-- Controls row -->
