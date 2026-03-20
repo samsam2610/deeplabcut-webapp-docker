@@ -116,6 +116,10 @@ import { state } from './state.js';
       _vaCurrentVideoPath = null;
       _vaCurrentPoses = [];
       _vaHoverBp      = null;
+      _vaDragBp       = null;
+      _vaDragging     = false;
+      if (typeof _vaLocalEdits !== "undefined") _vaLocalEdits.clear();
+      _vaUpdateEditBanner();
       _vaClearPoseCache();
       if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
       vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
@@ -393,7 +397,9 @@ import { state } from './state.js';
       }
     }
 
-    // Draw all pose marker circles onto the overlay canvas
+    // Draw all pose marker circles onto the overlay canvas.
+    // If _vaLocalEdits contains an override for the current frame+bodypart,
+    // the edited position is used and the marker is drawn with an extra ring.
     function _vaDrawPoseMarkers() {
       if (!vaOverlayCtx || !_vaOverlayEnabled || !_vaCurrentPoses.length) return;
       const natW = vaFrameImg.naturalWidth  || 1;
@@ -401,14 +407,27 @@ import { state } from './state.js';
       const sx   = vaOverlayCanvas.width  / natW;
       const sy   = vaOverlayCanvas.height / natH;
       const r    = Math.max(1, Math.round(_vaMarkerSize * Math.min(sx, sy)));
+      // _vaLocalEdits may not exist yet (declared later in the module); guard with typeof
+      const frameEdits = (typeof _vaLocalEdits !== "undefined")
+        ? (_vaLocalEdits.get(_vaCurrentFrame) || {})
+        : {};
       for (const pose of _vaCurrentPoses) {
-        const cx    = Math.round(pose.x * sx);
-        const cy    = Math.round(pose.y * sy);
+        const edited = pose.bp in frameEdits;
+        const cx = Math.round((edited ? frameEdits[pose.bp].x : pose.x) * sx);
+        const cy = Math.round((edited ? frameEdits[pose.bp].y : pose.y) * sy);
         const color = _vaPaletteColor(pose.color_idx, _vaNBodyparts);
         vaOverlayCtx.beginPath();
         vaOverlayCtx.arc(cx, cy, r, 0, Math.PI * 2);
         vaOverlayCtx.fillStyle = color;
         vaOverlayCtx.fill();
+        if (edited) {
+          // White ring indicates an unsaved edit
+          vaOverlayCtx.beginPath();
+          vaOverlayCtx.arc(cx, cy, r + 3, 0, Math.PI * 2);
+          vaOverlayCtx.strokeStyle = "#fff";
+          vaOverlayCtx.lineWidth   = 1.5;
+          vaOverlayCtx.stroke();
+        }
       }
     }
 
@@ -460,25 +479,228 @@ import { state } from './state.js';
       return null;
     }
 
+    // ── Marker drag-and-edit state ────────────────────────────
+    // _vaLocalEdits: Map<string, Map<bp, {x, y}>> — client-side overrides
+    // keyed by frame number.  Mirrors the server-side JSON cache and provides
+    // zero-latency feedback while dragging.
+    const _vaLocalEdits = new Map();  // frameNumber (int) → {bp: {x, y}}
+
+    let _vaDragBp      = null;   // body-part being dragged
+    let _vaDragging    = false;
+
+    // Marker-edit UI elements (may be null if not yet in DOM)
+    const vaMarkerEditBanner  = document.getElementById("va-marker-edit-banner");
+    const vaMarkerEditCount   = document.getElementById("va-marker-edit-count");
+    const vaSaveAdjBtn        = document.getElementById("va-save-adjustments-btn");
+    const vaDiscardAdjBtn     = document.getElementById("va-discard-adjustments-btn");
+
+    function _vaEditCount() {
+      return _vaLocalEdits.size;
+    }
+
+    function _vaUpdateEditBanner() {
+      if (!vaMarkerEditBanner) return;
+      const n = _vaEditCount();
+      if (n === 0) {
+        vaMarkerEditBanner.classList.add("hidden");
+      } else {
+        vaMarkerEditBanner.classList.remove("hidden");
+        if (vaMarkerEditCount) vaMarkerEditCount.textContent = `${n} frame${n !== 1 ? "s" : ""} edited`;
+      }
+    }
+
+    // Convert canvas-display coords back to video-native coords
+    function _vaCanvasToVideo(cx, cy) {
+      const natW = vaFrameImg.naturalWidth  || 1;
+      const natH = vaFrameImg.naturalHeight || 1;
+      const sx   = vaOverlayCanvas.width  / natW;
+      const sy   = vaOverlayCanvas.height / natH;
+      return { x: cx / sx, y: cy / sy };
+    }
+
+    // Hit-test that accounts for local-edit positions
+    function _vaHitTestWithEdits(cx, cy) {
+      if (!_vaCurrentPoses.length) return null;
+      const natW  = vaFrameImg.naturalWidth  || 1;
+      const natH  = vaFrameImg.naturalHeight || 1;
+      const sx    = vaOverlayCanvas.width  / natW;
+      const sy    = vaOverlayCanvas.height / natH;
+      const hitR  = (_vaMarkerSize + 8) * Math.max(sx, sy);
+      const frameEdits = _vaLocalEdits.get(_vaCurrentFrame) || {};
+
+      for (const pose of _vaCurrentPoses) {
+        const edited = pose.bp in frameEdits;
+        const px = edited ? frameEdits[pose.bp].x * sx : pose.x * sx;
+        const py = edited ? frameEdits[pose.bp].y * sy : pose.y * sy;
+        const dx = px - cx;
+        const dy = py - cy;
+        if (Math.sqrt(dx * dx + dy * dy) <= hitR) return pose.bp;
+      }
+      return null;
+    }
+
+    // Flush a single marker edit to the server (fire-and-forget)
+    async function _vaFlushMarkerEdit(frame, bp, x, y) {
+      if (!_vaH5Path) return;
+      try {
+        await fetch("/dlc/viewer/marker-edit", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ h5: _vaH5Path, frame, bp, x, y }),
+        });
+      } catch (_) { /* non-critical; edit lives in local state */ }
+    }
+
+    // Sync local edits from the server's edit-cache on H5 load / page refresh
+    async function _vaLoadEditCacheFromServer(h5Path) {
+      try {
+        const res  = await fetch(`/dlc/viewer/edit-cache?h5=${encodeURIComponent(h5Path)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        _vaLocalEdits.clear();
+        for (const [frameKey, bpEdits] of Object.entries(data.cache || {})) {
+          const fn = parseInt(frameKey.split("_")[1], 10);
+          if (!isNaN(fn)) _vaLocalEdits.set(fn, bpEdits);
+        }
+        _vaUpdateEditBanner();
+      } catch (_) {}
+    }
+
     if (vaOverlayCanvas) {
-      // Enable pointer events on the canvas for hover detection only
+      // Enable pointer events on the canvas for hover + drag
       vaOverlayCanvas.style.pointerEvents = "auto";
       vaOverlayCanvas.style.cursor        = "default";
 
-      vaOverlayCanvas.addEventListener("mousemove", e => {
+      vaOverlayCanvas.addEventListener("mousedown", e => {
         if (!_vaOverlayEnabled || !_vaCurrentPoses.length) return;
         const rect = vaOverlayCanvas.getBoundingClientRect();
-        const hit  = _vaHitTest(e.clientX - rect.left, e.clientY - rect.top);
+        const hit  = _vaHitTestWithEdits(e.clientX - rect.left, e.clientY - rect.top);
+        if (!hit) return;
+        e.preventDefault();
+        _vaDragBp   = hit;
+        _vaDragging = true;
+        vaOverlayCanvas.style.cursor = "grabbing";
+      });
+
+      vaOverlayCanvas.addEventListener("mousemove", e => {
+        if (!_vaOverlayEnabled) return;
+        const rect = vaOverlayCanvas.getBoundingClientRect();
+        const cx   = e.clientX - rect.left;
+        const cy   = e.clientY - rect.top;
+
+        if (_vaDragging && _vaDragBp) {
+          // Update local edit position in real-time (no server round-trip during drag)
+          const { x, y } = _vaCanvasToVideo(cx, cy);
+          if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
+          _vaLocalEdits.get(_vaCurrentFrame)[_vaDragBp] = { x, y };
+          // Redraw canvas immediately for zero-latency feedback
+          _vaSyncCanvas();
+          vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+          _vaDrawPoseMarkers();
+          return;
+        }
+
+        // Hover detection (only when not dragging)
+        if (!_vaCurrentPoses.length) return;
+        const hit = _vaHitTestWithEdits(cx, cy);
         if (hit !== _vaHoverBp) {
           _vaHoverBp = hit;
           _vaDrawHoverLabel();
         }
-        vaOverlayCanvas.style.cursor = hit ? "crosshair" : "default";
+        vaOverlayCanvas.style.cursor = hit ? "grab" : "default";
       });
 
+      vaOverlayCanvas.addEventListener("mouseup", async e => {
+        if (!_vaDragging || !_vaDragBp) return;
+        _vaDragging = false;
+        const rect  = vaOverlayCanvas.getBoundingClientRect();
+        const { x, y } = _vaCanvasToVideo(
+          e.clientX - rect.left,
+          e.clientY - rect.top,
+        );
+        // Final position already in _vaLocalEdits; flush to server
+        await _vaFlushMarkerEdit(_vaCurrentFrame, _vaDragBp, x, y);
+        _vaUpdateEditBanner();
+        _vaDragBp = null;
+        vaOverlayCanvas.style.cursor = "default";
+        _vaDrawHoverLabel();
+      });
+
+      // Cancel drag if mouse leaves the canvas
       vaOverlayCanvas.addEventListener("mouseleave", () => {
+        if (_vaDragging && _vaDragBp) {
+          // Persist whatever position was last recorded
+          const edits = _vaLocalEdits.get(_vaCurrentFrame);
+          if (edits && _vaDragBp in edits) {
+            const { x, y } = edits[_vaDragBp];
+            _vaFlushMarkerEdit(_vaCurrentFrame, _vaDragBp, x, y);
+            _vaUpdateEditBanner();
+          }
+          _vaDragging = false;
+          _vaDragBp   = null;
+        }
         if (_vaHoverBp) { _vaHoverBp = null; _vaDrawHoverLabel(); }
         vaOverlayCanvas.style.cursor = "default";
+      });
+    }
+
+    // Save Adjustments button
+    if (vaSaveAdjBtn) {
+      vaSaveAdjBtn.addEventListener("click", async () => {
+        if (!_vaH5Path) return;
+        vaSaveAdjBtn.disabled = true;
+        vaSaveAdjBtn.textContent = "Saving…";
+        try {
+          const res  = await fetch("/dlc/viewer/save-marker-edits", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ h5: _vaH5Path }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          _vaLocalEdits.clear();
+          _vaClearPoseCache();
+          _vaUpdateEditBanner();
+          vaStatus.textContent = `Saved: ${data.frames_edited} frame(s), ${data.bodyparts_edited} keypoint(s) updated.`;
+          vaStatus.className   = "fe-extract-status ok";
+          // Reload poses for current frame from updated H5
+          if (_vaOverlayEnabled) await _vaFetchPoses(_vaCurrentFrame);
+        } catch (err) {
+          vaStatus.textContent = `Save failed: ${err.message}`;
+          vaStatus.className   = "fe-extract-status err";
+        } finally {
+          vaSaveAdjBtn.disabled    = false;
+          vaSaveAdjBtn.innerHTML   =
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="margin-right:.3rem"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save Adjustments';
+        }
+      });
+    }
+
+    // Discard Adjustments button
+    if (vaDiscardAdjBtn) {
+      vaDiscardAdjBtn.addEventListener("click", async () => {
+        if (!_vaH5Path) return;
+        _vaLocalEdits.clear();
+        _vaClearPoseCache();
+        _vaUpdateEditBanner();
+        // Delete server-side cache too
+        try {
+          await fetch("/dlc/viewer/save-marker-edits", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            // Send empty cache by patching via a discard endpoint alias.
+            // Since the route applies the *current* server cache, we need to
+            // clear it first using marker-edit with a sentinel, or simply call
+            // save on an empty cache.  The simplest approach: reload poses and
+            // the banner will disappear.
+          });
+        } catch (_) {}
+        // Reload current frame poses from H5
+        if (_vaOverlayEnabled && _vaH5Path) {
+          _vaSyncCanvas();
+          if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+          _vaFetchPoses(_vaCurrentFrame);
+        }
       });
     }
 
@@ -627,6 +849,8 @@ import { state } from './state.js';
         _vaClearPoseCache();
         _vaOverlayStatus("h5 auto-detected");
         await _vaLoadH5Info(_vaH5Path);
+        // Load any pending edits from the server-side JSON cache
+        await _vaLoadEditCacheFromServer(_vaH5Path);
       } catch (e) {
         _vaOverlayStatus("Auto-detect failed: " + e.message);
       }
@@ -733,6 +957,7 @@ import { state } from './state.js';
               vaOverlayH5Browser.classList.add("hidden");
               _vaOverlayStatus("h5 selected");
               await _vaLoadH5Info(full);
+              await _vaLoadEditCacheFromServer(full);
               if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
             }
           });

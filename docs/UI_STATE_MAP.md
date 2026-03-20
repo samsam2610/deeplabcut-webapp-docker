@@ -24,11 +24,11 @@
 
 Keyboard: `Space` = play/pause; `ArrowLeft`/`ArrowRight` = ±1 frame; `Ctrl+Arrow` = ±skipN. Scoped to `view-analyzed-card` (`tabindex="-1"`).
 
-### Overlay Controls
+### Overlay Controls & Marker Drag-to-Edit
 
 | DOM ID | JS Module | Event | Backend Endpoint |
 |--------|-----------|-------|-----------------|
-| `va-overlay-canvas` | `viewer.js` | `mousemove` (hit-test markers) / `mouseleave` | — |
+| `va-overlay-canvas` | `viewer.js` | `mousemove` (hover hit-test) / `mousedown` (start drag) / `mouseup` (end drag, flush edit) / `mouseleave` (cancel drag) | `POST /dlc/viewer/marker-edit` (on mouseup) |
 | `va-overlay-toggle` | `viewer.js` | `change` → enable/disable overlay | `GET /dlc/viewer/h5-find` (auto-detect) |
 | `va-overlay-threshold` | `viewer.js` | `input` (update label) / `change` (reload frame) | `GET /dlc/viewer/frame-poses/<n>` |
 | `va-overlay-threshold-val` | `viewer.js` | (display only) | — |
@@ -43,6 +43,40 @@ Keyboard: `Space` = play/pause; `ArrowLeft`/`ArrowRight` = ±1 frame; `Ctrl+Arro
 | `va-overlay-bodyparts` | `viewer.js` | checkbox `change` (per bodypart) | `GET /dlc/viewer/frame-poses/<n>` |
 
 Pose prefetch: `GET /dlc/viewer/frame-poses-batch` (AbortController-managed window of 30 frames).
+
+**Marker drag-to-edit state machine:**
+
+```
+idle
+  │  mousedown + hit-test finds bodypart
+  ▼
+dragging  (_vaDragBp = bp, _vaDragging = true)
+  │  mousemove → update _vaLocalEdits[frame][bp] = {x, y}
+  │            → _vaDrawPoseMarkers() (zero-latency redraw, edited marker has white ring)
+  │
+  │  mouseup / mouseleave
+  ▼
+flush  → POST /dlc/viewer/marker-edit {h5, frame, bp, x, y}
+  │       save_edit_cache() on server (H5 unchanged)
+  ▼
+idle  → _vaUpdateEditBanner() (shows "N frames edited" + Save/Discard buttons)
+```
+
+**Edit-state JS variables (module scope, `viewer.js`):**
+
+| Variable | Type | Purpose |
+|----------|------|---------|
+| `_vaLocalEdits` | `Map<int, {bp: {x,y}}>` | Client-side overrides; populated from server cache on H5 load |
+| `_vaDragBp` | `string \| null` | Bodypart currently being dragged |
+| `_vaDragging` | `boolean` | True while mouse button is held on a marker |
+
+### Marker Adjustment Buttons
+
+| DOM ID | JS Module | Event | Backend Endpoint |
+|--------|-----------|-------|-----------------|
+| `va-marker-edit-banner` | `viewer.js` | (shown/hidden by `_vaUpdateEditBanner`) | — |
+| `va-save-adjustments-btn` | `viewer.js` | `click` → apply cache → clear → reload poses | `POST /dlc/viewer/save-marker-edits` |
+| `va-discard-adjustments-btn` | `viewer.js` | `click` → clear `_vaLocalEdits` + redraw | — |
 
 ### Curation Buttons
 

@@ -2,17 +2,30 @@
 DLC Viewer Blueprint — kinematic pose overlay on original videos.
 
 Routes:
-  GET /dlc/viewer/h5-find              ?dir=<abs-path>&stem=<video-stem>[&prefix=<scorer-prefix>]
-                                       OR ?h5=<abs-path>  (direct path validation)
-  GET /dlc/viewer/h5-info              ?h5=<abs-path>
-  GET /dlc/viewer/frame-poses/<frame>  ?h5=&threshold=&parts=
-  GET /dlc/viewer/frame-poses-batch    ?h5=&start=&count=&threshold=&parts=
-  GET /dlc/viewer/frame-annotated/<frame>
-                                         ?video=<abs-path>&h5=<abs-path>
-                                         [&threshold=<0.0-1.0>]
-                                         [&parts=<comma-separated body-part names>]
-                                         [&marker_size=<int px>]
-                                         [&scale=<float 0.1-4.0>]
+  GET  /dlc/viewer/h5-find              ?dir=<abs-path>&stem=<video-stem>[&prefix=<scorer-prefix>]
+                                        OR ?h5=<abs-path>  (direct path validation)
+  GET  /dlc/viewer/h5-info              ?h5=<abs-path>
+  GET  /dlc/viewer/frame-poses/<frame>  ?h5=&threshold=&parts=
+  GET  /dlc/viewer/frame-poses-batch    ?h5=&start=&count=&threshold=&parts=
+  GET  /dlc/viewer/frame-annotated/<frame>
+                                          ?video=<abs-path>&h5=<abs-path>
+                                          [&threshold=<0.0-1.0>]
+                                          [&parts=<comma-separated body-part names>]
+                                          [&marker_size=<int px>]
+                                          [&scale=<float 0.1-4.0>]
+  GET  /dlc/viewer/edit-cache           ?h5=<abs-path>
+  POST /dlc/viewer/marker-edit          body: {h5, frame, bp, x, y}
+  POST /dlc/viewer/save-marker-edits    body: {h5}
+
+JSON Delta Architecture:
+  Interactive marker edits are stored in a lightweight hidden JSON file
+  co-located with the H5:  .{h5_stem}_edits.json
+  The cache filename is dynamically derived from the H5 stem to ensure
+  namespace isolation when multiple video H5 files share the same directory.
+  Pose routes (frame-poses, frame-poses-batch) check this cache first and
+  override H5 values with cached edits before returning to the client.
+  The H5/CSV files are NOT modified until the user explicitly clicks
+  "Save Adjustments", which calls /dlc/viewer/save-marker-edits.
 
 Performance notes:
   - viewer_load_h5 loads the full DataFrame once and caches it (LRU, max 5 files).
@@ -29,6 +42,7 @@ from __future__ import annotations
 
 import collections as _collections
 import colorsys as _colorsys
+import json as _json
 import threading as _threading
 import uuid
 
@@ -52,6 +66,186 @@ _viewer_h5_lock = _threading.Lock()
 _VIEWER_VCAP_MAX = 10
 _viewer_vcap_cache: _collections.OrderedDict = _collections.OrderedDict()
 _viewer_vcap_lock = _threading.Lock()
+
+
+# ── JSON Delta Edit-Cache Utilities ───────────────────────────────────────────
+#
+# Naming convention:  .{h5_stem}_edits.json  (hidden, same directory as H5)
+# This ties the cache to the specific analysis file, preventing collisions
+# when multiple videos share the same folder.
+#
+# Cache format:
+#   {
+#     "frame_N": {"bodypart_name": {"x": float, "y": float}},
+#     ...
+#   }
+#
+# The H5 and CSV are never modified until the user clicks "Save Adjustments".
+
+def _edit_cache_path(h5_path: str) -> Path:
+    """Return the hidden JSON edit-cache path for the given H5 file."""
+    p = Path(h5_path)
+    return p.parent / f".{p.stem}_edits.json"
+
+
+def load_edit_cache(h5_path: str) -> dict:
+    """
+    Load the JSON edit cache for *h5_path*.
+    Returns an empty dict if no cache file exists.
+    Thread-safe: reads are atomic on POSIX for files < PIPE_BUF bytes.
+    """
+    cache_p = _edit_cache_path(h5_path)
+    if not cache_p.is_file():
+        return {}
+    try:
+        return _json.loads(cache_p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_edit_cache(h5_path: str, cache: dict) -> None:
+    """
+    Atomically overwrite the JSON edit cache for *h5_path*.
+    Uses a .tmp write + rename to prevent partial writes on crash.
+    """
+    cache_p = _edit_cache_path(h5_path)
+    tmp_p   = cache_p.parent / (cache_p.name + ".tmp")
+    tmp_p.write_text(_json.dumps(cache, indent=2), encoding="utf-8")
+    tmp_p.replace(cache_p)
+
+
+def clear_edit_cache(h5_path: str) -> None:
+    """Delete the JSON edit cache for *h5_path*. No-op if it does not exist."""
+    cache_p = _edit_cache_path(h5_path)
+    try:
+        cache_p.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _apply_marker_edits_to_h5(h5_path: str, cache: dict) -> dict:
+    """
+    Apply the JSON edit cache to the H5 DataFrame.
+
+    For each edited (frame, bodypart):
+      - Overwrite (scorer, bp, 'x') and (scorer, bp, 'y') in the DataFrame.
+      - Set (scorer, bp, 'likelihood') = 1.0 (manual corrections are certain).
+
+    After patching:
+      - Write H5 atomically: .tmp → rename (key="df_with_missing", mode="w").
+      - Regenerate companion .csv next to the H5.
+      - Invalidate the in-memory H5 LRU cache for this file so the next
+        frame-poses request re-reads from disk.
+
+    Returns: {"frames_edited": int, "bodyparts_edited": int}
+    """
+    import pandas as _pd
+
+    h5_p    = Path(h5_path)
+    df      = _pd.read_hdf(str(h5_p), key="df_with_missing")
+    scorer  = df.columns.get_level_values("scorer")[0]
+    n_frames = len(df)
+
+    frames_edited = 0
+    bps_edited    = 0
+
+    for frame_key, bp_edits in cache.items():
+        # frame_key format: "frame_N"
+        try:
+            frame_num = int(frame_key.split("_", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        if frame_num < 0 or frame_num >= n_frames:
+            continue
+
+        frame_had_edit = False
+        for bp, coords in bp_edits.items():
+            try:
+                x_col  = (scorer, bp, "x")
+                y_col  = (scorer, bp, "y")
+                lh_col = (scorer, bp, "likelihood")
+                df.iloc[frame_num, df.columns.get_loc(x_col)]  = float(coords["x"])
+                df.iloc[frame_num, df.columns.get_loc(y_col)]  = float(coords["y"])
+                df.iloc[frame_num, df.columns.get_loc(lh_col)] = 1.0
+                bps_edited    += 1
+                frame_had_edit = True
+            except (KeyError, ValueError):
+                continue  # unknown bodypart or column — skip silently
+        if frame_had_edit:
+            frames_edited += 1
+
+    # Atomic H5 write (constraint: write to .tmp, then rename)
+    tmp_p = Path(str(h5_p) + ".tmp")
+    df.to_hdf(str(tmp_p), key="df_with_missing", mode="w")
+    tmp_p.replace(h5_p)
+
+    # Regenerate companion CSV (same stem, .csv extension)
+    csv_p = h5_p.with_suffix(".csv")
+    df.to_csv(str(csv_p))
+
+    # Invalidate the in-memory H5 LRU cache so next request re-reads from disk
+    with _viewer_h5_lock:
+        _viewer_h5_cache.pop(str(h5_p), None)
+
+    return {"frames_edited": frames_edited, "bodyparts_edited": bps_edited}
+
+
+def _get_effective_poses(
+    h5_path: str,
+    frame_number: int,
+    *,
+    threshold: float = 0.6,
+    selected_parts: set[str] | None = None,
+) -> list[dict]:
+    """
+    Return pose dicts for *frame_number*, applying any JSON edit-cache overrides.
+
+    This is the single source-of-truth for pose data consumed by frame-poses routes
+    and tests.  Edit-cache hits always win over H5 data; likelihood is forced to
+    1.0 for edited keypoints regardless of the threshold.
+
+    Returns list of: {"bp": str, "x": float, "y": float, "lh": float, "color_idx": int}
+    """
+    h5_data   = viewer_load_h5(h5_path)
+    bodyparts = h5_data["bodyparts"]
+    poses_np  = h5_data["poses_np"]   # (n_frames, n_bps, 3)
+
+    selected = selected_parts if selected_parts else set(bodyparts)
+    cache    = load_edit_cache(h5_path)
+    frame_key = f"frame_{frame_number}"
+    frame_cache: dict = cache.get(frame_key, {})
+
+    poses: list[dict] = []
+    if frame_number >= len(poses_np):
+        return poses
+
+    frame_poses = poses_np[frame_number]   # (n_bps, 3): x, y, likelihood
+
+    for i, bp in enumerate(bodyparts):
+        if bp not in selected:
+            continue
+
+        if bp in frame_cache:
+            # Edit-cache override: always shown (likelihood forced to 1.0)
+            x  = float(frame_cache[bp]["x"])
+            y  = float(frame_cache[bp]["y"])
+            lh = 1.0
+        else:
+            x  = float(frame_poses[i, 0])
+            y  = float(frame_poses[i, 1])
+            lh = float(frame_poses[i, 2])
+            if lh < threshold:
+                continue
+
+        poses.append({
+            "bp":        bp,
+            "x":         round(x, 2),
+            "y":         round(y, 2),
+            "lh":        round(lh, 4),
+            "color_idx": i,
+        })
+
+    return poses
 
 
 # ── Colour palette ────────────────────────────────────────────────────────────
@@ -346,28 +540,13 @@ def viewer_frame_poses(frame_number: int):
 
     h5_data   = viewer_load_h5(h5_path)
     bodyparts = h5_data["bodyparts"]
-    poses_np  = h5_data["poses_np"]   # (n_frames, n_bps, 3)
 
-    selected = selected_parts if selected_parts else set(bodyparts)
-
-    poses = []
-    if frame_number < len(poses_np):
-        frame_poses = poses_np[frame_number]   # (n_bps, 3)
-        for i, bp in enumerate(bodyparts):
-            if bp not in selected:
-                continue
-            x  = float(frame_poses[i, 0])
-            y  = float(frame_poses[i, 1])
-            lh = float(frame_poses[i, 2])
-            if lh < threshold:
-                continue
-            poses.append({
-                "bp":        bp,
-                "x":         round(x, 2),
-                "y":         round(y, 2),
-                "lh":        round(lh, 4),
-                "color_idx": i,
-            })
+    poses = _get_effective_poses(
+        h5_path,
+        frame_number,
+        threshold=threshold,
+        selected_parts=selected_parts,
+    )
 
     return jsonify({"poses": poses, "bodyparts": bodyparts, "n_bodyparts": len(bodyparts)})
 
@@ -424,31 +603,16 @@ def viewer_frame_poses_batch():
 
     h5_data   = viewer_load_h5(h5_path)
     bodyparts = h5_data["bodyparts"]
-    poses_np  = h5_data["poses_np"]   # (n_frames, n_bps, 3)
-    n_frames  = len(poses_np)
+    n_frames  = len(h5_data["poses_np"])
     n_bps     = len(bodyparts)
     selected  = selected_parts if selected_parts else set(bodyparts)
 
     frames_out: dict = {}
     end = min(start + count, n_frames)
     for fn in range(start, end):
-        frame_poses = poses_np[fn]   # (n_bps, 3)
-        poses = []
-        for i, bp in enumerate(bodyparts):
-            if bp not in selected:
-                continue
-            x  = float(frame_poses[i, 0])
-            y  = float(frame_poses[i, 1])
-            lh = float(frame_poses[i, 2])
-            if lh < threshold:
-                continue
-            poses.append({
-                "bp":        bp,
-                "x":         round(x, 2),
-                "y":         round(y, 2),
-                "lh":        round(lh, 4),
-                "color_idx": i,
-            })
+        poses = _get_effective_poses(
+            h5_path, fn, threshold=threshold, selected_parts=selected,
+        )
         frames_out[str(fn)] = {"poses": poses, "n_bodyparts": n_bps}
 
     return jsonify({"frames": frames_out, "bodyparts": bodyparts})
@@ -525,3 +689,127 @@ def viewer_frame_annotated(frame_number: int):
     resp.headers["ETag"]          = etag
     resp.headers["Cache-Control"] = "private, max-age=300"
     return resp
+
+
+# ── JSON Delta: Edit-cache routes ─────────────────────────────────────────────
+
+@bp.route("/dlc/viewer/edit-cache")
+def viewer_edit_cache_get():
+    """
+    Return the current JSON edit cache for an H5 file.
+
+    Query params:
+      h5 : absolute path to the .h5 analysis file
+
+    Response: {"cache": {frame_key: {bp: {x, y}}, ...}, "h5": "..."}
+    """
+    h5_path = request.args.get("h5", "").strip()
+    if not h5_path:
+        return jsonify({"error": "h5 param required."}), 400
+
+    hp = Path(h5_path)
+    if not hp.is_file():
+        return jsonify({"error": "h5 file not found."}), 404
+    if not _viewer_sec_check(hp.parent):
+        return jsonify({"error": "Access denied."}), 403
+
+    cache = load_edit_cache(h5_path)
+    return jsonify({"cache": cache, "h5": h5_path, "pending_frames": len(cache)})
+
+
+@bp.route("/dlc/viewer/marker-edit", methods=["POST"])
+def viewer_marker_edit():
+    """
+    Persist a single marker adjustment to the JSON edit cache.
+    Does NOT modify the H5 or CSV.
+
+    Body (JSON): {
+      "h5":    absolute path to the .h5 file,
+      "frame": integer frame index,
+      "bp":    body-part name,
+      "x":     new x coordinate (video-native pixels),
+      "y":     new y coordinate (video-native pixels)
+    }
+
+    Response: {"ok": true, "pending_frames": N}
+    """
+    data = request.get_json(silent=True) or {}
+    h5_path = str(data.get("h5", "")).strip()
+    if not h5_path:
+        return jsonify({"error": "h5 field required."}), 400
+
+    hp = Path(h5_path)
+    if not hp.is_file():
+        return jsonify({"error": "h5 file not found."}), 404
+    if not _viewer_sec_check(hp.parent):
+        return jsonify({"error": "Access denied."}), 403
+
+    try:
+        frame = int(data["frame"])
+        bp    = str(data["bp"]).strip()
+        x     = float(data["x"])
+        y     = float(data["y"])
+    except (KeyError, ValueError, TypeError) as exc:
+        return jsonify({"error": f"Invalid fields: {exc}"}), 400
+
+    if not bp:
+        return jsonify({"error": "bp must be a non-empty string."}), 400
+
+    # Load existing cache, update, save atomically
+    cache = load_edit_cache(h5_path)
+    frame_key = f"frame_{frame}"
+    if frame_key not in cache:
+        cache[frame_key] = {}
+    cache[frame_key][bp] = {"x": round(x, 4), "y": round(y, 4)}
+    save_edit_cache(h5_path, cache)
+
+    return jsonify({"ok": True, "pending_frames": len(cache)})
+
+
+@bp.route("/dlc/viewer/save-marker-edits", methods=["POST"])
+def viewer_save_marker_edits():
+    """
+    Apply the JSON edit cache to the H5 and regenerate the companion CSV.
+    Deletes the JSON cache file on success.
+
+    Body (JSON): {"h5": absolute path to the .h5 file}
+
+    Response: {
+      "ok": true,
+      "frames_edited":    N,
+      "bodyparts_edited": M,
+      "csv_regenerated":  true,
+      "cache_cleared":    true
+    }
+    """
+    data = request.get_json(silent=True) or {}
+    h5_path = str(data.get("h5", "")).strip()
+    if not h5_path:
+        return jsonify({"error": "h5 field required."}), 400
+
+    hp = Path(h5_path)
+    if not hp.is_file():
+        return jsonify({"error": "h5 file not found."}), 404
+    if not _viewer_sec_check(hp.parent):
+        return jsonify({"error": "Access denied."}), 403
+
+    cache = load_edit_cache(h5_path)
+    if not cache:
+        return jsonify({"ok": True, "frames_edited": 0, "bodyparts_edited": 0,
+                        "csv_regenerated": False, "cache_cleared": False,
+                        "message": "No pending edits."})
+
+    try:
+        result = _apply_marker_edits_to_h5(h5_path, cache)
+    except Exception as exc:
+        return jsonify({"error": f"Failed to apply edits: {exc}"}), 500
+
+    clear_edit_cache(h5_path)
+
+    return jsonify({
+        "ok":               True,
+        "frames_edited":    result["frames_edited"],
+        "bodyparts_edited": result["bodyparts_edited"],
+        "csv_regenerated":  True,
+        "cache_cleared":    True,
+    })

@@ -230,7 +230,66 @@ If `.tmp` file is present on startup → write was interrupted, H5 is safe (old 
 
 ---
 
-## 10. config.yaml Sanitization
+## 10. JSON Delta Edit-Cache Lifecycle
+
+Interactive marker adjustments are stored in a lightweight hidden JSON file **co-located with the analysis H5**, never modifying the H5 until the user explicitly saves.
+
+### Cache file naming
+
+```
+{h5_dir}/.{h5_stem}_edits.json
+```
+
+**Critical:** The cache filename is dynamically derived from the **H5 stem**, not the directory. This prevents collisions when multiple video H5 files share the same folder (e.g., `MAP1_…DLC.h5` and `MAP2_…DLC.h5` each get their own cache).
+
+| H5 path | Edit cache path |
+|---------|----------------|
+| `/data/MAP1_20250713_DLC_resnet50.h5` | `/data/.MAP1_20250713_DLC_resnet50_edits.json` |
+| `/data/MAP2_20250713_DLC_resnet50.h5` | `/data/.MAP2_20250713_DLC_resnet50_edits.json` |
+
+### Cache format
+
+```json
+{
+  "frame_0":  {"Snout": {"x": 123.4, "y": 456.7}},
+  "frame_42": {"forepaw_L": {"x": 300.5, "y": 410.2}}
+}
+```
+
+### Lifecycle
+
+```
+User drags marker on canvas
+        │
+        ▼  POST /dlc/viewer/marker-edit  {h5, frame, bp, x, y}
+           save_edit_cache(h5_path, cache)  ← atomic .tmp → rename
+           H5 and CSV are NOT modified
+        │
+        ▼  frame-poses/<n> and frame-poses-batch
+           _get_effective_poses()  ← edit-cache overrides win
+           Edited keypoints returned with likelihood=1.0 to client
+        │
+        ▼  "Save Adjustments" button clicked
+           POST /dlc/viewer/save-marker-edits  {h5}
+           _apply_marker_edits_to_h5(h5, cache)
+              ├─ Load H5 with pd.read_hdf(key="df_with_missing")
+              ├─ Patch x, y, likelihood=1.0 for each edited keypoint
+              ├─ Write H5 atomically (.tmp → rename)
+              ├─ Regenerate companion CSV with df.to_csv()
+              └─ Evict H5 from LRU cache (_viewer_h5_cache)
+           clear_edit_cache(h5)  ← delete hidden JSON file
+```
+
+### Constraints
+
+- The H5 LRU cache (`_viewer_h5_cache`) is **evicted** after every save so the next request re-reads from disk.
+- Edits for frame indices ≥ `len(df)` are silently dropped (out-of-range guard).
+- Unknown bodypart names are silently skipped.
+- The `.tmp` cache file (`.{stem}_edits.json.tmp`) is cleaned up on successful atomic write.
+
+---
+
+## 11. config.yaml Sanitization
 
 DLC's `config.yaml` stores video paths as YAML mapping keys. When paths contain spaces, `ruamel.yaml` writes broken multi-line plain scalars on round-trip. `dlc/tasks.py:_sanitize_dlc_config_yaml()` normalizes two patterns before every DLC API call:
 

@@ -126,9 +126,25 @@
           </div>
         </div>
 
+        <!-- Marker Adjustment Banner (shown when unsaved edits exist) -->
+        <div id="va-marker-edit-banner" class="hidden"
+          style="display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;margin-bottom:.45rem;padding:.35rem .6rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.35);border-radius:6px;font-size:.77rem">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span id="va-marker-edit-count" style="color:var(--accent);font-weight:500">0 frames edited</span>
+          <span style="color:var(--text-dim);flex:1;min-width:0">— unsaved marker adjustments pending</span>
+          <button class="btn-sm" id="va-save-adjustments-btn"
+            style="background:var(--accent);color:#fff;font-weight:500;padding:.28rem .7rem;flex-shrink:0"
+            title="Write marker adjustments back to the .h5 and .csv files">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="margin-right:.3rem"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save Adjustments
+          </button>
+          <button class="btn-sm" id="va-discard-adjustments-btn"
+            style="opacity:.75;padding:.28rem .6rem;flex-shrink:0"
+            title="Discard all pending marker adjustments">Discard</button>
+        </div>
+
         <div id="va-video-wrap" style="position:relative;background:#000;border-radius:8px;border:1px solid var(--border);margin-bottom:.75rem">
           <img id="va-frame-img" alt="" draggable="false" style="width:100%;display:block;height:auto" />
-          <!-- Transparent canvas for hover hit-testing and label display -->
+          <!-- Canvas for hover hit-testing, label display, and drag-to-edit markers -->
           <canvas id="va-overlay-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></canvas>
           <div id="va-frame-spinner" class="fe-frame-spinner hidden"></div>
         </div>
