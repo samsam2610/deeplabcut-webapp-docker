@@ -58,7 +58,9 @@ import { state } from './state.js';
     let _vaOverlayEnabled   = false;
     let _vaH5Path           = null;       // absolute path to loaded .h5 file
     let _vaAllBodyParts     = [];         // all body parts from h5-info
-    let _vaSelectedParts    = new Set();  // empty = show all
+    let _vaSelectedParts    = new Set();  // empty = show all (server-side filter)
+    let _vaSelectedBp       = null;       // currently active/selected bodypart
+    const _vaHiddenParts    = new Set();  // client-side per-bodypart visibility toggle
     let _vaThreshold        = 0.60;
     let _vaMarkerSize       = 6;
     // absolute path to the currently loaded original video (for annotated frames + companion CSV)
@@ -116,6 +118,8 @@ import { state } from './state.js';
       _vaCurrentVideoPath = null;
       _vaCurrentPoses = [];
       _vaHoverBp      = null;
+      _vaSelectedBp   = null;
+      _vaHiddenParts.clear();
       _vaDragBp       = null;
       _vaDragging     = false;
       if (typeof _vaLocalEdits !== "undefined") _vaLocalEdits.clear();
@@ -398,8 +402,11 @@ import { state } from './state.js';
     }
 
     // Draw all pose marker circles onto the overlay canvas.
+    // Skips bodyparts in _vaHiddenParts (client-side visibility).
     // If _vaLocalEdits contains an override for the current frame+bodypart,
-    // the edited position is used and the marker is drawn with an extra ring.
+    // the edited position is used and the marker is drawn with an extra white ring.
+    // The currently selected bodypart (_vaSelectedBp) gets a gold ring.
+    // An edit with x=null/y=null means the marker was deleted — not drawn.
     function _vaDrawPoseMarkers() {
       if (!vaOverlayCtx || !_vaOverlayEnabled || !_vaCurrentPoses.length) return;
       const natW = vaFrameImg.naturalWidth  || 1;
@@ -412,20 +419,33 @@ import { state } from './state.js';
         ? (_vaLocalEdits.get(_vaCurrentFrame) || {})
         : {};
       for (const pose of _vaCurrentPoses) {
-        const edited = pose.bp in frameEdits;
-        const cx = Math.round((edited ? frameEdits[pose.bp].x : pose.x) * sx);
-        const cy = Math.round((edited ? frameEdits[pose.bp].y : pose.y) * sy);
+        // Skip bodyparts hidden by per-bodypart visibility toggle
+        if (_vaHiddenParts.has(pose.bp)) continue;
+        const edited   = pose.bp in frameEdits;
+        const editData = edited ? frameEdits[pose.bp] : null;
+        // NaN/null edit means the marker was deleted — don't render it
+        if (edited && (editData.x == null || editData.y == null)) continue;
+        const cx = Math.round((edited ? editData.x : pose.x) * sx);
+        const cy = Math.round((edited ? editData.y : pose.y) * sy);
         const color = _vaPaletteColor(pose.color_idx, _vaNBodyparts);
         vaOverlayCtx.beginPath();
         vaOverlayCtx.arc(cx, cy, r, 0, Math.PI * 2);
         vaOverlayCtx.fillStyle = color;
         vaOverlayCtx.fill();
         if (edited) {
-          // White ring indicates an unsaved edit
+          // White ring indicates an unsaved positional edit
           vaOverlayCtx.beginPath();
           vaOverlayCtx.arc(cx, cy, r + 3, 0, Math.PI * 2);
           vaOverlayCtx.strokeStyle = "#fff";
           vaOverlayCtx.lineWidth   = 1.5;
+          vaOverlayCtx.stroke();
+        }
+        if (pose.bp === _vaSelectedBp) {
+          // Gold ring indicates the currently selected bodypart
+          vaOverlayCtx.beginPath();
+          vaOverlayCtx.arc(cx, cy, r + (edited ? 6 : 3), 0, Math.PI * 2);
+          vaOverlayCtx.strokeStyle = "#facc15";
+          vaOverlayCtx.lineWidth   = 2;
           vaOverlayCtx.stroke();
         }
       }
@@ -551,6 +571,18 @@ import { state } from './state.js';
       } catch (_) { /* non-critical; edit lives in local state */ }
     }
 
+    // Delete a marker (set to NaN) in the server cache (fire-and-forget)
+    async function _vaFlushMarkerDelete(frame, bp) {
+      if (!_vaH5Path) return;
+      try {
+        await fetch("/dlc/viewer/marker-edit", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ h5: _vaH5Path, frame, bp, x: null, y: null }),
+        });
+      } catch (_) {}
+    }
+
     // Sync local edits from the server's edit-cache on H5 load / page refresh
     async function _vaLoadEditCacheFromServer(h5Path) {
       try {
@@ -572,14 +604,31 @@ import { state } from './state.js';
       vaOverlayCanvas.style.cursor        = "default";
 
       vaOverlayCanvas.addEventListener("mousedown", e => {
-        if (!_vaOverlayEnabled || !_vaCurrentPoses.length) return;
+        if (!_vaOverlayEnabled || e.button !== 0) return;
         const rect = vaOverlayCanvas.getBoundingClientRect();
-        const hit  = _vaHitTestWithEdits(e.clientX - rect.left, e.clientY - rect.top);
-        if (!hit) return;
+        const cx   = e.clientX - rect.left;
+        const cy   = e.clientY - rect.top;
+        const hit  = _vaHitTestWithEdits(cx, cy);
         e.preventDefault();
-        _vaDragBp   = hit;
-        _vaDragging = true;
-        vaOverlayCanvas.style.cursor = "grabbing";
+        if (hit) {
+          // Clicked near an existing marker → select it and begin drag
+          _vaSelectedBp = hit;
+          _vaDragBp     = hit;
+          _vaDragging   = true;
+          vaOverlayCanvas.style.cursor = "grabbing";
+          _vaRebuildPartsChecklist();
+          _vaDrawPoseMarkers();
+        } else if (_vaSelectedBp) {
+          // Clicked empty space → place the currently selected bodypart here
+          const { x, y } = _vaCanvasToVideo(cx, cy);
+          if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
+          _vaLocalEdits.get(_vaCurrentFrame)[_vaSelectedBp] = { x, y };
+          _vaSyncCanvas();
+          vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+          _vaDrawPoseMarkers();
+          _vaFlushMarkerEdit(_vaCurrentFrame, _vaSelectedBp, x, y);
+          _vaUpdateEditBanner();
+        }
       });
 
       vaOverlayCanvas.addEventListener("mousemove", e => {
@@ -642,6 +691,19 @@ import { state } from './state.js';
         if (_vaHoverBp) { _vaHoverBp = null; _vaDrawHoverLabel(); }
         vaOverlayCanvas.style.cursor = "default";
       });
+
+      // Right-click → delete (NaN) the currently selected marker
+      vaOverlayCanvas.addEventListener("contextmenu", e => {
+        e.preventDefault();
+        if (!_vaOverlayEnabled || !_vaSelectedBp || !_vaH5Path) return;
+        if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
+        _vaLocalEdits.get(_vaCurrentFrame)[_vaSelectedBp] = { x: null, y: null };
+        _vaSyncCanvas();
+        vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+        _vaDrawPoseMarkers();
+        _vaFlushMarkerDelete(_vaCurrentFrame, _vaSelectedBp);
+        _vaUpdateEditBanner();
+      });
     }
 
     // Save Adjustments button
@@ -701,6 +763,24 @@ import { state } from './state.js';
           if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
           _vaFetchPoses(_vaCurrentFrame);
         }
+      });
+    }
+
+    // Clear Frame button — double-click sets ALL markers on current frame to NaN
+    const vaClearFrameBtn = document.getElementById("va-clear-frame-btn");
+    if (vaClearFrameBtn) {
+      vaClearFrameBtn.addEventListener("dblclick", async () => {
+        if (!_vaOverlayEnabled || !_vaH5Path || !_vaCurrentPoses.length) return;
+        const frameMap = {};
+        for (const pose of _vaCurrentPoses) {
+          frameMap[pose.bp] = { x: null, y: null };
+          _vaFlushMarkerDelete(_vaCurrentFrame, pose.bp);
+        }
+        _vaLocalEdits.set(_vaCurrentFrame, frameMap);
+        _vaSyncCanvas();
+        vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+        _vaDrawPoseMarkers();
+        _vaUpdateEditBanner();
       });
     }
 
@@ -811,27 +891,59 @@ import { state } from './state.js';
         vaOverlayPartsBox.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">No body parts loaded.</span>';
         return;
       }
-      _vaAllBodyParts.forEach(bp => {
-        const lbl  = document.createElement("label");
-        lbl.style.cssText = "display:flex;align-items:center;gap:.3rem;cursor:pointer;white-space:nowrap";
-        const chk  = document.createElement("input");
-        chk.type   = "checkbox";
-        chk.value  = bp;
+      _vaAllBodyParts.forEach((bp, idx) => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;align-items:center;gap:.3rem;white-space:nowrap";
+
+        // Checkbox for server-side fetch filter (All / None buttons interact with this)
+        const chk = document.createElement("input");
+        chk.type  = "checkbox";
+        chk.value = bp;
         chk.style.accentColor = "var(--accent)";
-        // Empty _vaSelectedParts means ALL selected
-        chk.checked = _vaSelectedParts.size === 0 || _vaSelectedParts.has(bp);
+        chk.checked = _vaSelectedParts.size === 0 || !_vaSelectedParts.has(bp);
         chk.addEventListener("change", () => {
-          if (chk.checked) _vaSelectedParts.delete(bp);  // empty = all
-          else             _vaSelectedParts.add(bp);      // explicit exclude
-          // If all checked manually, reset to empty (= all)
-          if ([...vaOverlayPartsBox.querySelectorAll("input")].every(c => c.checked))
+          if (chk.checked) _vaSelectedParts.delete(bp);
+          else             _vaSelectedParts.add(bp);
+          if ([...vaOverlayPartsBox.querySelectorAll("input[type=checkbox]")].every(c => c.checked))
             _vaSelectedParts.clear();
           _vaClearPoseCache();
           if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
         });
-        lbl.appendChild(chk);
-        lbl.appendChild(document.createTextNode(bp));
-        vaOverlayPartsBox.appendChild(lbl);
+
+        // Chip span: click = select bodypart, dblclick = toggle visibility
+        const chip = document.createElement("span");
+        chip.textContent = bp;
+        chip.style.cssText = [
+          "cursor:pointer",
+          "user-select:none",
+          "padding:.05rem .25rem",
+          "border-radius:4px",
+          `opacity:${_vaHiddenParts.has(bp) ? "0.35" : "1"}`,
+          `text-decoration:${_vaHiddenParts.has(bp) ? "line-through" : "none"}`,
+          bp === _vaSelectedBp
+            ? "background:rgba(250,204,21,.18);color:#facc15;font-weight:600;outline:1px solid #facc1580"
+            : "",
+        ].filter(Boolean).join(";");
+        chip.title = "Click: select  •  Dbl-click: toggle visibility  •  Space: toggle visibility of selected";
+
+        chip.addEventListener("click", e => {
+          if (e.detail >= 2) return;  // dblclick fires click twice; ignore 2nd click
+          _vaSelectedBp = (_vaSelectedBp === bp) ? null : bp;
+          _vaRebuildPartsChecklist();
+          _vaDrawHoverLabel();
+          vaCard.focus();  // keep card focused so hotkeys work
+        });
+        chip.addEventListener("dblclick", e => {
+          e.preventDefault();
+          if (_vaHiddenParts.has(bp)) _vaHiddenParts.delete(bp);
+          else _vaHiddenParts.add(bp);
+          _vaRebuildPartsChecklist();
+          _vaDrawHoverLabel();
+        });
+
+        row.appendChild(chk);
+        row.appendChild(chip);
+        vaOverlayPartsBox.appendChild(row);
       });
     }
 
@@ -1095,11 +1207,23 @@ import { state } from './state.js';
       if (e.target.tagName === "INPUT" && e.target !== vaSkipN) return;
       if (e.target.tagName === "TEXTAREA") return;
 
+      const overlayActive = _vaOverlayEnabled && _vaH5Path && _vaCurrentPoses.length > 0;
+
+      // ── Spacebar: visibility toggle when overlay+bp selected, else play/pause ──
       if (e.key === " ") {
         e.preventDefault();
-        vaBtnPlay.click();
+        if (overlayActive && _vaSelectedBp) {
+          if (_vaHiddenParts.has(_vaSelectedBp)) _vaHiddenParts.delete(_vaSelectedBp);
+          else _vaHiddenParts.add(_vaSelectedBp);
+          _vaDrawHoverLabel();
+          _vaRebuildPartsChecklist();
+        } else {
+          vaBtnPlay.click();
+        }
         return;
       }
+
+      // ── Frame navigation ──────────────────────────────────────────────────────
       if (e.key === "ArrowLeft") {
         e.preventDefault();
         e.ctrlKey ? _vaLoadFrame(_vaCurrentFrame - _vaSkipN())
@@ -1111,6 +1235,61 @@ import { state } from './state.js';
         e.ctrlKey ? _vaLoadFrame(_vaCurrentFrame + _vaSkipN())
                   : _vaLoadFrame(_vaCurrentFrame + 1);
         return;
+      }
+
+      // ── Tab: cycle bodyparts (only when overlay is active) ────────────────────
+      if (e.key === "Tab" && overlayActive) {
+        e.preventDefault();
+        const parts = _vaCurrentPoses.map(p => p.bp);
+        if (!parts.length) return;
+        const idx = parts.indexOf(_vaSelectedBp);
+        _vaSelectedBp = e.shiftKey
+          ? parts[(idx - 1 + parts.length) % parts.length]
+          : parts[(idx + 1) % parts.length];
+        _vaDrawHoverLabel();
+        _vaRebuildPartsChecklist();
+        return;
+      }
+
+      // ── Backspace/Delete: delete (NaN) selected marker ────────────────────────
+      if ((e.key === "Backspace" || e.key === "Delete") && overlayActive && _vaSelectedBp) {
+        e.preventDefault();
+        if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
+        _vaLocalEdits.get(_vaCurrentFrame)[_vaSelectedBp] = { x: null, y: null };
+        _vaSyncCanvas();
+        vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+        _vaDrawPoseMarkers();
+        _vaFlushMarkerDelete(_vaCurrentFrame, _vaSelectedBp);
+        _vaUpdateEditBanner();
+        return;
+      }
+
+      // ── WASD nudge: ±1px (±10px with Shift) when overlay+bp selected ─────────
+      if (overlayActive && _vaSelectedBp) {
+        const step = e.shiftKey ? 10 : 1;
+        let dx = 0, dy = 0;
+        if      (e.key === "a" || e.key === "A") dx = -step;
+        else if (e.key === "d" || e.key === "D") dx =  step;
+        else if (e.key === "w" || e.key === "W") dy = -step;
+        else if (e.key === "s" || e.key === "S") dy =  step;
+        if (dx !== 0 || dy !== 0) {
+          e.preventDefault();
+          const frameEdits = _vaLocalEdits.get(_vaCurrentFrame) || {};
+          const pose = _vaCurrentPoses.find(p => p.bp === _vaSelectedBp);
+          const base = frameEdits[_vaSelectedBp] || (pose ? { x: pose.x, y: pose.y } : null);
+          if (base && base.x != null && base.y != null) {
+            const nx = base.x + dx;
+            const ny = base.y + dy;
+            if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
+            _vaLocalEdits.get(_vaCurrentFrame)[_vaSelectedBp] = { x: nx, y: ny };
+            _vaSyncCanvas();
+            vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+            _vaDrawPoseMarkers();
+            _vaFlushMarkerEdit(_vaCurrentFrame, _vaSelectedBp, nx, ny);
+            _vaUpdateEditBanner();
+          }
+          return;
+        }
       }
     });
     // Make the card focusable so keydown fires when clicked inside it

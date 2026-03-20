@@ -22,13 +22,13 @@
 | `va-frame-counter` | `viewer.js` | (display only) | — |
 | `va-time-display` | `viewer.js` | (display only) | — |
 
-Keyboard: `Space` = play/pause; `ArrowLeft`/`ArrowRight` = ±1 frame; `Ctrl+Arrow` = ±skipN. Scoped to `view-analyzed-card` (`tabindex="-1"`).
+Keyboard: `Space` = play/pause (or toggle visibility of selected bodypart when overlay active + bp selected); `ArrowLeft`/`ArrowRight` = ±1 frame; `Ctrl+Arrow` = ±skipN; `Tab`/`Shift+Tab` = cycle bodyparts (overlay active); `W`/`A`/`S`/`D` = nudge selected marker ±1 px; `Shift+WASD` = ±10 px; `Backspace`/`Delete` = delete (NaN) selected marker. Scoped to `view-analyzed-card` (`tabindex="-1"`).
 
 ### Overlay Controls & Marker Drag-to-Edit
 
 | DOM ID | JS Module | Event | Backend Endpoint |
 |--------|-----------|-------|-----------------|
-| `va-overlay-canvas` | `viewer.js` | `mousemove` (hover hit-test) / `mousedown` (start drag) / `mouseup` (end drag, flush edit) / `mouseleave` (cancel drag) | `POST /dlc/viewer/marker-edit` (on mouseup) |
+| `va-overlay-canvas` | `viewer.js` | `mousedown` (select marker or place selected bp) / `mousemove` (drag + hover) / `mouseup` (flush edit) / `mouseleave` (cancel drag) / `contextmenu` (delete selected marker) | `POST /dlc/viewer/marker-edit` (on mouseup/place/delete) |
 | `va-overlay-toggle` | `viewer.js` | `change` → enable/disable overlay | `GET /dlc/viewer/h5-find` (auto-detect) |
 | `va-overlay-threshold` | `viewer.js` | `input` (update label) / `change` (reload frame) | `GET /dlc/viewer/frame-poses/<n>` |
 | `va-overlay-threshold-val` | `viewer.js` | (display only) | — |
@@ -44,29 +44,47 @@ Keyboard: `Space` = play/pause; `ArrowLeft`/`ArrowRight` = ±1 frame; `Ctrl+Arro
 
 Pose prefetch: `GET /dlc/viewer/frame-poses-batch` (AbortController-managed window of 30 frames).
 
-**Marker drag-to-edit state machine:**
+**Mouse interaction model:**
+
+```
+Left-click near existing marker (within hitR px)
+  → _vaSelectedBp = bp  (select; gold ring on canvas, highlighted chip)
+  → begin drag (_vaDragBp = bp, _vaDragging = true)
+
+Left-click on empty canvas (no hit, _vaSelectedBp set)
+  → place _vaSelectedBp at cursor position
+  → POST /dlc/viewer/marker-edit {x, y}  (fire-and-forget)
+
+Right-click (contextmenu)
+  → POST /dlc/viewer/marker-edit {x: null, y: null}  (delete/NaN)
+```
+
+**Drag state machine:**
 
 ```
 idle
-  │  mousedown + hit-test finds bodypart
+  │  mousedown + hit-test finds bodypart → select + drag
   ▼
 dragging  (_vaDragBp = bp, _vaDragging = true)
   │  mousemove → update _vaLocalEdits[frame][bp] = {x, y}
-  │            → _vaDrawPoseMarkers() (zero-latency redraw, edited marker has white ring)
+  │            → _vaDrawPoseMarkers() (zero-latency redraw)
+  │               edited marker: white ring; _vaSelectedBp: gold ring
   │
   │  mouseup / mouseleave
   ▼
 flush  → POST /dlc/viewer/marker-edit {h5, frame, bp, x, y}
   │       save_edit_cache() on server (H5 unchanged)
   ▼
-idle  → _vaUpdateEditBanner() (shows "N frames edited" + Save/Discard buttons)
+idle  → _vaUpdateEditBanner() (shows "N frames edited" + Save/Discard/Clear Frame)
 ```
 
 **Edit-state JS variables (module scope, `viewer.js`):**
 
 | Variable | Type | Purpose |
 |----------|------|---------|
-| `_vaLocalEdits` | `Map<int, {bp: {x,y}}>` | Client-side overrides; populated from server cache on H5 load |
+| `_vaLocalEdits` | `Map<int, {bp: {x,y\|null}}>` | Client-side overrides; `{x:null,y:null}` = deleted marker |
+| `_vaSelectedBp` | `string \| null` | Currently active bodypart (gold ring + highlighted chip) |
+| `_vaHiddenParts` | `Set<string>` | Per-bodypart client-side visibility toggle (Space / chip dblclick) |
 | `_vaDragBp` | `string \| null` | Bodypart currently being dragged |
 | `_vaDragging` | `boolean` | True while mouse button is held on a marker |
 
@@ -77,6 +95,7 @@ idle  → _vaUpdateEditBanner() (shows "N frames edited" + Save/Discard buttons)
 | `va-marker-edit-banner` | `viewer.js` | (shown/hidden by `_vaUpdateEditBanner`) | — |
 | `va-save-adjustments-btn` | `viewer.js` | `click` → apply cache → clear → reload poses | `POST /dlc/viewer/save-marker-edits` |
 | `va-discard-adjustments-btn` | `viewer.js` | `click` → clear `_vaLocalEdits` + redraw | — |
+| `va-clear-frame-btn` | `viewer.js` | `dblclick` → NaN all markers on current frame | `POST /dlc/viewer/marker-edit` (loop, x=null,y=null) |
 
 ### Curation Buttons
 

@@ -161,12 +161,22 @@ def _apply_marker_edits_to_h5(h5_path: str, cache: dict) -> dict:
         frame_had_edit = False
         for bp, coords in bp_edits.items():
             try:
+                import math as _math
                 x_col  = (scorer, bp, "x")
                 y_col  = (scorer, bp, "y")
                 lh_col = (scorer, bp, "likelihood")
-                df.iloc[frame_num, df.columns.get_loc(x_col)]  = float(coords["x"])
-                df.iloc[frame_num, df.columns.get_loc(y_col)]  = float(coords["y"])
-                df.iloc[frame_num, df.columns.get_loc(lh_col)] = 1.0
+                raw_x  = coords.get("x")
+                raw_y  = coords.get("y")
+                # None / null means the marker was deleted → write NaN
+                if raw_x is None or raw_y is None:
+                    nan = float("nan")
+                    df.iloc[frame_num, df.columns.get_loc(x_col)]  = nan
+                    df.iloc[frame_num, df.columns.get_loc(y_col)]  = nan
+                    df.iloc[frame_num, df.columns.get_loc(lh_col)] = nan
+                else:
+                    df.iloc[frame_num, df.columns.get_loc(x_col)]  = float(raw_x)
+                    df.iloc[frame_num, df.columns.get_loc(y_col)]  = float(raw_y)
+                    df.iloc[frame_num, df.columns.get_loc(lh_col)] = 1.0
                 bps_edited    += 1
                 frame_had_edit = True
             except (KeyError, ValueError):
@@ -226,9 +236,13 @@ def _get_effective_poses(
             continue
 
         if bp in frame_cache:
-            # Edit-cache override: always shown (likelihood forced to 1.0)
-            x  = float(frame_cache[bp]["x"])
-            y  = float(frame_cache[bp]["y"])
+            # Edit-cache override: x/y=None means the marker was deleted — skip it
+            raw_x = frame_cache[bp].get("x")
+            raw_y = frame_cache[bp].get("y")
+            if raw_x is None or raw_y is None:
+                continue
+            x  = float(raw_x)
+            y  = float(raw_y)
             lh = 1.0
         else:
             x  = float(frame_poses[i, 0])
@@ -727,8 +741,8 @@ def viewer_marker_edit():
       "h5":    absolute path to the .h5 file,
       "frame": integer frame index,
       "bp":    body-part name,
-      "x":     new x coordinate (video-native pixels),
-      "y":     new y coordinate (video-native pixels)
+      "x":     new x coordinate (video-native pixels) — null to delete marker,
+      "y":     new y coordinate (video-native pixels) — null to delete marker
     }
 
     Response: {"ok": true, "pending_frames": N}
@@ -747,20 +761,27 @@ def viewer_marker_edit():
     try:
         frame = int(data["frame"])
         bp    = str(data["bp"]).strip()
-        x     = float(data["x"])
-        y     = float(data["y"])
+        # x/y may be null (JSON null → Python None) to indicate marker deletion
+        raw_x = data.get("x")
+        raw_y = data.get("y")
+        x = None if raw_x is None else float(raw_x)
+        y = None if raw_y is None else float(raw_y)
     except (KeyError, ValueError, TypeError) as exc:
         return jsonify({"error": f"Invalid fields: {exc}"}), 400
 
     if not bp:
         return jsonify({"error": "bp must be a non-empty string."}), 400
 
-    # Load existing cache, update, save atomically
+    # Load existing cache, update, save atomically.
+    # x=None, y=None encodes a deleted marker (will be written as NaN when saved).
     cache = load_edit_cache(h5_path)
     frame_key = f"frame_{frame}"
     if frame_key not in cache:
         cache[frame_key] = {}
-    cache[frame_key][bp] = {"x": round(x, 4), "y": round(y, 4)}
+    if x is None or y is None:
+        cache[frame_key][bp] = {"x": None, "y": None}
+    else:
+        cache[frame_key][bp] = {"x": round(x, 4), "y": round(y, 4)}
     save_edit_cache(h5_path, cache)
 
     return jsonify({"ok": True, "pending_frames": len(cache)})
