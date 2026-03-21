@@ -116,37 +116,69 @@ def task_resume(task_id: str):
 @bp.route("/dlc/task/<task_id>/terminate", methods=["POST"])
 def task_terminate(task_id: str):
     """
-    Terminate a running or paused DLC task.
+    Terminate a running, paused, or dead/orphaned DLC task.
 
-    Sequence:
-      1. If the task is paused: send SIGCONT first so the process can
-         receive the subsequent SIGTERM (a queued SIGTERM is not delivered
-         to a SIGSTOP'd process until it is resumed).
-      2. Set the Redis stop flag.  The Celery worker's emit_loop will pick
-         this up within ~3 s and perform SIGTERM → wait(12 s) → SIGKILL,
-         then clean up all Redis state atomically.
+    Two paths depending on whether the subprocess PID key still exists:
 
-    This preserves the existing cleanup path (GPU pool return, job hash
-    deletion, PID key deletion) that already lives in the emit_loop.
+    A. PID key present (process is running or paused):
+       1. SIGCONT if paused, so SIGTERM is deliverable.
+       2. Set the Redis stop flag — the Celery worker's emit_loop picks this
+          up within ~3 s and performs SIGTERM → wait(12 s) → SIGKILL, then
+          atomically cleans up all Redis state and returns the GPU to the pool.
+       3. Also call celery.control.revoke() to prevent re-queuing on restart.
+
+    B. PID key absent (job is "dead" / orphaned — Reaper cleaned up the PID,
+       or the worker container restarted mid-task):
+       The emit_loop is gone, so stop_key would never be read.  Instead, do
+       direct Celery-level cleanup: revoke task, remove from sorted set, mark
+       status "stopped".  This is the same path the legacy stop endpoints took.
     """
     pid, job_key, stop_key, pause_key = _resolve_task(task_id)
-    if pid is None:
-        return jsonify({"error": "Task not found or no longer running."}), 404
-
     r = _ctx.redis_client()
 
-    # Step 1 — unfreeze if paused so SIGTERM is deliverable
-    if r.get(pause_key):
-        try:
-            os.killpg(pid, signal.SIGCONT)
-        except (ProcessLookupError, OSError):
-            pass
-        r.delete(pause_key)
+    if pid is not None:
+        # ── Path A: process is alive — use the emit_loop kill path ──────────
+        if r.get(pause_key):
+            try:
+                os.killpg(pid, signal.SIGCONT)
+            except (ProcessLookupError, OSError):
+                pass
+            r.delete(pause_key)
 
-    # Step 2 — set stop flag; emit_loop handles SIGTERM → SIGKILL + cleanup
-    r.setex(stop_key, 120, "1")
-    _update_job_status(job_key, "stopping")
-    return jsonify({"status": "terminating", "task_id": task_id})
+        r.setex(stop_key, 120, "1")
+        _update_job_status(job_key, "stopping")
+
+        # Also revoke via Celery so the task won't be re-queued on restart
+        try:
+            _ctx.celery().control.revoke(task_id, terminate=False)
+        except Exception:
+            pass
+
+        return jsonify({"status": "terminating", "task_id": task_id})
+
+    # ── Path B: PID key gone — dead / orphaned job ───────────────────────────
+    # The emit_loop is no longer running.  Perform direct Celery-level cleanup
+    # so the job disappears from the UI and can't be re-queued on restart.
+    _JOB_NAMESPACES = [
+        ("dlc_train_job:",   "dlc_train_stop:",   "dlc_train_jobs"),
+        ("dlc_analyze_job:", "dlc_analyze_stop:", "dlc_analyze_jobs"),
+    ]
+
+    try:
+        _ctx.celery().control.revoke(task_id, terminate=False)
+    except Exception:
+        pass
+
+    for job_pfx, stop_pfx, zset_key in _JOB_NAMESPACES:
+        jk = job_pfx + task_id
+        if r.exists(jk):
+            r.hset(jk, "status", "stopped")
+            r.expire(jk, 3600)
+            r.zrem(zset_key, task_id)
+            r.delete(stop_pfx + task_id)
+            return jsonify({"status": "stopped", "task_id": task_id})
+
+    return jsonify({"error": "Task not found."}), 404
 
 
 # ─────────────────────────────────────────────────────────────────────────────
