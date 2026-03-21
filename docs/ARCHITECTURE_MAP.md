@@ -8,7 +8,7 @@
 ```
 src/
 ├── app.py                      # Flask factory: blueprint registration, Redis/Celery init
-├── celery_app.py               # Celery instance; worker startup (stale PID cleanup)
+├── celery_app.py               # Celery instance; worker startup (stale PID cleanup, GPU pool init, Reaper thread)
 ├── tasks.py                    # Worker entry: re-exports dlc.tasks + anipose.tasks
 ├── dlc_tapnet_tracker.py       # TAPNet/TAPIR adapter (GPU-isolated subprocess, label propagation)
 ├── dlc_dataset_curator.py      # Pure-Python: frame→PNG, CollectedData CSV/H5 I/O
@@ -25,6 +25,7 @@ src/
 │   ├── inference.py            # Blueprint: dispatch analyze task, labeled-content
 │   ├── monitoring.py           # Blueprint: machine-label, GPU status, job list
 │   ├── curator.py              # Blueprint: extract-frame, add-to-dataset, save-annotation
+│   ├── task_control.py         # Blueprint: pause/resume/terminate running tasks; SSE log streaming
 │   ├── viewer.py               # Blueprint: kinematic overlay rendering (cv2, H5 cache)
 │   └── tasks.py                # Celery tasks: analyze, train, create-dataset, machine-label
 │
@@ -132,7 +133,7 @@ docs/
 | Module | Responsibility | Key Dependencies |
 |--------|---------------|-----------------|
 | `app.py` | Flask factory; blueprint wiring; before_request ctx sync | `flask`, `redis`, `celery`, `dlc/*`, `anipose/*`, `routes/*` |
-| `celery_app.py` | Celery instance; worker start hook; stale PID cleanup | `celery`, `redis` |
+| `celery_app.py` | Celery instance; worker start hook; stale PID cleanup; GPU pool init (`dlc_available_gpus={0}`); Reaper daemon | `celery`, `redis` |
 | `tasks.py` | Worker entry point; re-exports all task modules | `dlc.tasks`, `anipose.tasks` |
 | `dlc_tapnet_tracker.py` | TAPNet label propagation; GPU-isolated subprocess; CSV merge | `numpy`, `pandas`, `jax` (subprocess), `tapir_model` (subprocess), `cv2` (subprocess) |
 | `dlc_dataset_curator.py` | Frame PNG extraction; CollectedData CSV/H5 read-write | `cv2`, `csv`, `pandas` (lazy) |
@@ -147,7 +148,8 @@ docs/
 | `dlc/monitoring.py` | Machine label propagation; GPU status; job list | `flask`, `dlc.ctx`, `celery` |
 | `dlc/curator.py` | extract-frame / add-to-dataset / save-annotation routes | `flask`, `dlc_dataset_curator`, `dlc.ctx` |
 | `dlc/viewer.py` | Kinematic overlay; H5 cache (5 files); vcap cache (10 sessions) | `flask`, `cv2`, `pandas`, `dlc.ctx` |
-| `dlc/tasks.py` | DLC Celery tasks; config sanitization; subprocess DLC calls | `deeplabcut`, `celery_app`, `cv2`, `pandas` |
+| `dlc/tasks.py` | DLC Celery tasks; config sanitization; subprocess DLC calls; GPU pool SPOP/SADD; Redis log streaming (RPUSH to `dlc_task:{id}:log`) | `deeplabcut`, `celery_app`, `cv2`, `pandas` |
+| `dlc/task_control.py` | Task lifecycle control: SIGSTOP/SIGCONT pause-resume, SIGTERM→SIGKILL terminate, SSE log-stream | `flask`, `dlc.ctx`, `signal`, `os` |
 | `anipose/projects.py` | Anipose project CRUD, file ops | `flask`, `anipose_src` |
 | `anipose/session.py` | Session lifecycle; config upload | `flask` |
 | `anipose/pipeline.py` | Pipeline step dispatcher | `flask`, `celery`, `anipose.tasks` |
@@ -162,18 +164,48 @@ docs/
 
 ```
 Browser
-  │  HTTP
+  │  HTTP / SSE
   ▼
 Flask :5000 ──────────── Redis :6379 ──── Celery Worker (PyTorch, GPU 0)
-  │                          │                  ├─ dlc.tasks.*
+  │                          │                  ├─ dlc.tasks.*  (SPOP/SADD dlc_available_gpus)
   │ blueprints                │                  ├─ anipose.tasks.*
-  │ /dlc/*                   │                  └─ TAPNet subprocess (GPU 0)
-  │ /session, /run, /projects │
-  │ /annotate, /custom-script │            Celery Worker-TF (TF 2.13, GPU 0)
-  │                          │                  └─ dlc.tasks.* (tensorflow queue)
+  │ /dlc/*                   │                  ├─ TAPNet subprocess (GPU 0)
+  │ /dlc/task/<id>/pause     │                  └─ Reaper thread (30 s interval)
+  │ /dlc/task/<id>/resume    │
+  │ /dlc/task/<id>/terminate │            Celery Worker-TF (TF 2.13, GPU 0)
+  │ /dlc/task/<id>/log-stream│                  └─ dlc.tasks.* (tensorflow queue)
+  │ /session, /run, /projects│
+  │ /annotate, /custom-script│
   └─ per-session state ──────┘
      webapp:session:{uid}
      webapp:dlc_project:{uid}
+```
+
+## Task Control Redis Keys
+
+| Key pattern | Type | Purpose |
+|-------------|------|---------|
+| `dlc_available_gpus` | Set | GPU pool — contains only `"0"` (RTX 5090); SPOP on task start, SADD in finally |
+| `dlc_train_pid:<task_id>` | String | PID of training subprocess (for SIGSTOP/SIGCONT/SIGTERM/SIGKILL) |
+| `dlc_analyze_pid:<task_id>` | String | PID of analyze subprocess |
+| `dlc_train_pause:<task_id>` | String | Set to `"1"` when task is paused; cleared on resume/terminate |
+| `dlc_analyze_pause:<task_id>` | String | Set to `"1"` when task is paused |
+| `dlc_train_stop:<task_id>` | String | Set to `"1"` to trigger SIGTERM→SIGKILL in emit_loop |
+| `dlc_analyze_stop:<task_id>` | String | Same as above for analyze tasks |
+| `dlc_train_job:<task_id>` | Hash | Job metadata: `status`, `gpu_id`, `project`, `engine`, `started_at` |
+| `dlc_analyze_job:<task_id>` | Hash | Job metadata for analyze tasks |
+| `dlc_task:<task_id>:log` | List | Live log lines RPUSH'd by emit_loop; consumed by SSE endpoint |
+
+## Task Status State Machine
+
+```
+dispatched → running ──pause──→ paused
+                │                  │
+                │               resume
+                │                  │
+                └──terminate──→  stopping → [stopped/failed/complete]
+                      ↑              │
+                   [Reaper]      [dead] ← (orphan detected by Reaper)
 ```
 
 ---

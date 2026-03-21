@@ -139,6 +139,63 @@ import { state } from './state.js';
       gmBadge.style.borderColor = busy ? "var(--accent)" : "";
     }
 
+    // ── Live log viewer (SSE) ──────────────────────────────────
+    let _gmLogEventSource = null;
+
+    function _gmOpenLogStream(taskId) {
+      if (_gmLogEventSource) { _gmLogEventSource.close(); _gmLogEventSource = null; }
+
+      const overlay = document.createElement("div");
+      overlay.id = "gm-log-overlay";
+      overlay.style.cssText = [
+        "position:fixed;inset:0;z-index:9999",
+        "background:rgba(0,0,0,.72)",
+        "display:flex;align-items:center;justify-content:center",
+      ].join(";");
+
+      overlay.innerHTML = `
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;
+                    width:min(860px,95vw);max-height:80vh;display:flex;flex-direction:column;overflow:hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;
+                      padding:.6rem 1rem;border-bottom:1px solid var(--border)">
+            <span style="font-size:.82rem;font-weight:600;font-family:var(--mono)">${taskId.slice(0,12)}… — live log</span>
+            <button id="gm-log-close" class="btn-sm" style="padding:.2rem .6rem">close</button>
+          </div>
+          <pre id="gm-log-pre" style="flex:1;overflow-y:auto;margin:0;padding:.75rem 1rem;
+               font-size:.74rem;font-family:var(--mono);white-space:pre-wrap;word-break:break-all;
+               color:var(--text-dim);line-height:1.5"></pre>
+        </div>`;
+
+      document.body.appendChild(overlay);
+      const pre = overlay.querySelector("#gm-log-pre");
+
+      overlay.querySelector("#gm-log-close").addEventListener("click", () => {
+        if (_gmLogEventSource) { _gmLogEventSource.close(); _gmLogEventSource = null; }
+        overlay.remove();
+      });
+
+      _gmLogEventSource = new EventSource(`/dlc/task/${taskId}/log-stream`);
+      _gmLogEventSource.onmessage = (e) => {
+        pre.textContent += e.data + "\n";
+        pre.scrollTop = pre.scrollHeight;
+      };
+      _gmLogEventSource.addEventListener("done", () => {
+        _gmLogEventSource.close(); _gmLogEventSource = null;
+        pre.textContent += "\n── stream ended ──\n";
+      });
+      _gmLogEventSource.onerror = () => {
+        if (_gmLogEventSource) { _gmLogEventSource.close(); _gmLogEventSource = null; }
+      };
+    }
+
+    // ── Control actions ───────────────────────────────────────
+    async function _gmTaskAction(taskId, action) {
+      try {
+        await fetch(`/dlc/task/${taskId}/${action}`, { method: "POST" });
+        setTimeout(_gmRefresh, 800);
+      } catch (e) { console.error(e); }
+    }
+
     // ── Render jobs list ──────────────────────────────────────
     function _gmRenderJobs(data) {
       // Update the global training-active flag and the run button
@@ -153,10 +210,26 @@ import { state } from './state.js';
         gmJobsList.innerHTML = '<span style="font-size:.82rem;color:var(--text-dim)">No jobs found.</span>';
         return;
       }
-      const statusColor = { running: "var(--accent)", complete: "#4caf50", stopped: "var(--text-dim)", failed: "#e05252" };
-      const statusIcon  = { running: "▶", complete: "✓", stopped: "■", failed: "✗" };
-      const opColor     = { train: "var(--text-dim)", analyze: "#a78bfa" };
-      const opLabel     = { train: "train", analyze: "analyze" };
+      const statusColor = {
+        running:  "var(--accent)",
+        paused:   "#f0a030",
+        stopping: "#f0a030",
+        complete: "#4caf50",
+        stopped:  "var(--text-dim)",
+        failed:   "#e05252",
+        dead:     "#e05252",
+      };
+      const statusIcon = {
+        running:  "▶",
+        paused:   "⏸",
+        stopping: "⏹",
+        complete: "✓",
+        stopped:  "■",
+        failed:   "✗",
+        dead:     "☠",
+      };
+      const opColor = { train: "var(--text-dim)", analyze: "#a78bfa" };
+      const opLabel = { train: "train", analyze: "analyze" };
 
       gmJobsList.innerHTML = data.jobs.map(j => {
         const dotColor  = statusColor[j.status]    || "var(--text-dim)";
@@ -165,29 +238,74 @@ import { state } from './state.js';
         const opBadge   = opLabel[op] || op;
         const opClr     = opColor[op] || "var(--text-dim)";
         const ago       = j.started_at ? _gmTimeAgo(parseFloat(j.started_at)) : "";
-        const canStop   = j.status === "running" || j.status === "dead";
-        // For analyze jobs show target file/folder name as subtitle
+        const isRunning = j.status === "running" || j.status === "dead";
+        const isPaused  = j.status === "paused";
+        const canControl = isRunning || isPaused;
         const subtitle  = op === "analyze" && j.target_path
           ? j.target_path.split("/").pop()
           : (j.engine || "");
         const titleAttr = op === "analyze"
           ? (j.target_path || j.config_path || "")
           : (j.config_path || "");
+
+        const pauseBtn = isRunning ? `
+          <button class="btn-sm gm-pause-btn" data-task-id="${j.task_id}"
+                  style="padding:.15rem .4rem;font-size:.72rem;flex-shrink:0;color:#f0a030;border-color:#f0a030"
+                  title="Pause (SIGSTOP)">⏸</button>` : "";
+        const resumeBtn = isPaused ? `
+          <button class="btn-sm gm-resume-btn" data-task-id="${j.task_id}"
+                  style="padding:.15rem .4rem;font-size:.72rem;flex-shrink:0;color:var(--accent);border-color:var(--accent)"
+                  title="Resume (SIGCONT)">▶</button>` : "";
+        const termBtn = canControl ? `
+          <button class="btn-sm btn-danger gm-terminate-btn" data-task-id="${j.task_id}"
+                  style="padding:.15rem .45rem;font-size:.72rem;flex-shrink:0" title="Terminate">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          </button>` : "";
+        const logBtn = canControl || isPaused ? `
+          <button class="btn-sm gm-log-btn" data-task-id="${j.task_id}"
+                  style="padding:.15rem .4rem;font-size:.72rem;flex-shrink:0;color:var(--text-dim)"
+                  title="Live log">≡</button>` : "";
+
         return `
-        <div style="display:flex;align-items:center;gap:.55rem;padding:.45rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:6px">
+        <div style="display:flex;align-items:center;gap:.45rem;padding:.45rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:6px">
           <span style="font-size:.8rem;color:${dotColor};flex-shrink:0" title="${j.status}">${icon}</span>
           <span style="font-size:.68rem;font-weight:600;color:${opClr};flex-shrink:0;text-transform:uppercase;letter-spacing:.04em">${opBadge}</span>
           <span style="font-family:var(--mono);font-size:.72rem;color:var(--text-dim);flex-shrink:0">${(j.task_id||"").slice(0,8)}…</span>
           <span style="font-size:.78rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${titleAttr}">${j.project||"?"}</span>
-          <span style="font-size:.72rem;color:var(--text-dim);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;max-width:8rem" title="${subtitle}">${subtitle}</span>
+          <span style="font-size:.72rem;color:var(--text-dim);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;max-width:6rem" title="${subtitle}">${subtitle}</span>
           <span style="font-size:.72rem;color:var(--text-dim);flex-shrink:0">${ago}</span>
-          ${canStop ? `<button class="btn-sm btn-danger gm-stop-btn" data-task-id="${j.task_id}" data-operation="${op}" style="padding:.15rem .45rem;font-size:.72rem;flex-shrink:0" title="Force stop">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
-          </button>` : ""}
+          ${logBtn}${pauseBtn}${resumeBtn}${termBtn}
         </div>`;
       }).join("");
 
-      // Wire up stop buttons — route to correct endpoint based on operation
+      // Wire pause / resume / terminate / log buttons
+      gmJobsList.querySelectorAll(".gm-pause-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          await _gmTaskAction(btn.dataset.taskId, "pause");
+          btn.disabled = false;
+        });
+      });
+      gmJobsList.querySelectorAll(".gm-resume-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          await _gmTaskAction(btn.dataset.taskId, "resume");
+          btn.disabled = false;
+        });
+      });
+      gmJobsList.querySelectorAll(".gm-terminate-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          if (!confirm("Terminate this task? It will be killed within ~3 s.")) return;
+          btn.disabled = true;
+          await _gmTaskAction(btn.dataset.taskId, "terminate");
+        });
+      });
+      gmJobsList.querySelectorAll(".gm-log-btn").forEach(btn => {
+        btn.addEventListener("click", () => _gmOpenLogStream(btn.dataset.taskId));
+      });
+
+      // Legacy stop-button support (kept for backwards compat with old jobs
+      // that may still use the operation-specific stop endpoints)
       gmJobsList.querySelectorAll(".gm-stop-btn").forEach(btn => {
         btn.addEventListener("click", async () => {
           const tid = btn.dataset.taskId;

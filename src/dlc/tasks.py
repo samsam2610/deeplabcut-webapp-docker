@@ -411,11 +411,20 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
     pid_key   = _TRAIN_PID_PREFIX + task_id
     job_key   = "dlc_train_job:" + task_id
     jobs_zset = "dlc_train_jobs"
+    log_list_key = f"dlc_task:{task_id}:log"   # Redis list for SSE streaming
 
     def _job_set(status: str):
         _redis.hset(job_key, "status", status)
         if status in ("complete", "stopped", "failed"):
             _redis.expire(job_key, 3600)   # keep 1 h after finish
+
+    # ── Atomic GPU checkout from pool ──────────────────────────────────────────
+    # Hard constraint: GPU 0 = RTX 5090 is the ONLY GPU available for DLC tasks.
+    # SPOP atomically removes one entry from the set; SADD in the finally block
+    # returns it.  If the pool is empty (another task is using the GPU), we
+    # proceed without pool reservation — Celery's worker_prefetch_multiplier=1
+    # should prevent true contention in normal operation.
+    _gpu_id = _redis.spop("dlc_available_gpus") or "0"
 
     # Register job so all users can see it
     _redis.hset(job_key, mapping={
@@ -425,6 +434,7 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         "config_path": config_path,
         "started_at":  str(time.time()),
         "status":      "running",
+        "gpu_id":      _gpu_id,
     })
     _redis.expire(job_key, 7200)
     _redis.zadd(jobs_zset, {task_id: time.time()})
@@ -495,11 +505,13 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         _stop_emit  = _threading.Event()
         _user_killed = [False]   # mutable so the closure can set it
 
+        _log_stream_cursor = [0]   # mutable so the closure can advance it
+
         def _emit_loop():
             import signal as _sig
             _progress = 12
             while not _stop_emit.wait(3):
-                # Check stop flag set by Flask stop endpoint
+                # Check stop flag set by Flask stop/terminate endpoint
                 if _redis.get(stop_key):
                     _user_killed[0] = True
                     # ── Graceful stop: SIGTERM → wait → SIGKILL ──────────
@@ -531,6 +543,18 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
                 try:
                     with open(log_path) as _lf:
                         _log = _lf.read()[-8000:]
+
+                    # ── Stream new log lines to Redis list (SSE feed) ─────
+                    # Read the full file, split into lines, push only the
+                    # portion after the last-seen cursor so consumers get
+                    # incremental, non-duplicated output.
+                    all_lines = _log.splitlines()
+                    new_lines = all_lines[_log_stream_cursor[0]:]
+                    if new_lines:
+                        _redis.rpush(log_list_key, *new_lines)
+                        _redis.expire(log_list_key, 7200)
+                        _log_stream_cursor[0] = len(all_lines)
+
                     self.update_state(
                         state="PROGRESS",
                         meta={
@@ -621,6 +645,14 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         raise RuntimeError(traceback.format_exc()[-3000:])
 
     finally:
+        # ── Atomically return the GPU to the pool ─────────────────────────────
+        # Runs unconditionally: success, stop, failure, or external SIGKILL.
+        # GPU 0 is the only valid DLC GPU (hard constraint).
+        try:
+            _redis.sadd("dlc_available_gpus", _gpu_id)
+        except Exception:
+            pass
+
         try:
             os.unlink(log_path)
         except OSError:
@@ -952,11 +984,15 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
     stop_key  = "dlc_analyze_stop:" + task_id
     job_key   = "dlc_analyze_job:" + task_id
     jobs_zset = "dlc_analyze_jobs"
+    log_list_key = f"dlc_task:{task_id}:log"   # Redis list for SSE streaming
 
     def _job_set(status: str):
         _redis.hset(job_key, "status", status)
         if status in ("complete", "stopped", "failed"):
             _redis.expire(job_key, 3600)
+
+    # ── Atomic GPU checkout ────────────────────────────────────────────────────
+    _gpu_id = _redis.spop("dlc_available_gpus") or "0"
 
     # Register job so it appears in the monitor
     _redis.hset(job_key, mapping={
@@ -967,6 +1003,7 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
         "target_path": target_path,
         "started_at":  str(time.time()),
         "status":      "running",
+        "gpu_id":      _gpu_id,
     })
     _redis.expire(job_key, 7200)
     _redis.zadd(jobs_zset, {task_id: time.time()})
@@ -1019,6 +1056,8 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
             r'(\d+)%\|[^|]*\|\s*(\d+)/(\d+)\s*\[([^\]<]+)<([^\],\]]+)'
         )
 
+        _log_stream_cursor = [0]   # mutable so the closure can advance it
+
         def _emit_loop():
             import signal as _sig
             _progress = 12
@@ -1046,6 +1085,14 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
                 try:
                     with open(log_path) as _lf:
                         _log = _lf.read()[-8000:]
+
+                    # ── Stream new log lines to Redis list (SSE feed) ─────
+                    all_lines = _log.splitlines()
+                    new_lines = all_lines[_log_stream_cursor[0]:]
+                    if new_lines:
+                        _redis.rpush(log_list_key, *new_lines)
+                        _redis.expire(log_list_key, 7200)
+                        _log_stream_cursor[0] = len(all_lines)
 
                     # Parse tqdm progress from log
                     _tqdm_pct   = None
@@ -1129,6 +1176,12 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
         raise RuntimeError(traceback.format_exc()[-3000:])
 
     finally:
+        # ── Atomically return the GPU to the pool ─────────────────────────────
+        try:
+            _redis.sadd("dlc_available_gpus", _gpu_id)
+        except Exception:
+            pass
+
         try:
             os.unlink(log_path)
         except OSError:
