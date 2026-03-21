@@ -139,14 +139,17 @@
             title="Double-click to erase all markers on the current frame">Clear Frame</button>
         </div>
 
-        <div id="va-video-wrap" style="position:relative;background:#000;border-radius:8px;border:1px solid var(--border);margin-bottom:.5rem">
+        <div id="va-video-wrap" style="position:relative;background:#000;border-radius:8px;border:1px solid var(--border);margin-bottom:.25rem">
           <img id="va-frame-img" alt="" draggable="false" style="width:100%;display:block;height:auto" />
           <!-- Canvas for hover hit-testing, label display, and drag-to-edit markers -->
           <canvas id="va-overlay-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></canvas>
           <div id="va-frame-spinner" class="fe-frame-spinner hidden"></div>
         </div>
 
-        <!-- Controls row — pinned immediately below canvas; min-height prevents jitter from chip changes -->
+        <!-- Seek / timeline slider — sits directly below the canvas -->
+        <input type="range" id="va-seek" class="fe-seek" min="0" max="1000" value="0" step="1" style="margin-bottom:.4rem" />
+
+        <!-- Controls row — pinned below the timeline; min-height prevents jitter from chip changes -->
         <div class="fe-controls" style="flex:none;min-height:2.4rem;align-items:center">
           <button id="va-btn-play" class="btn-sm fe-ctrl-btn" title="Play / Pause (Space)">
             <svg id="va-play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -171,9 +174,6 @@
           <span class="fe-frame-counter" id="va-frame-counter">Frame 0 / 0</span>
           <span class="fe-time-display" id="va-time-display">0.000 s</span>
         </div>
-
-        <!-- Seek slider -->
-        <input type="range" id="va-seek" class="fe-seek" min="0" max="1000" value="0" step="1" />
 
         <!-- Body-part chip selector (below controls; visible when overlay is on and H5 is loaded) -->
         <div id="va-bp-list-wrap" class="hidden" style="margin-top:.35rem;margin-bottom:.2rem">

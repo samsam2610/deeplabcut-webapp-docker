@@ -147,6 +147,20 @@ def test_seek_before_chip_list_in_html(viewer_html_src):
     )
 
 
+def test_seek_before_controls_in_html(viewer_html_src):
+    """va-seek (timeline) must appear BEFORE .fe-controls (transport buttons).
+    Timeline sits between the player and the controls — scrub then play."""
+    pos_seek     = viewer_html_src.find('id="va-seek"')
+    pos_controls = viewer_html_src.find('class="fe-controls"')
+    assert pos_seek     != -1, "va-seek not found in card_viewer.html"
+    assert pos_controls != -1, ".fe-controls not found in card_viewer.html"
+    assert pos_seek < pos_controls, (
+        "va-seek (timeline) must appear BEFORE .fe-controls in HTML source.\n"
+        f"  va-seek at char {pos_seek}\n"
+        f"  .fe-controls at char {pos_controls}"
+    )
+
+
 # ── 2. Controls row has jitter-prevention CSS ─────────────────────────────────
 
 def test_controls_row_has_flex_none(viewer_html_src):
