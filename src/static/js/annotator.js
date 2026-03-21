@@ -64,6 +64,7 @@ import { state } from './state.js';
     const anvClipBrowser    = document.getElementById("anv-clip-browser");
     const anvClipBtn        = document.getElementById("anv-clip-btn");
     const anvClipStatus     = document.getElementById("anv-clip-status");
+    const anvClipLockStart  = document.getElementById("anv-clip-lock-start");
 
     // ── State ───────────────────────────────────────────────────
     let _anvZoom          = 100;
@@ -160,8 +161,9 @@ import { state } from './state.js';
       if (!_anvSeekDragging)
         anvSeek.value = Math.round((_anvCurrentFrame / Math.max(_anvFrameCount - 1, 1)) * 1000);
       _anvSyncAnnotationPanel();
-      // Keep clip-start in sync with the current frame position
-      anvClipStart.value = String(_anvCurrentFrame);
+      // Keep clip-start in sync with the current frame position (unless locked)
+      if (!anvClipLockStart.checked)
+        anvClipStart.value = String(_anvCurrentFrame);
       anvClipStart.max   = String(Math.max(_anvFrameCount - 1, 0));
     }
 
@@ -798,9 +800,10 @@ import { state } from './state.js';
         if (data.csv_path) {
           msg += ` + CSV`;
         }
-        anvClipStatus.textContent = msg;
-        anvClipStatus.className   = "fe-extract-status ok";
-        anvClipStatus.title       = data.output_path;
+        anvClipStatus.textContent  = msg;
+        anvClipStatus.className    = "fe-extract-status ok";
+        anvClipStatus.title        = data.output_path;
+        anvClipLockStart.checked   = false;
       } catch (err) {
         anvClipStatus.textContent = `Error: ${err.message}`;
         anvClipStatus.className   = "fe-extract-status err";
