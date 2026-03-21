@@ -212,10 +212,18 @@ Keyboard: `ArrowLeft`/`ArrowRight` (card-scoped) = ±1; `Ctrl+Arrow` (document-s
 
 | DOM ID | JS Module | Event | Backend Endpoint |
 |--------|-----------|-------|-----------------|
-| `btn-run-analyze` | `analyze.js` | `click` → dispatch analyze task | `POST /dlc/project/analyze` |
-| `btn-stop-analyze` | `analyze.js` | `click` → revoke analyze task | `POST /dlc/inference/stop` |
+| `btn-run-analyze` | `analyze.js` | `click` → dispatch one task per queued path | `POST /dlc/project/analyze` |
+| `btn-stop-analyze` | `analyze.js` | `click` → revoke analyze task | `POST /dlc/project/analyze/stop` |
 | `av-browse-btn` | `analyze.js` | `click` → open file browser | `GET /fs/ls` |
 | `av-refresh-snapshots` | `analyze.js` | `click` → reload snapshot list | `GET /dlc/project/snapshots` |
+| `av-batch-add-btn` | `analyze.js` | `click` → add highlighted path to queue | (local state) |
+| `av-batch-clear-btn` | `analyze.js` | `click` → empty the analysis queue | (local state) |
+| `av-batch-list` | `analyze.js` | render-only — shows queued paths with ✕ remove | (local state) |
+| `av-labeled-params-section` | `analyze.js` | shown/hidden by `av-create-labeled` checkbox | (local state) |
+
+**Batch-selection flow:** single-click a browser entry → highlights row + sets `avTargetPath.value`; click **+ Add to queue** to push to `_avBatchList`. Double-click auto-adds and closes browser. `btn-run-analyze` sends `target_paths: [...]` array; backend dispatches one `tasks.dlc_analyze` Celery task per path and returns `{ task_ids: [...] }`.
+
+**Labeled-params visibility:** `av-labeled-params-section` is hidden (`display:none`) by default; revealed only when `av-create-labeled` checkbox is checked.
 
 ---
 

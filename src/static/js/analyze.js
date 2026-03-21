@@ -21,10 +21,29 @@ import { _populateGpuSelect } from './training.js';
     const avProgressPct  = document.getElementById("av-progress-pct");
     const avLogOutput    = document.getElementById("av-log-output");
 
+    // Batch selection state
+    const avBatchList    = document.getElementById("av-batch-list");
+    const avBatchAddBtn  = document.getElementById("av-batch-add-btn");
+    const avBatchClearBtn= document.getElementById("av-batch-clear-btn");
+    let _avBatchList     = [];         // ordered array of selected paths
+    let _avHighlightedRow= null;       // currently highlighted browser row element
+    let _avHighlightedPath = null;     // path of highlighted row
+
     let _avPollTimer  = null;
     let _avActiveTask = null;
     let _avBrowserLoaded = false;
     let _avProjectPath   = null;   // set when browse data arrives
+
+    // ── Labeled video params toggle ──────────────────────────────
+    const avCreateLabeledCb  = document.getElementById("av-create-labeled");
+    const avLabeledParamsSection = document.getElementById("av-labeled-params-section");
+
+    function _avSyncLabeledParams() {
+      if (!avLabeledParamsSection) return;
+      avLabeledParamsSection.style.display = avCreateLabeledCb?.checked ? "" : "none";
+    }
+    avCreateLabeledCb?.addEventListener("change", _avSyncLabeledParams);
+    _avSyncLabeledParams();  // apply initial state (checkbox unchecked → hidden)
 
     // ── Snapshots ─────────────────────────────────────────────
     async function _avLoadSnapshots() {
@@ -72,12 +91,80 @@ import { _populateGpuSelect } from './training.js';
     // Reload snapshots when shuffle changes (indices are per-shuffle)
     document.getElementById("av-shuffle").addEventListener("change", _avLoadSnapshots);
 
+    // ── Batch list management ─────────────────────────────────
+    function _avRenderBatchList() {
+      if (!avBatchList) return;
+      if (_avBatchList.length === 0) {
+        avBatchList.style.display = "none";
+        avBatchList.innerHTML = "";
+        return;
+      }
+      avBatchList.style.display = "";
+      avBatchList.innerHTML = "";
+      _avBatchList.forEach((p, idx) => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;align-items:center;gap:.35rem;padding:.15rem 0;border-bottom:1px solid var(--border)";
+        const label = document.createElement("span");
+        label.textContent = p;
+        label.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+        label.title = p;
+        const rm = document.createElement("button");
+        rm.textContent = "✕";
+        rm.style.cssText = "flex-shrink:0;background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:.75rem;padding:0 .2rem;line-height:1";
+        rm.title = "Remove";
+        rm.addEventListener("click", () => {
+          _avBatchList.splice(idx, 1);
+          _avRenderBatchList();
+        });
+        row.appendChild(label);
+        row.appendChild(rm);
+        avBatchList.appendChild(row);
+      });
+    }
+
+    function _avAddToList(path) {
+      if (!path) return;
+      if (_avBatchList.includes(path)) return;   // no duplicates
+      _avBatchList.push(path);
+      _avRenderBatchList();
+    }
+
+    avBatchAddBtn?.addEventListener("click", () => {
+      if (_avHighlightedPath) {
+        _avAddToList(_avHighlightedPath);
+      } else {
+        // Fall back to the typed text-input value
+        const typed = avTargetPath.value.trim();
+        if (typed) _avAddToList(typed);
+      }
+    });
+
+    avBatchClearBtn?.addEventListener("click", () => {
+      _avBatchList = [];
+      _avHighlightedPath = null;
+      _avHighlightedRow = null;
+      _avRenderBatchList();
+    });
+
     // ── Project browser ───────────────────────────────────────
     const _AV_VIDEO_EXTS = new Set(['.mp4','.avi','.mov','.mkv','.wmv','.m4v']);
     const _AV_IMAGE_EXTS = new Set(['.jpg','.jpeg','.png','.bmp','.tif','.tiff']);
     function _avSupportedFile(name) {
       const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : '';
       return _AV_VIDEO_EXTS.has(ext) || _AV_IMAGE_EXTS.has(ext);
+    }
+
+    function _avSetHighlight(row, path) {
+      // Clear previous highlight
+      if (_avHighlightedRow && _avHighlightedRow !== row) {
+        _avHighlightedRow.style.background = "";
+        _avHighlightedRow.style.outline = "";
+      }
+      _avHighlightedRow  = row;
+      _avHighlightedPath = path;
+      avTargetPath.value = path;
+      row.style.background = "var(--accent-dim, rgba(99,179,237,.18))";
+      row.style.outline = "1px solid var(--accent, #63b3ed)";
     }
 
     function _avMakeEntry(name, fullPath, isDir) {
@@ -101,8 +188,12 @@ import { _populateGpuSelect } from './training.js';
       row.appendChild(arrow); row.appendChild(icon); row.appendChild(label);
       wrapper.appendChild(row);
 
-      row.addEventListener("mouseenter", () => row.style.background = "var(--surface-3,#2a2a2a)");
-      row.addEventListener("mouseleave", () => row.style.background = "");
+      row.addEventListener("mouseenter", () => {
+        if (row !== _avHighlightedRow) row.style.background = "var(--surface-3,#2a2a2a)";
+      });
+      row.addEventListener("mouseleave", () => {
+        if (row !== _avHighlightedRow) row.style.background = "";
+      });
 
       if (isDir) {
         const childContainer = document.createElement("div");
@@ -110,7 +201,11 @@ import { _populateGpuSelect } from './training.js';
         wrapper.appendChild(childContainer);
         let loaded = false, expanded = false;
 
-        row.addEventListener("click", async () => {
+        row.addEventListener("click", async (e) => {
+          // Single-click: highlight the directory path
+          _avSetHighlight(row, fullPath);
+
+          // Also expand/collapse the tree
           if (!expanded && !loaded) {
             childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">Loading…</span>`;
             childContainer.style.display = "block";
@@ -138,11 +233,17 @@ import { _populateGpuSelect } from './training.js';
             arrow.textContent = expanded ? "▼" : "▶";
           }
         });
+      } else {
+        // Files: single-click highlights only
+        row.addEventListener("click", () => {
+          _avSetHighlight(row, fullPath);
+        });
       }
 
-      // double-click selects the path and closes the browser
+      // Double-click: add to batch list immediately and close browser
       row.addEventListener("dblclick", (e) => {
         e.stopPropagation();
+        _avAddToList(fullPath);
         avTargetPath.value = fullPath;
         avBrowser.classList.add("hidden");
         _avBrowserLoaded = false;
@@ -314,9 +415,13 @@ import { _populateGpuSelect } from './training.js';
 
     // ── Run ───────────────────────────────────────────────────
     avRunBtn.addEventListener("click", async () => {
-      const target = avTargetPath.value.trim();
-      if (!target) {
-        avRunStatus.textContent = "Please enter a target path.";
+      // Build the list of target paths: batch list takes priority; fall back to text input
+      const target_paths = _avBatchList.length > 0
+        ? [..._avBatchList]
+        : (avTargetPath.value.trim() ? [avTargetPath.value.trim()] : []);
+
+      if (!target_paths.length) {
+        avRunStatus.textContent = "Please select or enter at least one target path.";
         avRunStatus.className   = "fe-extract-status err";
         return;
       }
@@ -329,7 +434,7 @@ import { _populateGpuSelect } from './training.js';
       const batchSizeVal = document.getElementById("av-batch-size").value;
       const clvPcutoff   = document.getElementById("clv-pcutoff").value;
       const body = {
-        target_path:      target,
+        target_paths,
         shuffle:          parseInt(document.getElementById("av-shuffle").value) || 1,
         trainingsetindex: parseInt(document.getElementById("av-trainingsetindex").value) ?? 0,
         gputouse:         document.getElementById("av-gputouse").value !== ""
@@ -339,7 +444,7 @@ import { _populateGpuSelect } from './training.js';
         save_as_csv:      document.getElementById("av-save-csv").checked,
         create_labeled:   document.getElementById("av-create-labeled").checked,
         snapshot_path:    snapshotVal !== "-1" ? snapshotVal : null,
-        // labeled video params
+        // labeled video params (only relevant when create_labeled=true)
         pcutoff:          clvPcutoff !== "" ? parseFloat(clvPcutoff) : null,
         dotsize:          parseInt(document.getElementById("clv-dotsize").value) || 8,
         colormap:         document.getElementById("clv-colormap").value,
@@ -362,8 +467,14 @@ import { _populateGpuSelect } from './training.js';
           avRunStatus.className   = "fe-extract-status err";
           return;
         }
-        _avActiveTask = data.task_id;
-        _avStartPolling(data.task_id);
+        // Support both single task_id and batch task_ids
+        const firstId = (data.task_ids && data.task_ids[0]) || data.task_id;
+        _avActiveTask = firstId;
+        _avStartPolling(firstId);
+        if (data.task_ids && data.task_ids.length > 1) {
+          avRunStatus.textContent = `${data.task_ids.length} analysis jobs dispatched.`;
+          avRunStatus.className   = "fe-extract-status ok";
+        }
       } catch (err) {
         avRunStatus.textContent = "Network error: " + err.message;
         avRunStatus.className   = "fe-extract-status err";

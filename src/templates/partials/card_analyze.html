@@ -8,7 +8,7 @@
       </div>
       <p class="subtitle">Run pose estimation on a video file, image file, or folder using the trained model.</p>
 
-      <!-- Target path -->
+      <!-- Target path + batch selection -->
       <div style="margin-bottom:.5rem">
         <label style="display:block;font-size:.78rem;color:var(--text-dim);margin-bottom:.3rem">Target (file or folder path)</label>
         <div style="display:flex;gap:.4rem">
@@ -20,7 +20,20 @@
             Browse
           </button>
         </div>
+        <!-- File browser (tree) -->
         <div id="av-browser" class="hidden" style="margin-top:.5rem;max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem"></div>
+        <!-- Batch selection controls -->
+        <div style="display:flex;gap:.4rem;margin-top:.4rem;align-items:center;flex-wrap:wrap">
+          <button class="btn-sm" id="av-batch-add-btn" title="Add highlighted path to the analysis queue" style="opacity:.85">
+            + Add to queue
+          </button>
+          <button class="btn-sm" id="av-batch-clear-btn" title="Clear all queued paths" style="opacity:.7">
+            ✕ Clear queue
+          </button>
+          <span style="font-size:.72rem;color:var(--text-dim)">Single-click to highlight · double-click to add instantly</span>
+        </div>
+        <!-- Queued paths list -->
+        <div id="av-batch-list" style="margin-top:.4rem;display:none;border:1px solid var(--border);border-radius:5px;background:var(--surface-2);max-height:140px;overflow-y:auto;padding:.3rem .4rem;font-size:.74rem;font-family:var(--mono)"></div>
       </div>
 
       <!-- Output folder -->
@@ -77,7 +90,7 @@
       </div>
 
       <!-- Parameters for labeled videos (shared by checkbox and standalone button) -->
-      <div style="margin-bottom:.9rem;padding:.7rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)">
+      <div id="av-labeled-params-section" style="margin-bottom:.9rem;padding:.7rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);display:none">
         <div style="font-size:.78rem;font-weight:600;color:var(--text-2);margin-bottom:.6rem;text-transform:uppercase;letter-spacing:.04em">Parameters for labeled videos</div>
         <div class="scorer-row" style="margin-bottom:.5rem">
           <label for="clv-pcutoff">P-cutoff</label>

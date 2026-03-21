@@ -45,15 +45,20 @@ def _natural_keys(text: str) -> list:
 @bp.route("/dlc/project/analyze", methods=["POST"])
 def dlc_project_analyze():
     """
-    Dispatch a Celery task to run DLC analysis on a file or folder.
+    Dispatch one Celery task per target path for DLC analysis.
+
     Body (JSON) fields:
-      target_path     : absolute path to a video file, image file, or directory
+      target_paths    : list of absolute paths (files or directories)  ← preferred
+      target_path     : single absolute path (backward-compat alias)
       shuffle         : int  (default 1)
       trainingsetindex: int  (default 0)
       gputouse        : int  (optional)
       save_as_csv     : bool (default false)
       create_labeled  : bool (default false)
-      snapshot_index  : int  (optional; None = latest from config)
+      snapshot_path   : str  (optional; None = latest from config)
+
+    Returns:
+      { "task_ids": [...], "operation": "analyze" }   (one id per path)
     """
     raw = _ctx.redis_client().get(_dlc_key())
     if not raw:
@@ -65,12 +70,23 @@ def dlc_project_analyze():
     if not config_path or not Path(config_path).is_file():
         return jsonify({"error": "No config.yaml in active project."}), 400
 
-    body        = request.get_json(force=True) or {}
-    target_path = (body.get("target_path") or "").strip()
-    if not target_path:
-        return jsonify({"error": "target_path is required."}), 400
-    if not Path(target_path).exists():
-        return jsonify({"error": f"Target not found: {target_path}"}), 400
+    body = request.get_json(force=True) or {}
+
+    # Resolve target_paths: new array field takes priority; fall back to legacy scalar.
+    raw_paths = body.get("target_paths")
+    if raw_paths is None:
+        # Legacy single-path support
+        single = (body.get("target_path") or "").strip()
+        raw_paths = [single] if single else []
+
+    target_paths = [p.strip() for p in raw_paths if isinstance(p, str) and p.strip()]
+    if not target_paths:
+        return jsonify({"error": "target_paths must be a non-empty list of paths."}), 400
+
+    # Validate each path exists
+    for tp in target_paths:
+        if not Path(tp).exists():
+            return jsonify({"error": f"Target not found: {tp}"}), 400
 
     def _int_or_none(key):
         v = body.get(key)
@@ -91,30 +107,34 @@ def dlc_project_analyze():
         return jsonify({"error": f"destfolder not found: {clv_destfolder}"}), 400
 
     params = {
-        "shuffle":          _int_or_none("shuffle") or 1,
-        "trainingsetindex": _int_or_none("trainingsetindex") if _int_or_none("trainingsetindex") is not None else 0,
-        "gputouse":         _int_or_none("gputouse"),
-        "batch_size":       _int_or_none("batch_size"),
-        "save_as_csv":      bool(body.get("save_as_csv", False)),
-        "create_labeled":   bool(body.get("create_labeled", False)),
-        "snapshot_path":    (body.get("snapshot_path") or "").strip() or None,
-        "destfolder":       clv_destfolder,
+        "shuffle":           _int_or_none("shuffle") or 1,
+        "trainingsetindex":  _int_or_none("trainingsetindex") if _int_or_none("trainingsetindex") is not None else 0,
+        "gputouse":          _int_or_none("gputouse"),
+        "batch_size":        _int_or_none("batch_size"),
+        "save_as_csv":       bool(body.get("save_as_csv", False)),
+        "create_labeled":    bool(body.get("create_labeled", False)),
+        "snapshot_path":     (body.get("snapshot_path") or "").strip() or None,
+        "destfolder":        clv_destfolder,
         # labeled video params (used when create_labeled=True)
-        "clv_pcutoff":      _float_or_none("pcutoff"),
-        "clv_dotsize":      _int_or_none("dotsize") or 8,
-        "clv_colormap":     (body.get("colormap") or "rainbow").strip(),
-        "clv_modelprefix":  (body.get("modelprefix") or "").strip(),
-        "clv_filtered":     bool(body.get("filtered", False)),
-        "clv_draw_skeleton":bool(body.get("draw_skeleton", False)),
-        "clv_overwrite":    bool(body.get("overwrite", False)),
+        "clv_pcutoff":       _float_or_none("pcutoff"),
+        "clv_dotsize":       _int_or_none("dotsize") or 8,
+        "clv_colormap":      (body.get("colormap") or "rainbow").strip(),
+        "clv_modelprefix":   (body.get("modelprefix") or "").strip(),
+        "clv_filtered":      bool(body.get("filtered", False)),
+        "clv_draw_skeleton": bool(body.get("draw_skeleton", False)),
+        "clv_overwrite":     bool(body.get("overwrite", False)),
     }
 
-    task = _ctx.celery().send_task(
-        "tasks.dlc_analyze",
-        kwargs={"config_path": config_path, "target_path": target_path, "params": params},
-        queue=_get_engine_queue(engine),
-    )
-    return jsonify({"task_id": task.id, "operation": "analyze"}), 202
+    task_ids = []
+    for target_path in target_paths:
+        task = _ctx.celery().send_task(
+            "tasks.dlc_analyze",
+            kwargs={"config_path": config_path, "target_path": target_path, "params": params},
+            queue=_get_engine_queue(engine),
+        )
+        task_ids.append(task.id)
+
+    return jsonify({"task_ids": task_ids, "task_id": task_ids[0], "operation": "analyze"}), 202
 
 
 @bp.route("/dlc/project/analyze/stop", methods=["POST"])

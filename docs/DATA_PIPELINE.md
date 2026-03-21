@@ -297,3 +297,33 @@ DLC's `config.yaml` stores video paths as YAML mapping keys. When paths contain 
 |---------|-------|-----------|
 | A (explicit key `?`) | `? /data/foo bar\n  : crop: …` | `"/data/foo bar":\n  crop: …` |
 | B (split scalar) | `/data/foo\n  bar.avi:\n  crop:` | `"/data/foo bar.avi":\n  crop:` |
+
+---
+
+## 12. Analyze Batch Submission Pipeline
+
+**Frontend → Backend → Worker**:
+
+```
+_avBatchList (JS array of absolute paths)
+        │  POST /dlc/project/analyze
+        │  body: { target_paths: [...], shuffle, create_labeled, … }
+        ▼
+dlc_project_analyze() — inference.py
+  • resolves target_paths (or legacy target_path scalar → [scalar])
+  • validates each path exists
+  • for each path: celery.send_task("tasks.dlc_analyze", kwargs={target_path, params})
+  • returns { task_ids: [...], task_id: task_ids[0] }
+        │
+        ▼  (one Celery task per path, queued in dlc-pytorch or dlc-tf)
+_dlc_analyze_subprocess(config_path, target_path, params, log_path)
+  • file (.mp4/.avi/…) → analyze_videos(config, [path], **kw)
+  • image file (.jpg/…) → analyze_time_lapse_frames(config, parent_dir, **kw)
+  • directory         → iterdir() non-recursive, dispatches videos + images separately
+  • if create_labeled: create_labeled_video(config, paths, **label_kw)
+```
+
+**Key constraints**:
+- Each path is an independent Celery task; GPU pool serializes them (one at a time on GPU 0).
+- `target_paths` is validated server-side — missing paths return 400 before any task is dispatched.
+- Legacy `target_path` (single string) is auto-promoted to `[target_path]` for backward compat.
