@@ -104,7 +104,7 @@ import { state } from './state.js';
     });
 
     function _vaReset() {
-      if (_vaPlayTimer) { clearInterval(_vaPlayTimer); _vaPlayTimer = null; }
+      if (_vaPlayTimer) { _vaStopPlayback(); }
       _vaMode            = null;
       _vaCurrentFrame    = 0;
       _vaFrameCount      = 0;
@@ -196,6 +196,11 @@ import { state } from './state.js';
         _vaPrefetchFrames([n + 1, n + 2]);
         if (_vaCurationFrameHook) _vaCurationFrameHook(n);
         if (_vaMetadataFrameHook) _vaMetadataFrameHook(n);
+        // Wait for the browser's next paint so the new video frame is composited
+        // before the overlay markers are drawn on top of it.  Without this rAF,
+        // the canvas draw runs in the same compositor tick as the old frame,
+        // producing a one-frame lag where markers appear on the wrong image.
+        await new Promise(resolve => requestAnimationFrame(resolve));
         _vaUpdateOverlay(n);
       } catch (err) {
         vaStatus.textContent = `Failed to load frame: ${err.message}`;
@@ -1146,23 +1151,63 @@ import { state } from './state.js';
     }
 
     // ── Player controls ───────────────────────────────────────
+    //
+    // Strict sequential playback loop — replaces setInterval.
+    //
+    // setInterval would fire at a fixed wall-clock rate regardless of whether
+    // the previous frame finished rendering.  When _vaFrameBusy is true the
+    // tick is silently dropped, causing frame-skips and marker desync.
+    //
+    // Instead: each iteration awaits _vaLoadFrame() (which itself awaits the
+    // image-load AND a requestAnimationFrame paint barrier) before scheduling
+    // the next tick with setTimeout.  This guarantees both the raw image and
+    // its overlay markers are fully composited before the engine advances.
+    //
+    // _vaPlayTimer is used as a boolean sentinel: truthy = playing.
+    // _vaPlayTimeoutId holds the setTimeout handle for cancellation.
+    let _vaPlayTimeoutId = null;
+
+    function _vaStopPlayback() {
+      if (_vaPlayTimeoutId !== null) { clearTimeout(_vaPlayTimeoutId); _vaPlayTimeoutId = null; }
+      _vaPlayTimer = null;
+      vaPlayIcon.classList.remove("hidden");
+      vaPauseIcon.classList.add("hidden");
+    }
+
+    async function _vaPlayLoop() {
+      // Guard: stop if externally cancelled between ticks
+      if (!_vaPlayTimer) return;
+
+      if (_vaCurrentFrame >= _vaFrameCount - 1) {
+        _vaStopPlayback();
+        if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(_vaCurrentFrame);
+        return;
+      }
+
+      const t0 = performance.now();
+      await _vaLoadFrame(_vaCurrentFrame + 1);
+      // If play was stopped while we were awaiting the frame, exit cleanly
+      if (!_vaPlayTimer) return;
+
+      // Pace the next tick: subtract actual render time from the target interval.
+      // Clamped to 0 so a slow frame never makes us "owe" future ticks.
+      const elapsed = performance.now() - t0;
+      const delay   = Math.max(0, Math.round(1000 / _vaFps) - elapsed);
+      _vaPlayTimeoutId = setTimeout(_vaPlayLoop, delay);
+    }
+
     vaBtnPlay.addEventListener("click", () => {
       if (_vaPlayTimer) {
-        clearInterval(_vaPlayTimer); _vaPlayTimer = null;
-        vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
-        // Just paused: show poses for current frame
+        _vaStopPlayback();
+        // Just paused: fetch and display poses for current frame
         if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(_vaCurrentFrame);
       } else {
-        vaPlayIcon.classList.add("hidden"); vaPauseIcon.classList.remove("hidden");
-        _vaPlayTimer = setInterval(async () => {
-          if (_vaCurrentFrame >= _vaFrameCount - 1) {
-            clearInterval(_vaPlayTimer); _vaPlayTimer = null;
-            vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
-            if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(_vaCurrentFrame);
-            return;
-          }
-          await _vaLoadFrame(_vaCurrentFrame + 1);
-        }, 1000 / _vaFps);
+        vaPlayIcon.classList.add("hidden");
+        vaPauseIcon.classList.remove("hidden");
+        _vaPlayTimer = true;   // sentinel: truthy = playing
+        // Pre-warm pose cache before playback so the first N frames render with markers
+        if (_vaOverlayEnabled && _vaH5Path) _vaFetchPosesWindow(_vaCurrentFrame);
+        _vaPlayLoop();
       }
     });
 

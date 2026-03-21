@@ -146,13 +146,8 @@
           <div id="va-frame-spinner" class="fe-frame-spinner hidden"></div>
         </div>
 
-        <!-- Body-part chip selector (visible when overlay is on and H5 is loaded) -->
-        <div id="va-bp-list-wrap" class="hidden" style="margin-bottom:.55rem">
-          <div class="fl-bodypart-list" id="va-bp-chips"></div>
-        </div>
-
-        <!-- Controls row -->
-        <div class="fe-controls">
+        <!-- Controls row — pinned immediately below canvas; min-height prevents jitter from chip changes -->
+        <div class="fe-controls" style="flex:none;min-height:2.4rem;align-items:center">
           <button id="va-btn-play" class="btn-sm fe-ctrl-btn" title="Play / Pause (Space)">
             <svg id="va-play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             <svg id="va-pause-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" class="hidden"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
@@ -179,6 +174,11 @@
 
         <!-- Seek slider -->
         <input type="range" id="va-seek" class="fe-seek" min="0" max="1000" value="0" step="1" />
+
+        <!-- Body-part chip selector (below controls; visible when overlay is on and H5 is loaded) -->
+        <div id="va-bp-list-wrap" class="hidden" style="margin-top:.35rem;margin-bottom:.2rem">
+          <div class="fl-bodypart-list" id="va-bp-chips"></div>
+        </div>
 
         <span id="va-status" class="fe-extract-status"></span>
 

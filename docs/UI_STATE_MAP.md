@@ -6,11 +6,22 @@
 
 ## Viewer Card (VA) — `viewer.js`
 
+### DOM Hierarchy (va-player-section)
+
+```
+va-video-wrap              ← video image + va-overlay-canvas (absolute)
+.fe-controls               ← play/prev/next/skip/counter — PINNED here; flex:none + min-height
+va-seek                    ← seek slider
+va-bp-list-wrap            ← bodypart chip list (BELOW controls; hidden until overlay loaded)
+```
+
+**Anti-jitter rule:** `.fe-controls` has `flex:none;min-height:2.4rem` inline so that the chip list appearing/disappearing below it never shifts the control buttons. The chip list (`va-bp-list-wrap`) is positioned after the seek slider, not between the canvas and controls.
+
 ### Video Player Controls
 
 | DOM ID | JS Module | Event | Backend Endpoint |
 |--------|-----------|-------|-----------------|
-| `va-btn-play` | `viewer.js` | `click` → toggle play/pause interval | (frame fetch loop) |
+| `va-btn-play` | `viewer.js` | `click` → toggle `_vaPlayLoop()` / `_vaStopPlayback()` | (async self-scheduling loop) |
 | `va-btn-prev` | `viewer.js` | `click` → `_vaLoadFrame(n-1)` | `GET /dlc/project/video-frame/<name>/<n>` |
 | `va-btn-next` | `viewer.js` | `click` → `_vaLoadFrame(n+1)` | `GET /dlc/project/video-frame/<name>/<n>` |
 | `va-btn-skip-back` | `viewer.js` | `click` → `_vaLoadFrame(n - skipN)` | (same frame endpoint) |

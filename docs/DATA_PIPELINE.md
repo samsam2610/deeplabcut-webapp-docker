@@ -327,3 +327,43 @@ _dlc_analyze_subprocess(config_path, target_path, params, log_path)
 - Each path is an independent Celery task; GPU pool serializes them (one at a time on GPU 0).
 - `target_paths` is validated server-side — missing paths return 400 before any task is dispatched.
 - Legacy `target_path` (single string) is auto-promoted to `[target_path]` for backward compat.
+
+---
+
+## 13. Viewer Playback Rendering Pipeline (Frame–Marker Synchronization)
+
+**Problem solved:** The old `setInterval`-based loop fired at fixed wall-clock intervals regardless of render completion. When the server was slow, `_vaFrameBusy` silently dropped ticks (frame skips). The overlay markers were also drawn synchronously after `vaFrameImg.onload`, which runs in the same compositor tick as the old frame — markers appeared one frame behind the video (desync flicker).
+
+**Enforced pipeline (viewer.js `_vaLoadFrame` + `_vaPlayLoop`):**
+
+```
+_vaPlayLoop() — self-scheduling async loop (NOT setInterval)
+        │
+        ▼  fetch next frame blob
+        fetch(_vaFrameUrl(n))  →  blob → createObjectURL → vaFrameImg.src
+        │
+        ▼  wait for image decode (browser paints new frame)
+        await new Promise(onload)
+        │
+        ▼  *** PAINT BARRIER ***
+        await new Promise(resolve => requestAnimationFrame(resolve))
+        │  The browser compositor has now committed the new video frame.
+        │  Only AFTER this rAF do we draw markers — guaranteeing both
+        │  the image and its markers are painted in the same visual frame.
+        ▼
+        _vaUpdateOverlay(n)   — draw pose markers from pose cache
+        │
+        ▼  schedule next tick
+        _vaPlayTimeoutId = setTimeout(_vaPlayLoop, max(0, interval - elapsed))
+        │  Elapsed render time is subtracted so fast frames stay on pace;
+        │  slow frames clamp to 0 (next tick fires immediately, no debt).
+```
+
+**Pose cache pre-warm on play start:**
+When `va-btn-play` starts playback, `_vaFetchPosesWindow(currentFrame)` is called immediately to populate the next `_POSE_WINDOW` (30) frames in the background. `_vaUpdateOverlay` then draws from this cache with zero server round-trips per frame.
+
+**Stop path (`_vaStopPlayback`):**
+Cancels `_vaPlayTimeoutId` via `clearTimeout`, resets `_vaPlayTimer` sentinel to `null`, and restores play/pause icons atomically.
+
+**Jitter-free layout guarantee:**
+`.fe-controls` has `flex:none; min-height:2.4rem` and sits immediately below the canvas. The bodypart chip list (`va-bp-list-wrap`) is positioned below the seek slider — chip additions/removals cannot shift the control buttons.
