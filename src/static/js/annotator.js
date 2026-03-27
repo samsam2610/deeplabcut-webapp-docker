@@ -804,6 +804,7 @@ import { state } from './state.js';
         anvClipStatus.className    = "fe-extract-status ok";
         anvClipStatus.title        = data.output_path;
         anvClipLockStart.checked   = false;
+        anvClipPostfix.value       = "";
       } catch (err) {
         anvClipStatus.textContent = `Error: ${err.message}`;
         anvClipStatus.className   = "fe-extract-status err";
