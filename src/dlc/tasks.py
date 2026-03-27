@@ -778,6 +778,15 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
             _analyze_time_lapse   = _dlc_fn("analyze_time_lapse_frames")
             _create_labeled_video = _dlc_fn("create_labeled_video")
 
+            # TF DLC (2.x) does not accept snapshot_index in analyze_videos;
+            # the snapshot must be selected via snapshotindex in config.yaml instead.
+            # PyTorch DLC (3.x) accepts snapshot_index directly.
+            import inspect as _inspect
+            try:
+                _av_accepts_snapshot_index = "snapshot_index" in _inspect.signature(_analyze_videos).parameters
+            except Exception:
+                _av_accepts_snapshot_index = False  # assume TF-safe fallback
+
             p = _Path(target_path)
             create_labeled = params.get("create_labeled", False)
 
@@ -877,11 +886,53 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
             # kw for time-lapse: strip snapshot_index (not accepted); config is patched instead
             tl_kw = {k: v for k, v in kw.items() if k != "snapshot_index"}
 
+            # kw for analyze_videos: for TF DLC strip snapshot_index and patch config instead
+            _cfg_patched_av  = False
+            _cfg_original_av = None
+
+            def _patch_cfg_for_av():
+                nonlocal _cfg_patched_av, _cfg_original_av
+                if _av_accepts_snapshot_index or local_snap_index is None:
+                    return
+                try:
+                    with open(config_path, "r") as _cf:
+                        _cd = _yaml.safe_load(_cf)
+                    _cfg_original_av = _cd.get("snapshotindex")
+                    _cd["snapshotindex"] = local_snap_index
+                    with open(config_path, "w") as _cf:
+                        _yaml.dump(_cd, _cf, default_flow_style=False, allow_unicode=True)
+                    _cfg_patched_av = True
+                except Exception as _pe:
+                    _f.write(f"Warning: could not patch snapshotindex for analyze_videos ({_pe})\n")
+
+            def _restore_cfg_for_av():
+                nonlocal _cfg_patched_av, _cfg_original_av
+                if not _cfg_patched_av:
+                    return
+                try:
+                    with open(config_path, "r") as _cf:
+                        _cd = _yaml.safe_load(_cf)
+                    if _cfg_original_av is None:
+                        _cd.pop("snapshotindex", None)
+                    else:
+                        _cd["snapshotindex"] = _cfg_original_av
+                    with open(config_path, "w") as _cf:
+                        _yaml.dump(_cd, _cf, default_flow_style=False, allow_unicode=True)
+                    _cfg_patched_av = False
+                except Exception as _re:
+                    _f.write(f"Warning: could not restore snapshotindex after analyze_videos ({_re})\n")
+
+            av_kw = kw if _av_accepts_snapshot_index else {k: v for k, v in kw.items() if k != "snapshot_index"}
+
             if p.is_file():
                 ext = p.suffix.lower()
                 if ext in {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"}:
                     _f.write(f"Analyzing video file: {p}\n\n")
-                    _analyze_videos(config_path, [str(p)], **kw)
+                    _patch_cfg_for_av()
+                    try:
+                        _analyze_videos(config_path, [str(p)], **av_kw)
+                    finally:
+                        _restore_cfg_for_av()
                     if create_labeled:
                         _f.write(f"\nCreating labeled video: {p}\n\n")
                         try:
@@ -917,7 +968,11 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
                 if video_files:
                     video_paths = [str(v) for v in sorted(video_files)]
                     _f.write(f"Analyzing {len(video_files)} video(s) in: {p}\n\n")
-                    _analyze_videos(config_path, video_paths, **kw)
+                    _patch_cfg_for_av()
+                    try:
+                        _analyze_videos(config_path, video_paths, **av_kw)
+                    finally:
+                        _restore_cfg_for_av()
                     if create_labeled:
                         _f.write(f"\nCreating labeled video(s)...\n\n")
                         try:
