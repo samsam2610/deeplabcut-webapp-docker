@@ -40,8 +40,15 @@ services:
       - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
       # Live-reload: mount source files so edits take effect without rebuild
       - ./src/app.py:/app/app.py
+      - ./src/celery_app.py:/app/celery_app.py
+      - ./src/tasks.py:/app/tasks.py
+      - ./src/dlc:/app/dlc
+      - ./src/anipose:/app/anipose
+      - ./src/routes:/app/routes
       - ./src/templates:/app/templates
       - ./src/static:/app/static
+      - ./src/dlc_tapnet_tracker.py:/app/dlc_tapnet_tracker.py
+      - ./src/dlc_dataset_curator.py:/app/dlc_dataset_curator.py
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -50,6 +57,7 @@ services:
       - FLASK_APP=app.py
       - FLASK_DEBUG=1
       - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-change-me-in-production}
+      - APP_TOKEN=deeplabcut
     # Use Flask dev server instead of gunicorn for auto-reload
     command: flask run --debug --host=0.0.0.0 --port=5000
     depends_on:
@@ -100,7 +108,10 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    restart: unless-stopped
+    # on-failure: restart only on crash (non-zero exit).
+    # The worker shuts itself down cleanly (exit 0) when the queue is empty,
+    # so Docker will NOT restart it automatically after idle shutdown.
+    restart: on-failure
 
   # ── Celery Worker — TensorFlow (GPU-enabled) ────────────────────
   # Handles: legacy TF DLC projects (tensorflow queue)
@@ -143,7 +154,10 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    restart: unless-stopped
+    # on-failure: restart only on crash (non-zero exit).
+    # The worker shuts itself down cleanly (exit 0) when the queue is empty,
+    # so Docker will NOT restart it automatically after idle shutdown.
+    restart: on-failure
 
 volumes:
   redis-data:

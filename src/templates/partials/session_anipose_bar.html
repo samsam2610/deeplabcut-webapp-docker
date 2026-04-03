@@ -1,0 +1,44 @@
+  <!-- ─── Anipose session bar ───────────────────────────────────── -->
+  <div class="session-bar" id="session-bar">
+    <div class="session-status">
+      <span class="bar-label">Anipose</span>
+      <span class="session-dot" id="session-dot" data-state="none"></span>
+      <div class="session-text">
+        <span id="session-label">No active Anipose session</span>
+        <span class="session-meta" id="session-meta"></span>
+      </div>
+    </div>
+    <div class="session-btns">
+      <label class="btn-sm btn-create" id="btn-create-session" for="session-config-input" title="Upload config.toml to initialise an Anipose session">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Create Anipose Session
+      </label>
+      <input type="file" id="session-config-input" accept=".toml" />
+      <button class="btn-sm btn-server-pick hidden" id="btn-session-from-server" title="Load config.toml from server-side user data volume">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+        From Server
+      </button>
+      <button class="btn-sm btn-danger hidden" id="btn-clear-session" title="Terminate session and remove stored config">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        Clear Anipose Session
+      </button>
+    </div>
+  </div>
+
+  <!-- ─── Anipose server-side config picker ─────────────────────── -->
+  <div id="session-server-picker" class="session-server-picker hidden">
+    <div class="picker-inner">
+      <div class="picker-header">
+        <span class="picker-title">Select config.toml from user data</span>
+        <button class="picker-close-btn" id="picker-close-btn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="picker-breadcrumb" class="picker-breadcrumb"></div>
+      <div class="picker-items">
+        <div id="picker-subdirs" class="picker-subdirs"></div>
+        <div id="picker-configs" class="picker-configs"></div>
+      </div>
+    </div>
+  </div>
+

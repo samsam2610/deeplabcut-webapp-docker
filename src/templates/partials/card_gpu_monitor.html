@@ -1,0 +1,49 @@
+    <section class="card dlc-theme hidden" id="gpu-monitor-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">
+        <h2>GPU &amp; Training Monitor</h2>
+        <button class="btn-sm" id="btn-close-gpu-monitor" title="Close">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+
+      <!-- GPU bars -->
+      <div id="gm-gpu-section">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.55rem">
+          <span style="font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim)">GPU Status</span>
+          <span id="gm-gpu-age" style="font-size:.7rem;color:var(--text-dim)"></span>
+        </div>
+        <div id="gm-gpu-list" style="display:flex;flex-direction:column;gap:.75rem">
+          <span style="font-size:.82rem;color:var(--text-dim)">No GPU data — data updates while training runs.</span>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid var(--border);margin:1rem 0"></div>
+
+      <!-- Queued tasks -->
+      <div id="gm-queue-section">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.55rem">
+          <span style="font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim)">Queued Tasks</span>
+          <button id="gm-cancel-all-btn" class="btn-sm btn-danger hidden" style="padding:.2rem .55rem;font-size:.72rem">Cancel all</button>
+        </div>
+        <div id="gm-queue-list" style="display:flex;flex-direction:column;gap:.4rem">
+          <span style="font-size:.82rem;color:var(--text-dim)">No queued tasks.</span>
+        </div>
+      </div>
+
+      <div style="border-top:1px solid var(--border);margin:1rem 0"></div>
+
+      <!-- Training jobs -->
+      <div id="gm-jobs-section">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.55rem">
+          <span style="font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim)">Training Jobs</span>
+          <div style="display:flex;gap:.4rem">
+            <button id="gm-clear-btn" class="btn-sm btn-danger" style="padding:.2rem .55rem;font-size:.72rem">Clear finished</button>
+            <button id="gm-refresh-btn" class="btn-sm" style="padding:.2rem .55rem;font-size:.72rem">Refresh</button>
+          </div>
+        </div>
+        <div id="gm-jobs-list" style="display:flex;flex-direction:column;gap:.4rem">
+          <span style="font-size:.82rem;color:var(--text-dim)">No training jobs found.</span>
+        </div>
+      </div>
+    </section>

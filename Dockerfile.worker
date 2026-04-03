@@ -77,10 +77,35 @@ RUN python -m pip install --no-cache-dir \
     "celery[redis]==5.3.*" \
     "redis>=5.0,<6.0"
 
+# ==========================================
+# 5. TAPNet / TAPIR dependencies
+# ==========================================
+# JAX with CUDA 12 support (compatible with CUDA 13.x via backward compat).
+# Install before tapnet to ensure jax[cuda12] resolves correctly.
+RUN python -m pip install --no-cache-dir \
+    "jax[cuda12_pip]" \
+    -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+# Core TAPNet scientific stack
+RUN python -m pip install --no-cache-dir \
+    "chex>=0.1.7" \
+    "optax>=0.1.7" \
+    "dm-haiku>=0.0.11" \
+    "einops>=0.6.1" \
+    "mediapy>=1.1.9" \
+    "absl-py>=1.4.0" \
+    "tensorflow-cpu>=2.13.0"
+
+# TAPNet package from Google DeepMind (source install, no heavy build deps)
+RUN python -m pip install --no-cache-dir \
+    "git+https://github.com/google-deepmind/tapnet.git"
+
 # ---------- Verification ----------
 RUN python -c "import deeplabcut; print('DLC Version:', deeplabcut.__version__)"
 RUN python -c "import anipose; print('Anipose installed successfully')"
 RUN python -c "import celery; print('Celery Version:', celery.__version__)"
+RUN python -c "import jax; print('JAX Version:', jax.__version__)" || echo "[WARN] JAX not importable at build time (needs GPU runtime)"
+RUN python -c "from tapnet.models import tapir_model; print('TAPNet imported successfully')" || echo "[WARN] TAPNet not importable at build time"
 
 # ---------- Application Code ----------
 WORKDIR /app

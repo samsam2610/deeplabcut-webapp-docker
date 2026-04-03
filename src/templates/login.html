@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DLC Webapp — Login</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 12px;
+      padding: 2.5rem 2rem;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+      color: #e94560;
+    }
+    .subtitle {
+      font-size: 0.85rem;
+      color: #888;
+      margin-bottom: 1.75rem;
+    }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: #aaa;
+      margin-bottom: 0.4rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 0.65rem 0.85rem;
+      background: #0f3460;
+      border: 1px solid #1a4a7a;
+      border-radius: 6px;
+      color: #e0e0e0;
+      font-size: 0.9rem;
+      font-family: monospace;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus {
+      border-color: #e94560;
+    }
+    .error {
+      margin-top: 0.6rem;
+      font-size: 0.82rem;
+      color: #e94560;
+    }
+    button {
+      display: block;
+      width: 100%;
+      margin-top: 1.25rem;
+      padding: 0.7rem;
+      background: #e94560;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover { background: #c73652; }
+
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>DeepLabCut Webapp</h1>
+    <p class="subtitle">Authentication required</p>
+
+    <form method="post">
+      <label for="token">Access token</label>
+      <input
+        type="text"
+        id="token"
+        name="token"
+        autofocus
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="paste your token here"
+      >
+      {% if error %}
+        <p class="error">{{ error }}</p>
+      {% endif %}
+      <button type="submit">Authenticate</button>
+    </form>
+
+  </div>
+</body>
+</html>

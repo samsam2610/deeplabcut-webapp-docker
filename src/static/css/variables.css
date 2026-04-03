@@ -1,0 +1,27 @@
+/* ─────────────────────────────────────────────────────────────
+   Anipose Pipeline — Dark Industrial UI
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  --bg:         #0c0d10;
+  --surface:    #15161c;
+  --surface-2:  #1c1d25;
+  --border:     #2a2b36;
+  --border-lit: #3d3e4e;
+  --text:       #e0e1ec;
+  --text-dim:   #7c7d92;
+  --accent:     #6ee7b7;
+  --accent-dim: #2c6e54;
+  --danger:     #f87171;
+  --radius:     10px;
+  --font:       'DM Sans', system-ui, sans-serif;
+  --mono:       'JetBrains Mono', monospace;
+}
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html {
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+

@@ -1,0 +1,304 @@
+/* ── Session bar ─────────────────────────────────────────────── */
+.session-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .55rem 2rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: .82rem;
+  gap: 1rem;
+}
+
+.session-status {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  min-width: 0;
+}
+
+.session-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background .3s;
+}
+
+.session-dot[data-state="none"]         { background: var(--border-lit); }
+.session-dot[data-state="initializing"] { background: #fbbf24; animation: session-pulse 1.2s ease-in-out infinite; }
+.session-dot[data-state="ready"]        { background: var(--accent); }
+.session-dot[data-state="error"]        { background: var(--danger); }
+
+@keyframes session-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: .35; }
+}
+
+.session-text {
+  display: flex;
+  align-items: baseline;
+  gap: .55rem;
+  min-width: 0;
+}
+
+.bar-label {
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  opacity: .5;
+  flex-shrink: 0;
+  min-width: 3.2rem;
+}
+
+#session-label, #dlc-label {
+  color: var(--text-dim);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.session-meta {
+  font-family: var(--mono);
+  font-size: .72rem;
+  color: var(--text-dim);
+  opacity: .6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-btns {
+  display: flex;
+  gap: .45rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Pin both primary session-create buttons to the same width so
+   the "From server" button aligns vertically across both bars. */
+#btn-create-session,
+#btn-dlc-load {
+  min-width: 11rem;
+  justify-content: center;
+}
+
+.btn-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-family: var(--font);
+  font-size: .78rem;
+  font-weight: 500;
+  padding: .32rem .7rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.btn-sm:hover {
+  border-color: var(--border-lit);
+  background: var(--border);
+}
+
+.btn-sm.btn-create {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.btn-sm.btn-create:hover {
+  background: rgba(110, 231, 183, .08);
+}
+
+.btn-sm.btn-danger {
+  border-color: rgba(248, 113, 113, .3);
+  color: var(--danger);
+}
+
+.btn-sm.btn-danger:hover {
+  background: rgba(248, 113, 113, .08);
+}
+
+.btn-sm.btn-flush-cache {
+  border-color: rgba(251, 191, 36, .3);
+  color: #fbbf24;
+}
+
+.btn-sm.btn-flush-cache:hover {
+  background: rgba(251, 191, 36, .08);
+}
+
+.flush-cache-status {
+  font-family: var(--mono);
+  font-size: .72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.flush-cache-status.ok  { color: var(--accent); }
+.flush-cache-status.err { color: var(--danger); }
+
+#session-config-input { display: none !important; }
+
+/* ── Layout ──────────────────────────────────────────────────── */
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 3rem 1.5rem 4rem;
+}
+
+.main-stack {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 560px;
+  gap: 1.5rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2.2rem 2.4rem 2.6rem;
+  width: 100%;
+  max-width: 560px;
+  animation: cardIn .45s ease-out both;
+}
+
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.card h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -.03em;
+  margin-bottom: .35rem;
+}
+
+.card h2 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+.subtitle {
+  color: var(--text-dim);
+  font-size: .92rem;
+  line-height: 1.55;
+  margin-bottom: 1.8rem;
+}
+
+/* ── Form fields ─────────────────────────────────────────────── */
+.field {
+  margin-bottom: 1.4rem;
+}
+
+.field label {
+  display: block;
+  font-size: .78rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+  margin-bottom: .5rem;
+}
+
+/* Select */
+.select-wrap {
+  position: relative;
+}
+
+.select-wrap select {
+  appearance: none;
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: .92rem;
+  padding: .7rem 2.4rem .7rem 1rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color .2s;
+}
+
+.select-wrap select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.select-wrap .chevron {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+/* File drop zones */
+.file-drop {
+  position: relative;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem 1rem;
+  text-align: center;
+  transition: border-color .2s, background .2s;
+  cursor: pointer;
+}
+
+.file-drop:hover,
+.file-drop.dragover {
+  border-color: var(--accent);
+  background: rgba(110, 231, 183, .04);
+}
+
+.file-drop input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.file-drop-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .5rem;
+  pointer-events: none;
+  color: var(--text-dim);
+}
+
+.file-drop-inner svg {
+  opacity: .5;
+}
+
+.file-label em {
+  color: var(--accent);
+  font-style: normal;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.file-name {
+  font-family: var(--mono);
+  font-size: .78rem;
+  color: var(--accent);
+  word-break: break-all;
+}
+
+.file-drop.has-file {
+  border-color: var(--accent-dim);
+  background: rgba(110, 231, 183, .03);
+}
+
