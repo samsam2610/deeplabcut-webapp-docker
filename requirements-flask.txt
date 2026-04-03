@@ -7,3 +7,5 @@ pyyaml
 numpy
 pandas
 opencv-python-headless
+tables
+psutil

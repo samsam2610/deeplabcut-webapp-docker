@@ -521,8 +521,9 @@
 
   const dlcProjectCard      = document.getElementById("dlc-project-card");
   const dlcFolderNav        = document.getElementById("dlc-folder-nav");
-  const dlcFolderBreadcrumb = document.getElementById("dlc-folder-breadcrumb");
-  const dlcFolderSubfolders = document.getElementById("dlc-folder-subfolders");
+  const dlcBrowseBreadcrumb = document.getElementById("dlc-browse-breadcrumb");
+  const dlcBrowseUp         = document.getElementById("dlc-browse-up");
+  const dlcFolderList       = document.getElementById("dlc-folder-list");
   const dlcBrowseBtn        = document.getElementById("dlc-browse-btn");
   const dlcBrowseInfo       = document.getElementById("dlc-browse-info");
   const dlcSelectBtn        = document.getElementById("dlc-select-btn");
@@ -603,65 +604,52 @@
   // ── Folder navigator ──────────────────────────────────────────
   async function _refreshDlcFolderNav(path) {
     _dlcBrowsePath = path;
-
-    // Breadcrumb
-    const baseName = (_userDataDir || path).split("/").filter(Boolean).pop() || "user-data";
-    const base     = _userDataDir || path;
-    const rel      = path.substring(base.length).split("/").filter(Boolean);
-    let crumbHTML  = `<button class="userdata-bc-seg" data-path="${base}">${baseName}</button>`;
-    let cumPath    = base;
-    rel.forEach((part, i) => {
-      cumPath += "/" + part;
-      const isLast = (i === rel.length - 1);
-      crumbHTML += `<span class="userdata-bc-sep">›</span>`;
-      crumbHTML += `<button class="userdata-bc-seg${isLast ? " active" : ""}" data-path="${cumPath}">${part}</button>`;
-    });
-    dlcFolderBreadcrumb.innerHTML = crumbHTML;
-    dlcFolderBreadcrumb.querySelectorAll(".userdata-bc-seg").forEach(seg =>
-      seg.addEventListener("click", () => _refreshDlcFolderNav(seg.dataset.path)));
-
-    dlcFolderSubfolders.innerHTML = '<span class="userdata-no-folders">Loading…</span>';
-
+    dlcBrowseBreadcrumb.value = path;
+    dlcFolderList.innerHTML = '<p class="explorer-empty">Loading…</p>';
     try {
-      const res  = await fetch(`/fs/list?path=${encodeURIComponent(path)}`);
+      const res  = await fetch(`/fs/ls?path=${encodeURIComponent(path)}`);
       const data = await res.json();
-
-      dlcFolderSubfolders.innerHTML = "";
-
-      // ".." chip
-      if (path !== _userDataDir) {
-        const upBtn = document.createElement("button");
-        upBtn.className   = "userdata-subfolder-chip up";
-        upBtn.textContent = "..";
-        upBtn.title       = "Go up one level";
-        upBtn.addEventListener("click", () => {
-          const parent = path.split("/").slice(0, -1).join("/") || "/";
-          _refreshDlcFolderNav(parent);
-        });
-        dlcFolderSubfolders.appendChild(upBtn);
+      if (data.error) {
+        dlcFolderList.innerHTML = `<span class="userdata-no-folders">${data.error}</span>`;
+        return;
       }
-
-      const subs = res.ok ? (data.projects || []) : [];
-      if (subs.length === 0 && dlcFolderSubfolders.children.length === 0) {
+      dlcFolderList.innerHTML = "";
+      const dirs = data.entries.filter(e => e.type === "dir");
+      if (!dirs.length) {
         const msg = document.createElement("span");
         msg.className   = "userdata-no-folders";
         msg.textContent = "No subfolders";
-        dlcFolderSubfolders.appendChild(msg);
+        dlcFolderList.appendChild(msg);
       } else {
-        subs.forEach(name => {
-          const chip = document.createElement("button");
-          chip.className   = "userdata-subfolder-chip";
-          chip.textContent = name;
-          chip.title       = `Navigate into ${name}/`;
-          chip.addEventListener("click", () => _refreshDlcFolderNav(path + "/" + name));
-          dlcFolderSubfolders.appendChild(chip);
+        dirs.forEach(entry => {
+          const row = document.createElement("div");
+          row.className = "fe-video-item";
+          row.style.cursor = "pointer";
+          const fullPath = data.path.replace(/\/+$/, "") + "/" + entry.name;
+          row.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${entry.name}/</span>`;
+          row.addEventListener("click", () => _refreshDlcFolderNav(fullPath));
+          dlcFolderList.appendChild(row);
         });
       }
     } catch (err) {
       console.error("DLC folder nav error:", err);
-      dlcFolderSubfolders.innerHTML = '<span class="userdata-no-folders">Failed to load</span>';
+      dlcFolderList.innerHTML = '<span class="userdata-no-folders">Failed to load</span>';
     }
   }
+
+  dlcBrowseUp?.addEventListener("click", () => {
+    if (!_dlcBrowsePath) return;
+    const parent = _dlcBrowsePath.split("/").slice(0, -1).join("/") || "/";
+    if (parent !== _dlcBrowsePath) _refreshDlcFolderNav(parent);
+  });
+
+  dlcBrowseBreadcrumb?.addEventListener("keydown", e => {
+    if (e.key === "Enter")  { e.preventDefault(); _refreshDlcFolderNav(dlcBrowseBreadcrumb.value.trim()); }
+    if (e.key === "Escape") { dlcBrowseBreadcrumb.value = _dlcBrowsePath || ""; dlcBrowseBreadcrumb.blur(); }
+  });
+  dlcBrowseBreadcrumb?.addEventListener("paste", e => {
+    setTimeout(() => _refreshDlcFolderNav(dlcBrowseBreadcrumb.value.trim()), 0);
+  });
 
   // ── Select current folder as DLC project ────────────────────
   dlcSelectBtn.addEventListener("click", async () => {
@@ -1569,9 +1557,11 @@
     const feUploadSec     = document.getElementById("fe-upload-section");
     const feFileInput     = document.getElementById("fe-video-file-input");
     const feUploadStatus  = document.getElementById("fe-upload-status");
-    const feServerSec     = document.getElementById("fe-server-section");
-    const feServerBrowser = document.getElementById("fe-server-browser");
-    const feServerStatus  = document.getElementById("fe-server-status");
+    const feServerSec        = document.getElementById("fe-server-section");
+    const feServerBreadcrumb = document.getElementById("fe-server-breadcrumb");
+    const feServerUp         = document.getElementById("fe-server-up");
+    const feServerBrowser    = document.getElementById("fe-server-browser");
+    const feServerStatus     = document.getElementById("fe-server-status");
     const fePlayerSec     = document.getElementById("fe-player-section");
     const feCanvas        = document.getElementById("fe-canvas");
     const feBtnPlay       = document.getElementById("fe-btn-play");
@@ -1579,12 +1569,18 @@
     const fePauseIcon     = document.getElementById("fe-pause-icon");
     const feBtnPrev       = document.getElementById("fe-btn-prev");
     const feBtnNext       = document.getElementById("fe-btn-next");
+    const feBtnSkipBack   = document.getElementById("fe-btn-skip-back");
+    const feBtnSkipFwd    = document.getElementById("fe-btn-skip-fwd");
+    const feSkipN         = document.getElementById("fe-skip-n");
     const feFrameCounter  = document.getElementById("fe-frame-counter");
     const feFrameJump     = document.getElementById("fe-frame-jump");
     const feTimeDisplay   = document.getElementById("fe-time-display");
     const feSeek          = document.getElementById("fe-seek");
     const feBtnExtract    = document.getElementById("fe-btn-extract");
     const feBtnStopExtract = document.getElementById("fe-btn-stop-extract");
+    const feBatchCountInput = document.getElementById("fe-batch-count");
+    const feBatchStepInput  = document.getElementById("fe-batch-step");
+    const feBtnBatchExtract = document.getElementById("fe-btn-batch-extract");
     const feExtractDialog = document.getElementById("fe-extract-dialog");
     const feDialogMsg     = document.getElementById("fe-dialog-msg");
     const feDialogConfirm = document.getElementById("fe-dialog-confirm");
@@ -1637,6 +1633,7 @@
     let _feNoteSegIdx      = 0;
     let _feReRenderStatus = null;
     let _feReRenderNote   = null;
+    let _feBrowsePath   = null;    // current directory in the server browser
     let _feCurrentVideo    = null;
     let _feCurrentVideoExt = false;  // true when video is an external abs path
     let _feExtracted    = 0;
@@ -1818,6 +1815,8 @@
     function _feIsVideo(name) { return _feVideoExts.has(name.slice(name.lastIndexOf(".")).toLowerCase()); }
 
     async function _feBrowseServerDir(dirPath) {
+      _feBrowsePath = dirPath;
+      if (feServerBreadcrumb) feServerBreadcrumb.value = dirPath;
       feServerBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
       try {
         const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
@@ -1827,23 +1826,6 @@
           return;
         }
         feServerBrowser.innerHTML = "";
-
-        // Header row: current path + Up button
-        const header = document.createElement("div");
-        header.style.cssText = "display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem;flex-wrap:wrap";
-        const pathLabel = document.createElement("span");
-        pathLabel.style.cssText = "font-size:.7rem;color:var(--text-dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono)";
-        pathLabel.textContent = data.path;
-        header.appendChild(pathLabel);
-        if (data.parent) {
-          const upBtn = document.createElement("button");
-          upBtn.className = "btn-sm";
-          upBtn.style.cssText = "padding:.12rem .45rem;font-size:.7rem;flex-shrink:0";
-          upBtn.textContent = "↑ Up";
-          upBtn.addEventListener("click", e => { e.stopPropagation(); _feBrowseServerDir(data.parent); });
-          header.appendChild(upBtn);
-        }
-        feServerBrowser.appendChild(header);
 
         const visible = data.entries.filter(e => e.type === "dir" || (e.type === "file" && _feIsVideo(e.name)));
         if (!visible.length) {
@@ -1890,6 +1872,20 @@
         feServerBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">Error: ${err.message}</span>`;
       }
     }
+
+    feServerUp?.addEventListener("click", () => {
+      if (!_feBrowsePath) return;
+      const parent = _feBrowsePath.split("/").slice(0, -1).join("/") || "/";
+      if (parent !== _feBrowsePath) _feBrowseServerDir(parent);
+    });
+
+    feServerBreadcrumb?.addEventListener("keydown", e => {
+      if (e.key === "Enter")  { e.preventDefault(); _feBrowseServerDir(feServerBreadcrumb.value.trim()); }
+      if (e.key === "Escape") { feServerBreadcrumb.value = _feBrowsePath || ""; feServerBreadcrumb.blur(); }
+    });
+    feServerBreadcrumb?.addEventListener("paste", e => {
+      setTimeout(() => _feBrowseServerDir(feServerBreadcrumb.value.trim()), 0);
+    });
 
     // ── File upload ───────────────────────────────────────────────
     feFileInput.addEventListener("change", async () => {
@@ -2010,6 +2006,9 @@
 
     feBtnPrev.addEventListener("click", () => _feLoadFrame(_feCurrentFrame - 1));
     feBtnNext.addEventListener("click", () => _feLoadFrame(_feCurrentFrame + 1));
+    const _feSkipN = () => Math.max(1, parseInt(feSkipN?.value || "10", 10));
+    if (feBtnSkipBack) feBtnSkipBack.addEventListener("click", () => _feLoadFrame(_feCurrentFrame - _feSkipN()));
+    if (feBtnSkipFwd)  feBtnSkipFwd.addEventListener("click",  () => _feLoadFrame(_feCurrentFrame + _feSkipN()));
 
     feSeek.addEventListener("mousedown",  () => { _feSeekDragging = true; });
     feSeek.addEventListener("touchstart", () => { _feSeekDragging = true; });
@@ -2034,10 +2033,11 @@
       }
     }
 
-    async function _feSaveFrames(count) {
+    async function _feSaveFrames(count, step = 1) {
       if (!_feCurrentVideo) return;
       _feStopExtraction = false;
       feBtnExtract.disabled = true;
+      feBtnBatchExtract.disabled = true;
       if (count > 1) {
         feBtnStopExtract.classList.remove("hidden");
         feExtractStatus.textContent = `Saving ${count} frames…`;
@@ -2048,7 +2048,7 @@
       try {
         for (let i = 0; i < count; i++) {
           if (_feStopExtraction) break;
-          if (i > 0) await _feLoadFrame(_feCurrentFrame + 1);
+          if (i > 0) await _feLoadFrame(_feCurrentFrame + step);
           if (_feStopExtraction) break;
           const base64 = await _feCaptureCurrent();
           if (!base64) break;
@@ -2084,6 +2084,7 @@
         feExtractStatus.className = "fe-extract-status err";
       } finally {
         feBtnExtract.disabled = false;
+        feBtnBatchExtract.disabled = false;
         feBtnStopExtract.classList.add("hidden");
         feBtnStopExtract.disabled = false;
         _feStopExtraction = false;
@@ -2251,6 +2252,21 @@
 
     feBtnExtract.addEventListener("click", () => _feSaveFrames(1));
 
+    feBtnBatchExtract.addEventListener("click", () => {
+      if (!_feCurrentVideo) return;
+      const requested = Math.max(2, parseInt(feBatchCountInput.value) || 10);
+      const step      = Math.max(1, parseInt(feBatchStepInput.value)  || 1);
+      // max frames reachable from current position with this step
+      const maxCount  = Math.floor((_feFrameCount - 1 - _feCurrentFrame) / step) + 1;
+      const count     = Math.min(requested, maxCount);
+      if (count < 1) return;
+      if (count < requested) {
+        feExtractStatus.textContent = `Near end — extracting ${count} frame${count !== 1 ? "s" : ""} (clamped from ${requested})`;
+        feExtractStatus.className = "fe-extract-status";
+      }
+      _feSaveFrames(count, step);
+    });
+
     feBtnStopExtract.addEventListener("click", () => { _feStopExtraction = true; feBtnStopExtract.disabled = true; });
 
     // ── Window-extract confirmation dialog ───────────────────────
@@ -2332,6 +2348,8 @@
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
 
       if (e.key === " ") { e.preventDefault(); feBtnPlay.click(); return; }
+      if (e.ctrlKey && e.key === "ArrowLeft")  { e.preventDefault(); _feLoadFrame(_feCurrentFrame - _feSkipN()); return; }
+      if (e.ctrlKey && e.key === "ArrowRight") { e.preventDefault(); _feLoadFrame(_feCurrentFrame + _feSkipN()); return; }
       if (e.key === "ArrowLeft")  { e.preventDefault(); feBtnPrev.click(); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); feBtnNext.click(); return; }
 
@@ -2383,6 +2401,31 @@
     const flMarkerSizeInput = document.getElementById("fl-marker-size");
     const flMarkerSizeVal   = document.getElementById("fl-marker-size-val");
     const flShowNamesInput  = document.getElementById("fl-show-names");
+
+    // ── TAPNet propagation elements ──────────────────────────────
+    const flTapCheckbox      = document.getElementById("fl-tap-checkbox");
+    const flTapOpts          = document.getElementById("fl-tap-opts");
+    const flTapCkpt          = document.getElementById("fl-tap-ckpt");
+    const flTapAnchor        = document.getElementById("fl-tap-anchor");
+    const flTapCheckBtn      = document.getElementById("fl-tap-check-btn");
+    const flTapCheckStatus   = document.getElementById("fl-tap-check-status");
+    const flTapSeqInfo       = document.getElementById("fl-tap-seq-info");
+    const flTapOverwrite     = document.getElementById("fl-tap-overwrite");
+    const flTapRunBtn        = document.getElementById("fl-tap-run-btn");
+    const flTapStopBtn       = document.getElementById("fl-tap-stop-btn");
+    const flTapRerunBtn      = document.getElementById("fl-tap-rerun-btn");
+    const flTapConfirmedCount= document.getElementById("fl-tap-confirmed-count");
+    const flTapStatus        = document.getElementById("fl-tap-status");
+    const flTapProgress      = document.getElementById("fl-tap-progress");
+    const flTapTaskId        = document.getElementById("fl-tap-task-id");
+    const flTapProgressBar   = document.getElementById("fl-tap-progress-bar");
+    const flTapProgressStage = document.getElementById("fl-tap-progress-stage");
+    const flTapProgressPct   = document.getElementById("fl-tap-progress-pct");
+    const flTapLogOutput     = document.getElementById("fl-tap-log-output");
+    // Per-frame confirm elements
+    const flTapFrameBadge    = document.getElementById("fl-tap-frame-badge");
+    const flTapConfirmBtn    = document.getElementById("fl-tap-confirm-btn");
+    const flTapConfirmLabel  = document.getElementById("fl-tap-confirm-label");
 
     // ── Machine-labeling elements ────────────────────────────────
     const flMlCheckbox     = document.getElementById("fl-ml-checkbox");
@@ -2442,22 +2485,26 @@
 
     // ── Machine labeling: load snapshots ────────────────────────
     async function _flMlLoadSnapshots() {
-      const shuffle = flMlShuffle.value || "1";
       try {
-        const res  = await fetch(`/dlc/project/snapshots?shuffle=${encodeURIComponent(shuffle)}`);
+        // No shuffle filter — show all shuffles so models from any shuffle are visible.
+        // The backend will auto-correct the shuffle when snapshot_path is provided.
+        const res  = await fetch("/dlc/project/snapshots");
         const data = await res.json();
         if (data.error) return;
         flMlSnapshot.innerHTML = "";
         const latestOpt = document.createElement("option");
-        latestOpt.value = "-1";
-        latestOpt.textContent = data.latest_label
-          ? `Latest — ${data.latest_label}${data.latest_iteration != null ? "  ·  iter " + data.latest_iteration.toLocaleString() : ""}`
-          : "Latest (from config)";
+        // Use the actual latest snapshot path (not -1) so shuffle is auto-derived
+        latestOpt.value = data.latest_rel_path || "-1";
+        const latestSuffix = data.latest_label
+          ? ` — ${data.latest_label}${data.latest_iteration != null ? "  ·  iter " + data.latest_iteration.toLocaleString() : ""}${data.latest_shuffle != null ? "  ·  sh" + data.latest_shuffle : ""}`
+          : "";
+        latestOpt.textContent = `Latest${latestSuffix}`;
         flMlSnapshot.appendChild(latestOpt);
         (data.snapshots || []).forEach(s => {
           const opt = document.createElement("option");
           opt.value = s.rel_path;
-          opt.textContent = `${s.label}${s.iteration != null ? "  ·  iter " + s.iteration.toLocaleString() : ""}`;
+          const shuffleSuffix = s.shuffle != null ? `  ·  sh${s.shuffle}` : "";
+          opt.textContent = `${s.label}${s.iteration != null ? "  ·  iter " + s.iteration.toLocaleString() : ""}${shuffleSuffix}`;
           flMlSnapshot.appendChild(opt);
         });
       } catch (err) {
@@ -2636,6 +2683,292 @@
       }
     });
 
+    // ══════════════════════════════════════════════════════════════
+    // TAPNet propagation
+    // ══════════════════════════════════════════════════════════════
+    let _flTapPollTimer   = null;
+    let _flTapActiveTask  = null;
+    let _flTapConfirmed   = new Set();   // confirmed anchor frame names
+    let _flTapnetFrames   = new Set();   // frames labeled by TAPNet
+
+    // Load confirmed anchors + tapnet frames from server for current stem
+    async function _flTapLoadSidecars() {
+      if (!_flVideoStem) return;
+      try {
+        const res  = await fetch(`/dlc/project/tapnet-confirmed?video_stem=${encodeURIComponent(_flVideoStem)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        _flTapConfirmed  = new Set(data.confirmed     || []);
+        _flTapnetFrames  = new Set(data.tapnet_frames || []);
+      } catch (_) { /* non-critical */ }
+      _flTapUpdateFrameStatus();
+      _flTapUpdateConfirmedCount();
+    }
+
+    // Update the per-frame badge + confirm button for the current frame
+    function _flTapUpdateFrameStatus() {
+      const fname = _flFrames[_flFrameIdx];
+      if (!fname || !flTapCheckbox.checked) {
+        flTapFrameBadge.classList.add("hidden");
+        flTapConfirmBtn.classList.add("hidden");
+        return;
+      }
+      flTapConfirmBtn.classList.remove("hidden");
+      const isConfirmed = _flTapConfirmed.has(fname);
+      const isTapnet    = _flTapnetFrames.has(fname);
+      flTapConfirmLabel.textContent = isConfirmed ? "✓ Confirmed anchor" : "Confirm as anchor";
+      flTapConfirmBtn.style.background = isConfirmed ? "var(--accent)" : "";
+      flTapConfirmBtn.style.color      = isConfirmed ? "#fff" : "";
+      if (isConfirmed) {
+        flTapFrameBadge.textContent = "Anchor";
+        flTapFrameBadge.style.color = "var(--accent)";
+        flTapFrameBadge.style.borderColor = "var(--accent)";
+        flTapFrameBadge.classList.remove("hidden");
+      } else if (isTapnet) {
+        flTapFrameBadge.textContent = "TAPNet";
+        flTapFrameBadge.style.color = "var(--text-dim)";
+        flTapFrameBadge.style.borderColor = "var(--border)";
+        flTapFrameBadge.classList.remove("hidden");
+      } else {
+        flTapFrameBadge.classList.add("hidden");
+      }
+    }
+
+    // Update the confirmed-count display and rerun button visibility
+    function _flTapUpdateConfirmedCount() {
+      const n = _flTapConfirmed.size;
+      if (n > 0 && flTapCheckbox.checked) {
+        flTapConfirmedCount.textContent = `${n} confirmed anchor${n === 1 ? "" : "s"}`;
+        flTapConfirmedCount.classList.remove("hidden");
+        flTapRerunBtn.classList.remove("hidden");
+      } else {
+        flTapConfirmedCount.classList.add("hidden");
+        flTapRerunBtn.classList.add("hidden");
+      }
+    }
+
+    flTapCheckbox.addEventListener("change", () => {
+      flTapOpts.classList.toggle("hidden", !flTapCheckbox.checked);
+      _flTapUpdateFrameStatus();
+      _flTapUpdateConfirmedCount();
+      if (flTapCheckbox.checked && _flVideoStem) _flTapLoadSidecars();
+    });
+
+    // Confirm / unconfirm current frame as anchor
+    flTapConfirmBtn.addEventListener("click", async () => {
+      const fname = _flFrames[_flFrameIdx];
+      if (!fname || !_flVideoStem) return;
+      try {
+        const res  = await fetch("/dlc/project/tapnet-confirm-frame", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ video_stem: _flVideoStem, frame_name: fname }),
+        });
+        const data = await res.json();
+        if (data.error) { console.error("confirm-frame:", data.error); return; }
+        if (data.confirmed) _flTapConfirmed.add(fname);
+        else                _flTapConfirmed.delete(fname);
+        _flTapUpdateFrameStatus();
+        _flTapUpdateConfirmedCount();
+      } catch (err) {
+        console.error("confirm-frame error:", err);
+      }
+    });
+
+    // Re-run with confirmed anchors
+    flTapRerunBtn.addEventListener("click", async () => {
+      if (!_flVideoStem) {
+        flTapStatus.textContent = "Select a labeled-data folder first.";
+        flTapStatus.className   = "fe-extract-status err";
+        return;
+      }
+      const ckpt = flTapCkpt.value.trim();
+      if (!ckpt) {
+        flTapStatus.textContent = "Enter the checkpoint path.";
+        flTapStatus.className   = "fe-extract-status err";
+        return;
+      }
+      flTapStatus.textContent = "";
+      flTapStatus.className   = "fe-extract-status";
+      try {
+        const res  = await fetch("/dlc/project/tapnet-propagate-multi", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            video_stem:            _flVideoStem,
+            tapnet_checkpoint_path: ckpt,
+            gpu_index:             0,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          flTapStatus.textContent = data.error || "Failed to start multi-anchor TAPNet.";
+          flTapStatus.className   = "fe-extract-status err";
+          return;
+        }
+        _flTapActiveTask = data.task_id;
+        _flTapStartPolling(data.task_id);
+      } catch (err) {
+        flTapStatus.textContent = "Network error: " + err.message;
+        flTapStatus.className   = "fe-extract-status err";
+      }
+    });
+
+    function _flTapSetRunning(running) {
+      flTapRunBtn.classList.toggle("hidden",  running);
+      flTapStopBtn.classList.toggle("hidden", !running);
+    }
+
+    flTapCheckBtn.addEventListener("click", async () => {
+      if (!_flVideoStem) {
+        flTapCheckStatus.textContent = "Select a labeled-data folder first.";
+        flTapCheckStatus.className   = "fe-extract-status err";
+        return;
+      }
+      flTapCheckStatus.textContent = "Checking…";
+      flTapCheckStatus.className   = "fe-extract-status";
+      flTapSeqInfo.classList.add("hidden");
+      try {
+        const res  = await fetch(`/dlc/project/tapnet-check?video_stem=${encodeURIComponent(_flVideoStem)}`);
+        const data = await res.json();
+        if (!res.ok) {
+          flTapCheckStatus.textContent = data.error || "Check failed.";
+          flTapCheckStatus.className   = "fe-extract-status err";
+          return;
+        }
+        const n = data.propagatable_count;
+        flTapCheckStatus.textContent = `${n} propagatable sequence(s) found`;
+        flTapCheckStatus.className   = "fe-extract-status " + (n > 0 ? "ok" : "");
+        if (data.sequences && data.sequences.length > 0) {
+          flTapSeqInfo.innerHTML = data.sequences.map(s => {
+            const badge = s.propagatable
+              ? `<span style="color:var(--accent)">✓ anchor: ${s.anchor}</span>`
+              : `<span style="color:var(--text-dim)">✗ no labeled anchor</span>`;
+            return `<div>${s.first_frame} → ${s.last_frame} &nbsp;(${s.frame_count} frames) &nbsp;${badge}</div>`;
+          }).join("");
+          flTapSeqInfo.classList.remove("hidden");
+        }
+      } catch (err) {
+        flTapCheckStatus.textContent = "Network error: " + err.message;
+        flTapCheckStatus.className   = "fe-extract-status err";
+      }
+    });
+
+    flTapRunBtn.addEventListener("click", async () => {
+      if (!_flVideoStem) {
+        flTapStatus.textContent = "Select a labeled-data folder first.";
+        flTapStatus.className   = "fe-extract-status err";
+        return;
+      }
+      const ckpt = flTapCkpt.value.trim();
+      if (!ckpt) {
+        flTapStatus.textContent = "Enter the checkpoint path.";
+        flTapStatus.className   = "fe-extract-status err";
+        return;
+      }
+      flTapStatus.textContent = "";
+      flTapStatus.className   = "fe-extract-status";
+      try {
+        const res  = await fetch("/dlc/project/tapnet-propagate", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            video_stem:             _flVideoStem,
+            tapnet_checkpoint_path: ckpt,
+            anchor:                 flTapAnchor.value,
+            gpu_index:              0,
+            overwrite:              flTapOverwrite.checked,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          flTapStatus.textContent = data.error || "Failed to start TAPNet.";
+          flTapStatus.className   = "fe-extract-status err";
+          return;
+        }
+        _flTapActiveTask = data.task_id;
+        _flTapStartPolling(data.task_id);
+      } catch (err) {
+        flTapStatus.textContent = "Network error: " + err.message;
+        flTapStatus.className   = "fe-extract-status err";
+      }
+    });
+
+    flTapStopBtn.addEventListener("click", async () => {
+      if (!_flTapActiveTask) return;
+      flTapStopBtn.disabled = true;
+      try {
+        await fetch("/dlc/project/tapnet-propagate/stop", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ task_id: _flTapActiveTask }),
+        });
+        flTapStatus.textContent = "Stop signal sent.";
+        flTapStatus.className   = "fe-extract-status";
+      } catch (err) {
+        flTapStatus.textContent = "Stop error: " + err.message;
+        flTapStatus.className   = "fe-extract-status err";
+        flTapStopBtn.disabled = false;
+      }
+    });
+
+    function _flTapStartPolling(taskId) {
+      flTapProgress.classList.remove("hidden", "state-success", "state-fail");
+      flTapTaskId.textContent        = taskId.slice(0, 12) + "…";
+      flTapProgressBar.style.width   = "0%";
+      flTapProgressPct.textContent   = "0 %";
+      flTapProgressStage.textContent = "Queued";
+      flTapLogOutput.textContent     = "Waiting for output…";
+      _flTapSetRunning(true);
+      if (_flTapPollTimer) clearInterval(_flTapPollTimer);
+      _flTapPollTimer = setInterval(() => _flTapPoll(taskId), 2000);
+      _flTapPoll(taskId);
+    }
+
+    async function _flTapPoll(taskId) {
+      try {
+        const res  = await fetch(`/status/${taskId}`);
+        const data = await res.json();
+        const pct  = Math.min(data.progress || 0, 100);
+        flTapProgressBar.style.width   = pct + "%";
+        flTapProgressPct.textContent   = pct + " %";
+        flTapProgressStage.textContent = data.stage || data.state;
+        if (data.log) {
+          flTapLogOutput.textContent = data.log;
+          flTapLogOutput.scrollTop   = flTapLogOutput.scrollHeight;
+        }
+        if (data.state === "SUCCESS") {
+          clearInterval(_flTapPollTimer); _flTapPollTimer = null;
+          const r = data.result || {};
+          if (r.log) flTapLogOutput.textContent = r.log;
+          flTapProgress.classList.add("state-success");
+          flTapProgressStage.textContent = "✓ Propagation complete";
+          flTapProgressBar.style.width   = "100%";
+          flTapProgressPct.textContent   = "100 %";
+          flTapStatus.textContent = `Done — ${r.frames_labeled || 0} frame(s) labeled across ${r.sequences_found || 0} sequence(s).`;
+          flTapStatus.className   = "fe-extract-status ok";
+          _flTapSetRunning(false);
+          // Reload labels so the user sees propagated markers immediately
+          if (_flVideoStem) {
+            const found = _flStemData.find(s => s.video_stem === _flVideoStem);
+            if (found) await _flSelectStem(found.video_stem, found.frames);
+          }
+        }
+        if (data.state === "FAILURE" || data.state === "REVOKED") {
+          clearInterval(_flTapPollTimer); _flTapPollTimer = null;
+          const userStopped = data.state === "REVOKED" || (data.error || "").includes("__USER_STOPPED__");
+          flTapProgress.classList.add("state-fail");
+          flTapProgressStage.textContent = userStopped ? "✗ Stopped" : "✗ " + (data.error || "Failed").split("\n")[0];
+          if (!userStopped) flTapLogOutput.textContent = data.error || "An unknown error occurred.";
+          flTapStatus.textContent = userStopped ? "TAPNet stopped." : "";
+          flTapStatus.className   = "fe-extract-status";
+          _flTapSetRunning(false);
+        }
+      } catch (err) {
+        console.error("flTapPoll:", err);
+      }
+    }
+
     function _flUpdateScorerFilename() {
       if (flScorerFilename) flScorerFilename.textContent = `CollectedData_${_flScorer}.csv`;
     }
@@ -2768,6 +3101,11 @@
       flPlayerSec.classList.remove("hidden");
       _flUpdateLabelCount();
       _flShowFrame(0);
+
+      // Load TAPNet sidecars (confirmed anchors + tapnet-labeled frames)
+      _flTapConfirmed  = new Set();
+      _flTapnetFrames  = new Set();
+      _flTapLoadSidecars();
     }
 
     // ── Update Threshold ─────────────────────────────────────────
@@ -2885,6 +3223,7 @@
 
       _flUpdateBpChipStatus();
       _flUpdateLabelCount();
+      _flTapUpdateFrameStatus();
 
       // Load frame image
       _flHoverBp   = null;
@@ -3103,6 +3442,50 @@
       e.preventDefault();
       if (!_flVideoStem) return;
       _flClearFrame();
+    });
+
+    document.getElementById("fl-btn-delete-frame").addEventListener("dblclick", async e => {
+      e.preventDefault();
+      const fname = _flFrames[_flFrameIdx];
+      if (!_flVideoStem || !fname) return;
+
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const res = await fetch("/dlc/project/frame", {
+          method:  "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ video_stem: _flVideoStem, frame_name: fname }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          flSaveStatus.textContent = `Delete failed: ${d.error || res.status}`;
+          flSaveStatus.className   = "fl-save-status err";
+          return;
+        }
+        // Remove from in-memory state
+        delete _flLabels[fname];
+        _flFrames.splice(_flFrameIdx, 1);
+        _flUpdateLabelCount();
+
+        if (_flFrames.length === 0) {
+          // No frames left — reset canvas
+          _flFrameIdx = 0;
+          flFrameInfo.textContent = "Frame 0 / 0";
+          flFrameName.textContent = "";
+          const ctx = flCanvas.getContext("2d");
+          ctx.clearRect(0, 0, flCanvas.width, flCanvas.height);
+        } else {
+          _flShowFrame(Math.min(_flFrameIdx, _flFrames.length - 1));
+        }
+        flSaveStatus.textContent = `Deleted ${fname}`;
+        flSaveStatus.className   = "fl-save-status";
+      } catch (err) {
+        flSaveStatus.textContent = `Delete error: ${err.message}`;
+        flSaveStatus.className   = "fl-save-status err";
+      } finally {
+        btn.disabled = false;
+      }
     });
 
     // Auto-advance to the next unlabeled body part (napari behavior)
@@ -3593,9 +3976,18 @@
           ctdAddDatasetsBtn.disabled = false;
           return;
         }
-        // Poll until the task completes
+        // Poll until the task completes (max 60 s — guards against worker-killed tasks stuck at STARTED)
         const taskId = data.task_id;
+        let _pollCount = 0;
         const timer = setInterval(async () => {
+          _pollCount++;
+          if (_pollCount > 40) {
+            clearInterval(timer);
+            ctdAddDatasetsStatus.textContent = "Timed out — worker may have restarted. Retry.";
+            ctdAddDatasetsStatus.className   = "fe-extract-status err";
+            ctdAddDatasetsBtn.disabled = false;
+            return;
+          }
           try {
             const sr   = await fetch(`/status/${taskId}`);
             const sd   = await sr.json();
@@ -3699,15 +4091,17 @@
         tnCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
         _tnDetectEngine(); // sync — reads _dlcEngine set when project was loaded
         _populateGpuSelect("tn-gputouse");
-        // Check if a training job is already running and disable run button if so
+        // Check if a training job is already running; if so, reconnect to it
         try {
           const res  = await fetch("/dlc/training/jobs");
           const data = await res.json();
-          _dlcTrainingActive = (data.jobs || []).some(j => j.status === "running");
-          if (_dlcTrainingActive && !tnRunBtn._tnPolling) {
-            tnRunBtn.disabled = true;
-            tnRunStatus.textContent = "A training job is already running. Stop it first.";
-            tnRunStatus.className   = "fe-extract-status err";
+          const activeJob = (data.jobs || []).find(
+            j => (j.status === "running" || j.status === "dead") && j.operation !== "analyze"
+          );
+          _dlcTrainingActive = !!activeJob;
+          if (activeJob && !tnRunBtn._tnPolling) {
+            _tnActiveTask = activeJob.task_id;
+            _tnStartPolling(activeJob.task_id);
           }
         } catch (_) {}
       });
@@ -3918,6 +4312,7 @@
     const avOpenBtn      = document.getElementById("btn-open-analyze");
     const avCloseBtn     = document.getElementById("btn-close-analyze");
     const avTargetPath   = document.getElementById("av-target-path");
+    const avBrowseUp     = document.getElementById("av-browse-up");
     const avBrowseBtn    = document.getElementById("av-browse-btn");
     const avBrowser      = document.getElementById("av-browser");
     const avSnapshot     = document.getElementById("av-snapshot");
@@ -3939,22 +4334,24 @@
 
     // ── Snapshots ─────────────────────────────────────────────
     async function _avLoadSnapshots() {
-      const shuffle = document.getElementById("av-shuffle").value || "1";
       try {
-        const res  = await fetch(`/dlc/project/snapshots?shuffle=${encodeURIComponent(shuffle)}`);
+        // No shuffle filter — show all shuffles so models from any shuffle are visible.
+        // The backend will auto-correct the shuffle when snapshot_path is provided.
+        const res  = await fetch("/dlc/project/snapshots");
         const data = await res.json();
         if (data.error) return;
 
         avSnapshot.innerHTML = "";
 
-        // "Latest" default option — show actual latest snapshot info if available
+        // "Latest" default option — use actual path so shuffle is auto-derived
         const latestOpt = document.createElement("option");
-        latestOpt.value = "-1";
+        latestOpt.value = data.latest_rel_path || "-1";
         if (data.latest_label) {
           const iterStr = data.latest_iteration != null
             ? `  ·  iter ${data.latest_iteration.toLocaleString()}`
             : "";
-          latestOpt.textContent = `Latest — ${data.latest_label}${iterStr}`;
+          const shStr = data.latest_shuffle != null ? `  ·  sh${data.latest_shuffle}` : "";
+          latestOpt.textContent = `Latest — ${data.latest_label}${iterStr}${shStr}`;
         } else {
           latestOpt.textContent = "Latest (from config)";
         }
@@ -3967,7 +4364,8 @@
           const iterStr = s.iteration != null
             ? `  ·  iter ${s.iteration.toLocaleString()}`
             : "";
-          opt.textContent = `${s.label}${iterStr}`;
+          const shStr = s.shuffle != null ? `  ·  sh${s.shuffle}` : "";
+          opt.textContent = `${s.label}${iterStr}${shStr}`;
           avSnapshot.appendChild(opt);
         });
       } catch (err) {
@@ -4061,30 +4459,14 @@
 
     async function _avBrowseDir(dirPath) {
       _avBrowserLoaded = false;
+      _avProjectPath = dirPath;
+      avTargetPath.value = dirPath;
       avBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
       try {
         const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
         const data = await res.json();
         if (data.error) { avBrowser.textContent = data.error; return; }
         avBrowser.innerHTML = "";
-
-        // Header: current path + Up button
-        const header = document.createElement("div");
-        header.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.2rem .3rem .35rem;border-bottom:1px solid var(--border);margin-bottom:.25rem;min-width:0";
-        const pathLabel = document.createElement("span");
-        pathLabel.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.72rem;color:var(--text-dim)";
-        pathLabel.textContent = data.path;
-        pathLabel.title = data.path;
-        header.appendChild(pathLabel);
-        if (data.parent) {
-          const upBtn = document.createElement("button");
-          upBtn.className = "btn-sm";
-          upBtn.style.cssText = "padding:.15rem .5rem;font-size:.72rem;flex-shrink:0";
-          upBtn.textContent = "↑ Up";
-          upBtn.addEventListener("click", (e) => { e.stopPropagation(); _avBrowseDir(data.parent); });
-          header.appendChild(upBtn);
-        }
-        avBrowser.appendChild(header);
 
         const visible = data.entries.filter(e => (e.type === "dir" && e.has_media !== false) || (e.type === "file" && _avSupportedFile(e.name)));
         if (!visible.length) {
@@ -4108,12 +4490,13 @@
       const isHidden = avBrowser.classList.contains("hidden");
       avBrowser.classList.toggle("hidden");
       if (!isHidden) return;  // closing
+      const typed = avTargetPath.value.trim();
+      if (typed) { await _avBrowseDir(typed); return; }
       if (_avBrowserLoaded) return;  // already showing content
       try {
         const res  = await fetch("/dlc/project/browse");
         const data = await res.json();
         if (data.error) { avBrowser.textContent = data.error; return; }
-        _avProjectPath = data.project_path;
         await _avBrowseDir(data.project_path);
       } catch (err) {
         avBrowser.textContent = "Failed to load project.";
@@ -4121,11 +4504,29 @@
       }
     });
 
+    avBrowseUp?.addEventListener("click", () => {
+      const cur = (avTargetPath.value.trim() || _avProjectPath || "").replace(/\/$/, "");
+      if (!cur) return;
+      const parent = cur.split("/").slice(0, -1).join("/") || "/";
+      if (parent !== cur) { _avBrowseDir(parent); avBrowser.classList.remove("hidden"); }
+    });
+
+    avTargetPath?.addEventListener("keydown", e => {
+      if (e.key === "Enter")  { e.preventDefault(); _avBrowseDir(avTargetPath.value.trim()); avBrowser.classList.remove("hidden"); }
+      if (e.key === "Escape") { avBrowser.classList.add("hidden"); avTargetPath.blur(); }
+    });
+    avTargetPath?.addEventListener("paste", e => {
+      if (avBrowser.classList.contains("hidden")) return;  // only navigate when browser is open
+      setTimeout(() => _avBrowseDir(avTargetPath.value.trim()), 0);
+    });
+
     // ── Running state helpers ─────────────────────────────────
     function _avSetRunning(running) {
       avRunBtn.classList.toggle("hidden",  running);
       avStopBtn.classList.toggle("hidden", !running);
       avRunBtn.disabled  = running;
+      const _clvBtn = document.getElementById("btn-create-labeled-video");
+      if (_clvBtn) _clvBtn.disabled = running;
     }
 
     // ── Polling ───────────────────────────────────────────────
@@ -4189,13 +4590,27 @@
     }
 
     // ── Open / Close ──────────────────────────────────────────
-    avOpenBtn?.addEventListener("click", () => {
+    avOpenBtn?.addEventListener("click", async () => {
       avCard.classList.remove("hidden");
       avCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
       _avLoadSnapshots();
       _populateGpuSelect("av-gputouse");
       _avBrowserLoaded = false;
       avBrowser.classList.add("hidden");
+      // Auto-reconnect to a running analyze job
+      if (!_avActiveTask) {
+        try {
+          const res  = await fetch("/dlc/training/jobs");
+          const data = await res.json();
+          const activeAnalyze = (data.jobs || []).find(
+            j => (j.status === "running" || j.status === "dead") && j.operation === "analyze"
+          );
+          if (activeAnalyze) {
+            _avActiveTask = activeAnalyze.task_id;
+            _avStartPolling(activeAnalyze.task_id);
+          }
+        } catch (_) {}
+      }
     });
 
     avCloseBtn?.addEventListener("click", () => {
@@ -4217,6 +4632,8 @@
 
       const snapshotVal = avSnapshot.value;
 
+      const batchSizeVal = document.getElementById("av-batch-size").value;
+      const clvPcutoff   = document.getElementById("clv-pcutoff").value;
       const body = {
         target_path:      target,
         shuffle:          parseInt(document.getElementById("av-shuffle").value) || 1,
@@ -4224,9 +4641,19 @@
         gputouse:         document.getElementById("av-gputouse").value !== ""
                             ? parseInt(document.getElementById("av-gputouse").value)
                             : null,
+        batch_size:       batchSizeVal !== "" ? parseInt(batchSizeVal) : null,
         save_as_csv:      document.getElementById("av-save-csv").checked,
         create_labeled:   document.getElementById("av-create-labeled").checked,
         snapshot_path:    snapshotVal !== "-1" ? snapshotVal : null,
+        // labeled video params
+        pcutoff:          clvPcutoff !== "" ? parseFloat(clvPcutoff) : null,
+        dotsize:          parseInt(document.getElementById("clv-dotsize").value) || 8,
+        colormap:         document.getElementById("clv-colormap").value,
+        modelprefix:      (document.getElementById("clv-modelprefix").value || "").trim(),
+        filtered:         document.getElementById("clv-filtered").checked,
+        draw_skeleton:    document.getElementById("clv-draw-skeleton").checked,
+        overwrite:        document.getElementById("clv-overwrite").checked,
+        destfolder:       (document.getElementById("clv-destfolder").value || "").trim() || null,
       };
 
       try {
@@ -4267,6 +4694,127 @@
         avStopBtn.disabled = false;
       }
     });
+
+    // ── Create Labeled Video (standalone) ─────────────────────
+    const clvBtn        = document.getElementById("btn-create-labeled-video");
+    const clvStatus     = document.getElementById("av-clv-status");
+    const clvDestInput  = document.getElementById("clv-destfolder");
+    const clvDestUp     = document.getElementById("clv-dest-up");
+    const clvDestBrowse = document.getElementById("clv-dest-browse-btn");
+    const clvDestClear  = document.getElementById("clv-dest-clear-btn");
+    const clvDestBrowser= document.getElementById("clv-dest-browser");
+
+    // destfolder browser — shows directories only, double-click selects
+    async function _clvBrowseDir(dirPath) {
+      clvDestInput.value = dirPath;
+      clvDestBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
+      try {
+        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
+        const data = await res.json();
+        if (data.error) { clvDestBrowser.textContent = data.error; return; }
+        clvDestBrowser.innerHTML = "";
+
+        const dirs = data.entries.filter(e => e.type === "dir");
+        if (!dirs.length) {
+          const em = document.createElement("span");
+          em.style.cssText = "font-size:.78rem;color:var(--text-dim);padding:.3rem;display:block";
+          em.textContent = "(no subdirectories)";
+          clvDestBrowser.appendChild(em);
+        }
+        dirs.forEach(e => {
+          const row = document.createElement("div");
+          const fullPath = data.path.replace(/\/+$/, "") + "/" + e.name;
+          row.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.18rem .4rem;cursor:pointer;border-radius:4px;user-select:none;font-size:.78rem";
+          row.innerHTML = `<span style="flex-shrink:0">📁</span><span style="font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.name}</span>`;
+          row.title = fullPath;
+          row.addEventListener("mouseenter", () => row.style.background = "var(--surface-3,#2a2a2a)");
+          row.addEventListener("mouseleave", () => row.style.background = "");
+          row.addEventListener("click",    () => _clvBrowseDir(fullPath));
+          row.addEventListener("dblclick", () => {
+            clvDestInput.value = fullPath;
+            clvDestBrowser.classList.add("hidden");
+          });
+          clvDestBrowser.appendChild(row);
+        });
+      } catch (err) {
+        clvDestBrowser.textContent = "Failed to load.";
+      }
+    }
+
+    clvDestBrowse?.addEventListener("click", () => {
+      const isHidden = clvDestBrowser.classList.contains("hidden");
+      clvDestBrowser.classList.toggle("hidden");
+      if (isHidden) {
+        const startPath = clvDestInput.value.trim() || _avProjectPath || "/";
+        _clvBrowseDir(startPath);
+      }
+    });
+
+    clvDestUp?.addEventListener("click", () => {
+      const cur = clvDestInput.value.trim().replace(/\/$/, "");
+      if (!cur) return;
+      const parent = cur.split("/").slice(0, -1).join("/") || "/";
+      if (parent !== cur) { _clvBrowseDir(parent); clvDestBrowser.classList.remove("hidden"); }
+    });
+
+    clvDestInput?.addEventListener("keydown", e => {
+      if (e.key === "Enter")  { e.preventDefault(); _clvBrowseDir(clvDestInput.value.trim()); clvDestBrowser.classList.remove("hidden"); }
+      if (e.key === "Escape") { clvDestBrowser.classList.add("hidden"); clvDestInput.blur(); }
+    });
+    clvDestInput?.addEventListener("paste", e => {
+      setTimeout(() => { _clvBrowseDir(clvDestInput.value.trim()); clvDestBrowser.classList.remove("hidden"); }, 0);
+    });
+
+    clvDestClear?.addEventListener("click", () => { clvDestInput.value = ""; });
+
+    clvBtn?.addEventListener("click", async () => {
+      const target = (document.getElementById("av-target-path")?.value || "").trim();
+      if (!target) {
+        clvStatus.textContent = "Select a video file first.";
+        clvStatus.className   = "fe-extract-status err";
+        return;
+      }
+      clvStatus.textContent = "Dispatching…";
+      clvStatus.className   = "fe-extract-status";
+      clvBtn.disabled = true;
+
+      const pcutoffVal = document.getElementById("clv-pcutoff").value;
+      const destVal    = (clvDestInput?.value || "").trim();
+      try {
+        const res = await fetch("/dlc/project/create-labeled-video", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            video_path:       target,
+            shuffle:          parseInt(document.getElementById("av-shuffle").value) || 1,
+            trainingsetindex: parseInt(document.getElementById("av-trainingsetindex").value) ?? 0,
+            pcutoff:          pcutoffVal !== "" ? parseFloat(pcutoffVal) : null,
+            dotsize:          parseInt(document.getElementById("clv-dotsize").value) || 8,
+            colormap:         document.getElementById("clv-colormap").value,
+            modelprefix:      (document.getElementById("clv-modelprefix").value || "").trim(),
+            filtered:         document.getElementById("clv-filtered").checked,
+            draw_skeleton:    document.getElementById("clv-draw-skeleton").checked,
+            overwrite:        document.getElementById("clv-overwrite").checked,
+            destfolder:       destVal || null,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          clvStatus.textContent = data.error || "Failed to start.";
+          clvStatus.className   = "fe-extract-status err";
+          clvBtn.disabled = false;
+          return;
+        }
+        _avActiveTask = data.task_id;
+        _avStartPolling(data.task_id);
+        clvStatus.textContent = "Rendering… see progress below.";
+        clvStatus.className   = "fe-extract-status ok";
+      } catch (err) {
+        clvStatus.textContent = "Network error: " + err.message;
+        clvStatus.className   = "fe-extract-status err";
+        clvBtn.disabled = false;
+      }
+    });
   })();
 
   // ── View Analyzed Videos / Frames ─────────────────────────────
@@ -4289,6 +4837,9 @@
     const vaPauseIcon    = document.getElementById("va-pause-icon");
     const vaBtnPrev      = document.getElementById("va-btn-prev");
     const vaBtnNext      = document.getElementById("va-btn-next");
+    const vaBtnSkipBack  = document.getElementById("va-btn-skip-back");
+    const vaBtnSkipFwd   = document.getElementById("va-btn-skip-fwd");
+    const vaSkipN        = document.getElementById("va-skip-n");
     const vaFrameCounter = document.getElementById("va-frame-counter");
     const vaTimeDisplay  = document.getElementById("va-time-display");
     const vaSeek         = document.getElementById("va-seek");
@@ -4321,6 +4872,29 @@
     // browse tab state
     let _vaBrowsePath = null;
 
+    // ── Kinematic overlay state ────────────────────────────────────────────
+    let _vaOverlayEnabled   = false;
+    let _vaH5Path           = null;       // absolute path to loaded .h5 file
+    let _vaAllBodyParts     = [];         // all body parts from h5-info
+    let _vaSelectedParts    = new Set();  // empty = show all
+    let _vaThreshold        = 0.60;
+    let _vaMarkerSize       = 6;
+    // absolute path to the currently loaded original video (for annotated frames + companion CSV)
+    let _vaCurrentVideoPath = null;
+    // Hook called by _vaLoadFrame so the nested curation IIFE can sync its annotation panel
+    let _vaCurationFrameHook = null;
+    let _vaMetadataFrameHook = null;
+
+    // ── Pose cache (prefetch window) ───────────────────────────────────────
+    const _POSE_WINDOW  = 30;
+    const _vaPoseCache  = new Map();  // frameNumber → {key, poses, n_bodyparts}
+    let   _vaPrefetchCtrl = null;     // AbortController for in-flight batch prefetch
+
+    function _vaClearPoseCache() {
+      _vaPoseCache.clear();
+      if (_vaPrefetchCtrl) { _vaPrefetchCtrl.abort(); _vaPrefetchCtrl = null; }
+    }
+
     // ── Viewer sizing (same break-out-of-card approach as frame labeler) ──
     function _vaFitViewer() {
       if (!vaFrameImg.naturalWidth) return;
@@ -4343,6 +4917,7 @@
       _vaZoom = parseInt(vaZoomInput.value, 10);
       vaZoomVal.textContent = _vaZoom + " %";
       _vaFitViewer();
+      _vaSyncCanvas();
     });
 
     function _vaReset() {
@@ -4356,6 +4931,11 @@
       _vaFrameStem       = null;
       _vaFrameFiles      = [];
       _vaBrowseVideoPath = null;
+      _vaCurrentVideoPath = null;
+      _vaCurrentPoses = [];
+      _vaHoverBp      = null;
+      _vaClearPoseCache();
+      if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
       vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
       vaFrameImg.onload  = null;
       vaFrameImg.onerror = null;
@@ -4371,13 +4951,20 @@
 
     function _vaFrameUrl(n) {
       if (_vaMode === "browse-video") {
-        return `/annotate/video-frame/${n}?path=${encodeURIComponent(_vaBrowseVideoPath)}`;
+        // Use the same cached VideoCapture endpoint as Frame Extractor
+        return `/dlc/project/video-frame-ext/${n}?path=${encodeURIComponent(_vaBrowseVideoPath)}`;
       }
       if (_vaMode === "video") {
         return `/dlc/project/video-frame/${encodeURIComponent(_vaVideoName)}/${n}`;
       }
       // frames mode: index into _vaFrameFiles
       return `/dlc/project/frame-image/${encodeURIComponent(_vaFrameStem)}/${encodeURIComponent(_vaFrameFiles[n])}`;
+    }
+
+    function _vaPrefetchFrames(frames) {
+      frames.forEach(n => {
+        if (n >= 0 && n < _vaFrameCount) new Image().src = _vaFrameUrl(n);
+      });
     }
 
     function _vaUpdateDisplay() {
@@ -4414,6 +5001,10 @@
         });
         _vaFitViewer();
         _vaUpdateDisplay();
+        _vaPrefetchFrames([n + 1, n + 2]);
+        if (_vaCurationFrameHook) _vaCurationFrameHook(n);
+        if (_vaMetadataFrameHook) _vaMetadataFrameHook(n);
+        _vaUpdateOverlay(n);
       } catch (err) {
         vaStatus.textContent = `Failed to load frame: ${err.message}`;
         vaStatus.className   = "fe-extract-status err";
@@ -4421,6 +5012,23 @@
         _vaFrameBusy = false;
         vaFrameSpinner.classList.add("hidden");
       }
+    }
+
+    // Draw overlay for frame n: show cached poses immediately; fetch from server only when paused.
+    function _vaUpdateOverlay(n) {
+      if (!vaOverlayCtx || !_vaOverlayEnabled) return;
+      _vaSyncCanvas();
+      vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+      if (!_vaH5Path) return;
+      const key    = _vaPoseCacheKey();
+      const cached = _vaPoseCache.get(n);
+      if (cached && cached.key === key) {
+        _vaCurrentPoses = cached.poses;
+        _vaNBodyparts   = cached.n_bodyparts;
+        _vaDrawPoseMarkers();
+      }
+      // Only hit the server when paused
+      if (!_vaPlayTimer && (!cached || cached.key !== key)) _vaFetchPoses(n);
     }
 
     async function _vaOpenVideo(name) {
@@ -4431,8 +5039,9 @@
       try {
         const res  = await fetch(`/dlc/project/video-info/${encodeURIComponent(name)}`);
         const info = await res.json();
-        _vaFps        = info.fps || 30;
-        _vaFrameCount = info.frame_count || 0;
+        _vaFps             = info.fps || 30;
+        _vaFrameCount      = info.frame_count || 0;
+        _vaCurrentVideoPath = info.abs_path || null;
       } catch (_) { _vaFps = 30; _vaFrameCount = 0; }
       vaPlayerSec.classList.remove("hidden");
       _vaLoadFrame(0);
@@ -4452,8 +5061,9 @@
 
     async function _vaOpenBrowseVideo(absPath, name) {
       _vaReset();
-      _vaMode            = "browse-video";
-      _vaBrowseVideoPath = absPath;
+      _vaMode             = "browse-video";
+      _vaBrowseVideoPath  = absPath;
+      _vaCurrentVideoPath = absPath;
       vaSelectedName.textContent = name;
       try {
         const res  = await fetch(`/annotate/video-info?path=${encodeURIComponent(absPath)}`);
@@ -4463,6 +5073,8 @@
       } catch (_) { _vaFps = 30; _vaFrameCount = 0; }
       vaPlayerSec.classList.remove("hidden");
       _vaLoadFrame(0);
+      // Auto-detect companion h5 in the same directory
+      _vaAutoDetectH5(absPath);
     }
 
     // ── Browse-tab folder navigator ────────────────────────────
@@ -4470,7 +5082,7 @@
 
     async function _vaRefreshBrowse(path) {
       _vaBrowsePath = path;
-      vaBrowseBreadcrumb.textContent = path;
+      vaBrowseBreadcrumb.value = path;
       vaBrowseList.innerHTML = '<p class="explorer-empty">Loading…</p>';
       try {
         const res  = await fetch(`/fs/ls?path=${encodeURIComponent(path)}`);
@@ -4535,6 +5147,432 @@
       if (parent !== _vaBrowsePath) _vaRefreshBrowse(parent);
     });
 
+    // ── Editable address bar ───────────────────────────────────
+    async function _vaNavigateTo(raw) {
+      const p = raw.trim();
+      if (!p) return;
+      // Check if the path looks like a video file
+      const ext = p.slice(p.lastIndexOf(".")).toLowerCase();
+      if (_VA_VIDEO_EXTS.has(ext)) {
+        // Navigate the browser to the parent folder first, then open the video
+        const dir  = p.substring(0, p.lastIndexOf("/")) || "/";
+        const name = p.substring(p.lastIndexOf("/") + 1);
+        await _vaRefreshBrowse(dir);
+        _vaOpenBrowseVideo(p, name);
+      } else {
+        _vaRefreshBrowse(p);
+      }
+    }
+
+    vaBrowseBreadcrumb?.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); _vaNavigateTo(vaBrowseBreadcrumb.value); }
+      if (e.key === "Escape") { vaBrowseBreadcrumb.value = _vaBrowsePath || ""; vaBrowseBreadcrumb.blur(); }
+    });
+    // Also handle paste: navigate immediately after the clipboard text lands
+    vaBrowseBreadcrumb?.addEventListener("paste", e => {
+      // Let the paste complete, then navigate
+      setTimeout(() => _vaNavigateTo(vaBrowseBreadcrumb.value), 0);
+    });
+
+    // ── Kinematic overlay canvas ──────────────────────────────
+    const vaOverlayCanvas = document.getElementById("va-overlay-canvas");
+    const vaOverlayCtx    = vaOverlayCanvas ? vaOverlayCanvas.getContext("2d") : null;
+
+    // Current frame poses (fetched alongside each annotated frame)
+    let _vaCurrentPoses = [];  // [{bp, x, y, lh, color_idx}]
+    let _vaNBodyparts   = 1;   // total bodyparts count (for palette)
+    let _vaHoverBp      = null;
+
+    // Replicate the server's HSV rainbow palette in JS for label colours
+    function _vaHsvToRgb(h, s, v) {
+      const i = Math.floor(h * 6);
+      const f = h * 6 - i;
+      const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+      let r, g, b;
+      switch (i % 6) {
+        case 0: r=v; g=t; b=p; break; case 1: r=q; g=v; b=p; break;
+        case 2: r=p; g=v; b=t; break; case 3: r=p; g=q; b=v; break;
+        case 4: r=t; g=p; b=v; break; default: r=v; g=p; b=q;
+      }
+      return `rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
+    }
+    function _vaPaletteColor(idx, total) {
+      return _vaHsvToRgb(idx / Math.max(total, 1), 0.9, 0.95);
+    }
+
+    function _vaSyncCanvas() {
+      if (!vaOverlayCanvas) return;
+      // Match canvas buffer size to the *displayed* image size (not natural)
+      const w = vaFrameImg.offsetWidth  || vaFrameImg.clientWidth  || 1;
+      const h = vaFrameImg.offsetHeight || vaFrameImg.clientHeight || 1;
+      if (vaOverlayCanvas.width !== w || vaOverlayCanvas.height !== h) {
+        vaOverlayCanvas.width  = w;
+        vaOverlayCanvas.height = h;
+      }
+    }
+
+    // Draw all pose marker circles onto the overlay canvas
+    function _vaDrawPoseMarkers() {
+      if (!vaOverlayCtx || !_vaOverlayEnabled || !_vaCurrentPoses.length) return;
+      const natW = vaFrameImg.naturalWidth  || 1;
+      const natH = vaFrameImg.naturalHeight || 1;
+      const sx   = vaOverlayCanvas.width  / natW;
+      const sy   = vaOverlayCanvas.height / natH;
+      const r    = Math.max(1, Math.round(_vaMarkerSize * Math.min(sx, sy)));
+      for (const pose of _vaCurrentPoses) {
+        const cx    = Math.round(pose.x * sx);
+        const cy    = Math.round(pose.y * sy);
+        const color = _vaPaletteColor(pose.color_idx, _vaNBodyparts);
+        vaOverlayCtx.beginPath();
+        vaOverlayCtx.arc(cx, cy, r, 0, Math.PI * 2);
+        vaOverlayCtx.fillStyle = color;
+        vaOverlayCtx.fill();
+      }
+    }
+
+    function _vaDrawHoverLabel() {
+      if (!vaOverlayCtx) return;
+      _vaSyncCanvas();
+      vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+      _vaDrawPoseMarkers();
+      if (!_vaHoverBp || !_vaCurrentPoses.length) return;
+      const pose = _vaCurrentPoses.find(p => p.bp === _vaHoverBp);
+      if (!pose) return;
+
+      // Map video-native coords → canvas display coords
+      const natW = vaFrameImg.naturalWidth  || 1;
+      const natH = vaFrameImg.naturalHeight || 1;
+      const sx   = vaOverlayCanvas.width  / natW;
+      const sy   = vaOverlayCanvas.height / natH;
+      const cx   = pose.x * sx;
+      const cy   = pose.y * sy;
+
+      const color = _vaPaletteColor(pose.color_idx, _vaNBodyparts);
+      const r     = _vaMarkerSize + 2;          // slightly larger hit ring
+      const bp    = pose.bp;
+
+      vaOverlayCtx.font      = "bold 11px 'JetBrains Mono', monospace";
+      const tw = vaOverlayCtx.measureText(bp).width;
+      // Flip label to the left if it would clip the right edge
+      const flip = (cx + r + tw + 12) > vaOverlayCanvas.width;
+      const tx   = flip ? cx - r - tw - 10 : cx + r + 4;
+      const ty   = cy + 4;
+      vaOverlayCtx.fillStyle = "rgba(12,13,16,.75)";
+      vaOverlayCtx.fillRect(tx - 2, ty - 11, tw + 6, 14);
+      vaOverlayCtx.fillStyle = color;
+      vaOverlayCtx.fillText(bp, tx + 1, ty);
+    }
+
+    function _vaHitTest(cx, cy) {
+      if (!_vaCurrentPoses.length) return null;
+      const natW  = vaFrameImg.naturalWidth  || 1;
+      const natH  = vaFrameImg.naturalHeight || 1;
+      const sx    = vaOverlayCanvas.width  / natW;
+      const sy    = vaOverlayCanvas.height / natH;
+      const hitR  = (_vaMarkerSize + 6) * Math.max(sx, sy);
+      for (const pose of _vaCurrentPoses) {
+        const dx = pose.x * sx - cx;
+        const dy = pose.y * sy - cy;
+        if (Math.sqrt(dx * dx + dy * dy) <= hitR) return pose.bp;
+      }
+      return null;
+    }
+
+    if (vaOverlayCanvas) {
+      // Enable pointer events on the canvas for hover detection only
+      vaOverlayCanvas.style.pointerEvents = "auto";
+      vaOverlayCanvas.style.cursor        = "default";
+
+      vaOverlayCanvas.addEventListener("mousemove", e => {
+        if (!_vaOverlayEnabled || !_vaCurrentPoses.length) return;
+        const rect = vaOverlayCanvas.getBoundingClientRect();
+        const hit  = _vaHitTest(e.clientX - rect.left, e.clientY - rect.top);
+        if (hit !== _vaHoverBp) {
+          _vaHoverBp = hit;
+          _vaDrawHoverLabel();
+        }
+        vaOverlayCanvas.style.cursor = hit ? "crosshair" : "default";
+      });
+
+      vaOverlayCanvas.addEventListener("mouseleave", () => {
+        if (_vaHoverBp) { _vaHoverBp = null; _vaDrawHoverLabel(); }
+        vaOverlayCanvas.style.cursor = "default";
+      });
+    }
+
+    // Pose cache key encodes everything that affects pose data
+    function _vaPoseCacheKey() {
+      return `${_vaH5Path}:${_vaThreshold.toFixed(2)}:${[..._vaSelectedParts].sort().join(",")}`;
+    }
+
+    // Fetch poses for frameNumber from cache or server; draw overlay; start background prefetch.
+    // Only called when paused — never during playback.
+    async function _vaFetchPoses(frameNumber) {
+      if (!_vaH5Path || !_vaOverlayEnabled) return;
+      const key    = _vaPoseCacheKey();
+      const cached = _vaPoseCache.get(frameNumber);
+      if (cached && cached.key === key) {
+        _vaCurrentPoses = cached.poses;
+        _vaNBodyparts   = cached.n_bodyparts;
+      } else {
+        const parts = _vaSelectedParts.size > 0 ? [..._vaSelectedParts].join(",") : "";
+        const p     = new URLSearchParams({ h5: _vaH5Path, threshold: _vaThreshold.toFixed(2) });
+        if (parts) p.set("parts", parts);
+        try {
+          const res  = await fetch(`/dlc/viewer/frame-poses/${frameNumber}?${p}`);
+          const data = await res.json();
+          _vaCurrentPoses = data.poses || [];
+          _vaNBodyparts   = data.n_bodyparts || 1;
+          _vaPoseCache.set(frameNumber, { key, poses: _vaCurrentPoses, n_bodyparts: _vaNBodyparts });
+        } catch (_) { _vaCurrentPoses = []; }
+      }
+      _vaHoverBp = null;
+      _vaDrawHoverLabel();
+      if (!_vaPrefetchCtrl) _vaFetchPosesWindow(frameNumber);
+    }
+
+    // Prefetch the next _POSE_WINDOW frames in the background (runs only when paused).
+    async function _vaFetchPosesWindow(fromFrame) {
+      if (!_vaH5Path) return;
+      const key = _vaPoseCacheKey();
+      let missing = 0;
+      for (let i = fromFrame; i < fromFrame + _POSE_WINDOW && i < _vaFrameCount; i++) {
+        const c = _vaPoseCache.get(i);
+        if (!c || c.key !== key) missing++;
+      }
+      if (missing === 0) return;
+      if (_vaPrefetchCtrl) return;  // let the current batch finish
+      _vaPrefetchCtrl = new AbortController();
+      const ctrl  = _vaPrefetchCtrl;
+      const parts = _vaSelectedParts.size > 0 ? [..._vaSelectedParts].join(",") : "";
+      const p = new URLSearchParams({
+        h5: _vaH5Path, start: fromFrame, count: _POSE_WINDOW, threshold: _vaThreshold.toFixed(2),
+      });
+      if (parts) p.set("parts", parts);
+      try {
+        const res  = await fetch(`/dlc/viewer/frame-poses-batch?${p}`, { signal: ctrl.signal });
+        if (!res.ok) return;
+        const data = await res.json();
+        for (const [fnStr, fd] of Object.entries(data.frames || {})) {
+          const fn = parseInt(fnStr, 10);
+          _vaPoseCache.set(fn, { key, poses: fd.poses || [], n_bodyparts: fd.n_bodyparts || 1 });
+        }
+      } catch (e) {
+        if (e.name !== "AbortError") console.warn("pose prefetch failed:", e);
+      } finally {
+        if (_vaPrefetchCtrl === ctrl) _vaPrefetchCtrl = null;
+      }
+    }
+
+    // ── Kinematic overlay controls ────────────────────────────
+    const vaOverlayToggle    = document.getElementById("va-overlay-toggle");
+    const vaOverlayControls  = document.getElementById("va-overlay-controls");
+    const vaOverlayStatus    = document.getElementById("va-overlay-status");
+    const vaOverlayH5Path    = document.getElementById("va-overlay-h5-path");
+    const vaOverlayH5Auto    = document.getElementById("va-overlay-h5-auto");
+    const vaOverlayH5Browse  = document.getElementById("va-overlay-h5-browse");
+    const vaOverlayH5Clear   = document.getElementById("va-overlay-h5-clear");
+    const vaOverlayH5Browser = document.getElementById("va-overlay-h5-browser");
+    const vaOverlayThreshold = document.getElementById("va-overlay-threshold");
+    const vaOverlayThreshVal = document.getElementById("va-overlay-threshold-val");
+    const vaOverlayMarkerSz  = document.getElementById("va-overlay-marker-size");
+    const vaOverlayMarkerVal = document.getElementById("va-overlay-marker-size-val");
+    const vaOverlayPartsBox  = document.getElementById("va-overlay-bodyparts");
+    const vaOverlayPartsAll  = document.getElementById("va-overlay-parts-all");
+    const vaOverlayPartsNone = document.getElementById("va-overlay-parts-none");
+
+    function _vaOverlayStatus(msg, isErr = false) {
+      vaOverlayStatus.textContent = msg;
+      vaOverlayStatus.className   = "fe-extract-status" + (isErr ? " err" : "");
+    }
+
+    async function _vaLoadH5Info(h5Path) {
+      vaOverlayPartsBox.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">Loading…</span>';
+      _vaSelectedParts.clear();
+      try {
+        const res  = await fetch(`/dlc/viewer/h5-info?h5=${encodeURIComponent(h5Path)}`);
+        const data = await res.json();
+        if (data.error) { _vaOverlayStatus(data.error, true); return; }
+        _vaAllBodyParts = data.bodyparts || [];
+        _vaRebuildPartsChecklist();
+        _vaOverlayStatus(`${data.frame_count.toLocaleString()} frames · ${_vaAllBodyParts.length} body parts`);
+      } catch (e) {
+        _vaOverlayStatus(`Failed to load h5 info: ${e.message}`, true);
+      }
+    }
+
+    function _vaRebuildPartsChecklist() {
+      vaOverlayPartsBox.innerHTML = "";
+      if (!_vaAllBodyParts.length) {
+        vaOverlayPartsBox.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">No body parts loaded.</span>';
+        return;
+      }
+      _vaAllBodyParts.forEach(bp => {
+        const lbl  = document.createElement("label");
+        lbl.style.cssText = "display:flex;align-items:center;gap:.3rem;cursor:pointer;white-space:nowrap";
+        const chk  = document.createElement("input");
+        chk.type   = "checkbox";
+        chk.value  = bp;
+        chk.style.accentColor = "var(--accent)";
+        // Empty _vaSelectedParts means ALL selected
+        chk.checked = _vaSelectedParts.size === 0 || _vaSelectedParts.has(bp);
+        chk.addEventListener("change", () => {
+          if (chk.checked) _vaSelectedParts.delete(bp);  // empty = all
+          else             _vaSelectedParts.add(bp);      // explicit exclude
+          // If all checked manually, reset to empty (= all)
+          if ([...vaOverlayPartsBox.querySelectorAll("input")].every(c => c.checked))
+            _vaSelectedParts.clear();
+          _vaClearPoseCache();
+          if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
+        });
+        lbl.appendChild(chk);
+        lbl.appendChild(document.createTextNode(bp));
+        vaOverlayPartsBox.appendChild(lbl);
+      });
+    }
+
+    async function _vaAutoDetectH5(videoPath) {
+      const dir  = videoPath.substring(0, videoPath.lastIndexOf("/"));
+      const name = videoPath.substring(videoPath.lastIndexOf("/") + 1);
+      const stem = name.replace(/\.[^.]+$/, "");
+      _vaOverlayStatus("Scanning for .h5…");
+      try {
+        const res  = await fetch(`/dlc/viewer/h5-find?dir=${encodeURIComponent(dir)}&stem=${encodeURIComponent(stem)}`);
+        const data = await res.json();
+        if (data.error) { _vaOverlayStatus(data.error.includes("No .h5") ? "No .h5 found — browse to select one." : data.error); return; }
+        _vaH5Path = data.h5_path;
+        vaOverlayH5Path.value = _vaH5Path;
+        _vaClearPoseCache();
+        _vaOverlayStatus("h5 auto-detected");
+        await _vaLoadH5Info(_vaH5Path);
+      } catch (e) {
+        _vaOverlayStatus("Auto-detect failed: " + e.message);
+      }
+    }
+
+    vaOverlayToggle?.addEventListener("change", () => {
+      _vaOverlayEnabled = vaOverlayToggle.checked;
+      vaOverlayControls.classList.toggle("hidden", !_vaOverlayEnabled);
+      if (!_vaOverlayEnabled) {
+        if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+        return;
+      }
+      if (!_vaH5Path && _vaCurrentVideoPath) _vaAutoDetectH5(_vaCurrentVideoPath);
+      if (_vaH5Path && !_vaPlayTimer) _vaFetchPoses(_vaCurrentFrame);
+    });
+
+    vaOverlayH5Auto?.addEventListener("click", () => {
+      if (_vaCurrentVideoPath) _vaAutoDetectH5(_vaCurrentVideoPath);
+    });
+
+    vaOverlayH5Clear?.addEventListener("click", () => {
+      _vaH5Path = null;
+      vaOverlayH5Path.value = "";
+      _vaAllBodyParts = [];
+      _vaSelectedParts.clear();
+      _vaClearPoseCache();
+      vaOverlayPartsBox.innerHTML = '<span style="color:var(--text-dim);font-size:.73rem">Load an .h5 file to see body parts.</span>';
+      _vaOverlayStatus("");
+      _vaCurrentPoses = [];
+      if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+    });
+
+    // Threshold slider
+    vaOverlayThreshold?.addEventListener("input", () => {
+      _vaThreshold = parseFloat(vaOverlayThreshold.value);
+      vaOverlayThreshVal.textContent = _vaThreshold.toFixed(2);
+    });
+    vaOverlayThreshold?.addEventListener("change", () => {
+      _vaClearPoseCache();
+      if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
+    });
+
+    // Marker size slider — redraw canvas immediately, no frame reload needed
+    vaOverlayMarkerSz?.addEventListener("input", () => {
+      _vaMarkerSize = parseInt(vaOverlayMarkerSz.value, 10);
+      vaOverlayMarkerVal.textContent = _vaMarkerSize;
+      _vaDrawHoverLabel();
+    });
+
+    vaOverlayPartsAll?.addEventListener("click", () => {
+      _vaSelectedParts.clear();
+      vaOverlayPartsBox.querySelectorAll("input").forEach(c => { c.checked = true; });
+      _vaClearPoseCache();
+      if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
+    });
+    vaOverlayPartsNone?.addEventListener("click", () => {
+      _vaAllBodyParts.forEach(bp => _vaSelectedParts.add(bp));
+      vaOverlayPartsBox.querySelectorAll("input").forEach(c => { c.checked = false; });
+      // "none selected" still shows all — reset to prevent empty render
+      _vaSelectedParts.clear();
+      vaOverlayPartsBox.querySelectorAll("input").forEach(c => { c.checked = false; });
+      // keep _vaSelectedParts empty but mark first part as explicit include for "none" visual
+      // Actually: show nothing when all unchecked — use a sentinel
+      _vaAllBodyParts.forEach(bp => _vaSelectedParts.add("__none__"));
+    });
+
+    // h5 file browser (shows .h5 files and dirs)
+    let _vaH5BrowsePath = null;
+
+    async function _vaH5BrowseDir(path) {
+      _vaH5BrowsePath = path;
+      vaOverlayH5Browser.innerHTML = '<p class="explorer-empty">Loading…</p>';
+      try {
+        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(path)}`);
+        const data = await res.json();
+        if (data.error) { vaOverlayH5Browser.innerHTML = `<p class="explorer-empty">${data.error}</p>`; return; }
+        vaOverlayH5Browser.innerHTML = "";
+        const entries = data.entries || [];
+        // Up button
+        if (data.parent) {
+          const upRow = document.createElement("div");
+          upRow.className = "fe-video-item";
+          upRow.style.cursor = "pointer";
+          upRow.textContent = "↑ ..";
+          upRow.addEventListener("click", () => _vaH5BrowseDir(data.parent));
+          vaOverlayH5Browser.appendChild(upRow);
+        }
+        entries.forEach(e => {
+          const isH5  = e.type === "file" && e.name.toLowerCase().endsWith(".h5");
+          const isDir = e.type === "dir";
+          if (!isH5 && !isDir) return;
+          const row = document.createElement("div");
+          row.className   = "fe-video-item";
+          row.style.cursor = "pointer";
+          row.textContent  = isDir ? `📁 ${e.name}/` : `📊 ${e.name}`;
+          row.addEventListener("click", async () => {
+            if (isDir) {
+              _vaH5BrowseDir(path + "/" + e.name);
+            } else {
+              const full = path + "/" + e.name;
+              _vaH5Path = full;
+              vaOverlayH5Path.value = full;
+              _vaClearPoseCache();
+              vaOverlayH5Browser.classList.add("hidden");
+              _vaOverlayStatus("h5 selected");
+              await _vaLoadH5Info(full);
+              if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
+            }
+          });
+          vaOverlayH5Browser.appendChild(row);
+        });
+        if (!vaOverlayH5Browser.children.length)
+          vaOverlayH5Browser.innerHTML = '<p class="explorer-empty">No .h5 files found here.</p>';
+      } catch (e) {
+        vaOverlayH5Browser.innerHTML = `<p class="explorer-empty">Error: ${e.message}</p>`;
+      }
+    }
+
+    vaOverlayH5Browse?.addEventListener("click", () => {
+      const isHidden = vaOverlayH5Browser.classList.toggle("hidden");
+      if (!isHidden) {
+        const startDir = _vaCurrentVideoPath
+          ? _vaCurrentVideoPath.substring(0, _vaCurrentVideoPath.lastIndexOf("/"))
+          : (_userDataDir || _dataDir || "/");
+        _vaH5BrowseDir(startDir);
+      }
+    });
+
     // ── Load content list ─────────────────────────────────────
     async function _vaLoadContent() {
       vaContentList.innerHTML = '<p class="explorer-empty">Loading…</p>';
@@ -4594,12 +5632,15 @@
       if (_vaPlayTimer) {
         clearInterval(_vaPlayTimer); _vaPlayTimer = null;
         vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
+        // Just paused: show poses for current frame
+        if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(_vaCurrentFrame);
       } else {
         vaPlayIcon.classList.add("hidden"); vaPauseIcon.classList.remove("hidden");
         _vaPlayTimer = setInterval(async () => {
           if (_vaCurrentFrame >= _vaFrameCount - 1) {
             clearInterval(_vaPlayTimer); _vaPlayTimer = null;
             vaPlayIcon.classList.remove("hidden"); vaPauseIcon.classList.add("hidden");
+            if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(_vaCurrentFrame);
             return;
           }
           await _vaLoadFrame(_vaCurrentFrame + 1);
@@ -4609,6 +5650,12 @@
 
     vaBtnPrev.addEventListener("click", () => _vaLoadFrame(_vaCurrentFrame - 1));
     vaBtnNext.addEventListener("click", () => _vaLoadFrame(_vaCurrentFrame + 1));
+
+    function _vaSkipN() { return Math.max(1, parseInt(vaSkipN?.value, 10) || 10); }
+    vaBtnSkipBack?.addEventListener("click", () => _vaLoadFrame(_vaCurrentFrame - _vaSkipN()));
+    vaBtnSkipFwd?.addEventListener("click",  () => _vaLoadFrame(_vaCurrentFrame + _vaSkipN()));
+    // Prevent arrow keys from changing the skip-N field from triggering frame nav
+    vaSkipN?.addEventListener("keydown", e => e.stopPropagation());
 
     vaSeek.addEventListener("mousedown",  () => { _vaSeekDragging = true; });
     vaSeek.addEventListener("touchstart", () => { _vaSeekDragging = true; });
@@ -4633,12 +5680,570 @@
       _vaReset();
     });
 
-    // Arrow key navigation when player is active
+    // ── Keyboard navigation ───────────────────────────────────
+    // Scoped to vaCard so it doesn't fire when another card has focus.
     vaCard.addEventListener("keydown", (e) => {
       if (vaPlayerSec.classList.contains("hidden")) return;
-      if (e.key === "ArrowLeft")  { e.preventDefault(); _vaLoadFrame(_vaCurrentFrame - 1); }
-      if (e.key === "ArrowRight") { e.preventDefault(); _vaLoadFrame(_vaCurrentFrame + 1); }
+      // Don't intercept when typing in any input except the skip-N field
+      if (e.target.tagName === "INPUT" && e.target !== vaSkipN) return;
+      if (e.target.tagName === "TEXTAREA") return;
+
+      if (e.key === " ") {
+        e.preventDefault();
+        vaBtnPlay.click();
+        return;
+      }
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        e.ctrlKey ? _vaLoadFrame(_vaCurrentFrame - _vaSkipN())
+                  : _vaLoadFrame(_vaCurrentFrame - 1);
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        e.ctrlKey ? _vaLoadFrame(_vaCurrentFrame + _vaSkipN())
+                  : _vaLoadFrame(_vaCurrentFrame + 1);
+        return;
+      }
     });
+    // Make the card focusable so keydown fires when clicked inside it
+    if (!vaCard.hasAttribute("tabindex")) vaCard.setAttribute("tabindex", "-1");
+
+    // ── Dataset Curation ──────────────────────────────────────────
+    (() => {
+      const vaCurationStatus  = document.getElementById("va-curation-status");
+      const vaExtractFrameBtn = document.getElementById("va-extract-frame-btn");
+      const vaAddToDatasetBtn = document.getElementById("va-add-to-dataset-btn");
+      const vaBatchAddBtn     = document.getElementById("va-batch-add-btn");
+      const vaBatchCount      = document.getElementById("va-batch-count");
+      const vaBatchStep       = document.getElementById("va-batch-step");
+      const vaCsvNone         = document.getElementById("va-csv-none");
+      const vaCsvLoaded       = document.getElementById("va-csv-loaded");
+      const vaCsvPathDisplay  = document.getElementById("va-csv-path-display");
+      const vaCreateCsvBtn    = document.getElementById("va-create-csv-btn");
+      const vaCsvCreateStatus = document.getElementById("va-csv-create-status");
+      const vaCsvBars         = document.getElementById("va-csv-bars");
+      const vaStatusBarWrap   = document.getElementById("va-status-bar-wrap");
+      const vaNoteBarWrap     = document.getElementById("va-note-bar-wrap");
+      const vaStatusCanvas    = document.getElementById("va-status-canvas");
+      const vaNoteCanvas      = document.getElementById("va-note-canvas");
+      const vaStatusChips     = document.getElementById("va-status-chips");
+      const vaNoteChips       = document.getElementById("va-note-chips");
+      const vaAnnotPanel      = document.getElementById("va-annot-panel");
+      const vaAnnotFrameNum   = document.getElementById("va-annot-frame-num");
+      const vaNoteInput       = document.getElementById("va-note-input");
+      const vaStatusInput     = document.getElementById("va-status-input");
+      const vaSaveStatusBtn   = document.getElementById("va-save-status-btn");
+      const vaSaveNoteBtn     = document.getElementById("va-save-note-btn");
+      const vaAnnotSaveStatus = document.getElementById("va-annot-save-status");
+      const vaStatusPrevBtn   = document.getElementById("va-status-prev-btn");
+      const vaStatusNextBtn   = document.getElementById("va-status-next-btn");
+      const vaNoteStepPrevBtn = document.getElementById("va-note-prev-btn");
+      const vaNoteStepNextBtn = document.getElementById("va-note-next-btn");
+      const vaNewTagInput     = document.getElementById("va-new-tag-input");
+      const vaAddTagBtn       = document.getElementById("va-add-tag-btn");
+
+      // Companion CSV state
+      let _vaCsvPath          = null;
+      let _vaCsvRows          = [];     // {frame_number, timestamp, frame_line_status, note}
+      let _vaUserTags         = [];
+      let _vaUserStatuses     = [];
+      let _vaActiveNoteFilter = null;
+
+      // Per-chip active sets and color maps (populated when chips are rendered)
+      let _vaActiveNoteChips   = new Set();
+      let _vaActiveStatusChips = new Set();
+      let _vaNoteColorMap      = {};
+      let _vaStatusColorMap    = {};
+
+      // Color palettes — status uses warm/green tones, notes use cool/blue tones
+      const _VA_STATUS_COLORS = ["#34d399","#f97316","#e879f9","#facc15","#f87171","#22d3ee","#a78bfa","#fb923c"];
+      const _VA_NOTE_COLORS   = ["#60a5fa","#f472b6","#4ade80","#38bdf8","#e879f9","#a78bfa","#facc15","#fb7185"];
+
+      // ── Status helpers ──────────────────────────────────────────
+      let _curationMsgTimer = null;
+      function _curStatus(msg, isErr) {
+        if (!vaCurationStatus) return;
+        vaCurationStatus.textContent = msg;
+        vaCurationStatus.className   = "fe-extract-status" + (isErr ? " err" : "");
+        if (_curationMsgTimer) clearTimeout(_curationMsgTimer);
+        if (msg && !isErr) {
+          _curationMsgTimer = setTimeout(() => {
+            vaCurationStatus.textContent = "";
+          }, 4000);
+        }
+      }
+
+      // ── Build request body helper ───────────────────────────────
+      function _videoRequestBody(frameNum) {
+        const n = (frameNum !== undefined) ? frameNum : _vaCurrentFrame;
+        const body = { frame_number: n };
+        if (_vaMode === "browse-video" && _vaCurrentVideoPath) {
+          body.video_path = _vaCurrentVideoPath;
+        } else if (_vaMode === "video" && _vaVideoName) {
+          body.video_name = _vaVideoName;
+        }
+        return body;
+      }
+
+      // ── Extract Frame ────────────────────────────────────────────
+      if (vaExtractFrameBtn) {
+        vaExtractFrameBtn.addEventListener("click", async () => {
+          if (!_vaMode || _vaMode === "frames") {
+            _curStatus("No video loaded — open a video first.", true); return;
+          }
+          vaExtractFrameBtn.disabled = true;
+          _curStatus("Extracting…");
+          try {
+            const res  = await fetch("/dlc/curator/extract-frame", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(_videoRequestBody()),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            _curStatus(
+              data.duplicate
+                ? `Already extracted: ${data.saved}`
+                : `Saved ${data.saved} (${data.folder}, #${data.frame_count})`
+            );
+          } catch (err) {
+            _curStatus(`Extract failed: ${err.message}`, true);
+          } finally {
+            vaExtractFrameBtn.disabled = false;
+          }
+        });
+      }
+
+      // ── Add to Dataset ────────────────────────────────────────────
+      if (vaAddToDatasetBtn) {
+        vaAddToDatasetBtn.addEventListener("click", async () => {
+          if (!_vaMode || _vaMode === "frames") {
+            _curStatus("No video loaded — open a video first.", true); return;
+          }
+          vaAddToDatasetBtn.disabled = true;
+          _curStatus("Adding to dataset…");
+          try {
+            const res  = await fetch("/dlc/curator/add-to-dataset", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(_videoRequestBody()),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            const h5note = data.h5_updated ? " + H5" : "";
+            _curStatus(
+              data.duplicate
+                ? `Already in dataset: ${data.saved}`
+                : `Added ${data.saved} to CSV${h5note} (${data.frame_count} frames)`
+            );
+          } catch (err) {
+            _curStatus(`Failed: ${err.message}`, true);
+          } finally {
+            vaAddToDatasetBtn.disabled = false;
+          }
+        });
+      }
+
+      // ── Batch Add ─────────────────────────────────────────────────
+      if (vaBatchAddBtn) {
+        vaBatchAddBtn.addEventListener("click", async () => {
+          if (!_vaMode || _vaMode === "frames") {
+            _curStatus("No video loaded — open a video first.", true); return;
+          }
+          const count = Math.max(1, parseInt(vaBatchCount?.value) || 10);
+          const step  = Math.max(1, parseInt(vaBatchStep?.value)  || 30);
+          vaBatchAddBtn.disabled = true;
+          let added = 0, dupes = 0, errors = 0;
+          const start = _vaCurrentFrame;
+          let lastFrame = start;
+          for (let i = 0; i < count; i++) {
+            const frameNum = start + i * step;
+            if (frameNum >= _vaFrameCount) break;
+            lastFrame = frameNum;
+            _curStatus(`Batch adding… ${i + 1}/${count} (frame ${frameNum})`);
+            // Navigate player to the frame being extracted
+            await _vaLoadFrame(frameNum);
+            try {
+              const res  = await fetch("/dlc/curator/add-to-dataset", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(_videoRequestBody(frameNum)),
+              });
+              const data = await res.json();
+              if (!res.ok) { errors++; continue; }
+              if (data.duplicate) dupes++; else added++;
+            } catch (_) { errors++; }
+          }
+          // Ensure player is on the last frame processed
+          if (lastFrame !== _vaCurrentFrame) await _vaLoadFrame(lastFrame);
+          vaBatchAddBtn.disabled = false;
+          const parts = [];
+          if (added) parts.push(`${added} added`);
+          if (dupes) parts.push(`${dupes} duplicate${dupes !== 1 ? "s" : ""}`);
+          if (errors) parts.push(`${errors} error${errors !== 1 ? "s" : ""}`);
+          _curStatus(`Batch done: ${parts.join(", ") || "nothing to add"}.`, errors > 0 && added === 0);
+        });
+      }
+
+      // ── Timeline bars ────────────────────────────────────────────
+
+      // Canvas-based timeline: one fillRect per annotated frame, zero DOM nodes per frame.
+      // Only frames whose field value is in activeSet are drawn; each value uses its own color from colorMap.
+      function _vaDrawCanvas(canvas, rows, field, activeSet, colorMap) {
+        if (!canvas) return;
+        const total = Math.max(_vaFrameCount, 1);
+        const W = Math.round(canvas.getBoundingClientRect().width) || canvas.clientWidth || 600;
+        canvas.width = W;
+        const H    = canvas.height || 12;
+        const ctx  = canvas.getContext("2d");
+        const minW = Math.max(1, Math.round(W / total));
+        ctx.clearRect(0, 0, W, H);
+        if (!activeSet || activeSet.size === 0) return;
+        rows.forEach(row => {
+          const val = row[field];
+          if (!val || (field === "frame_line_status" && val === "0")) return;
+          if (!activeSet.has(val)) return;
+          ctx.fillStyle = colorMap[val] || "#888";
+          const x = Math.round((Number(row.frame_number) / total) * W);
+          ctx.fillRect(x, 0, minW, H);
+        });
+      }
+
+      function _vaRedrawNoteCanvas()   { _vaDrawCanvas(vaNoteCanvas,   _vaCsvRows, "note",              _vaActiveNoteChips,   _vaNoteColorMap);   }
+      function _vaRedrawStatusCanvas() { _vaDrawCanvas(vaStatusCanvas, _vaCsvRows, "frame_line_status", _vaActiveStatusChips, _vaStatusColorMap); }
+
+      function _vaBuildCsvBars() {
+        if (!vaCsvBars) return;
+        const hasNote   = _vaCsvRows.some(r => r.note);
+        const hasStatus = _vaCsvRows.some(r => r.frame_line_status && r.frame_line_status !== "0");
+        vaCsvBars.classList.toggle("hidden", !hasNote && !hasStatus);
+        vaNoteBarWrap?.classList.toggle("hidden", !hasNote);
+        vaStatusBarWrap?.classList.toggle("hidden", !hasStatus);
+        // Canvases start empty; chips toggle individual values onto them.
+        _vaRedrawNoteCanvas();
+        _vaRedrawStatusCanvas();
+      }
+
+      // Click on either canvas — map x position to frame number and jump.
+      [vaNoteCanvas, vaStatusCanvas].forEach(canvas => {
+        if (!canvas) return;
+        canvas.addEventListener("click", e => {
+          const rect = canvas.getBoundingClientRect();
+          const fn = Math.round((e.clientX - rect.left) / rect.width * Math.max(_vaFrameCount - 1, 0));
+          _vaLoadFrame(fn);
+        });
+      });
+
+      // Prev/next navigation within the active chip set for a given field.
+      function _vaNavAnnot(field, activeSet, dir) {
+        if (!activeSet.size) return;
+        const frames = _vaCsvRows
+          .filter(r => { const v = r[field]; return v && (field !== "frame_line_status" || v !== "0") && activeSet.has(v); })
+          .map(r => r.frame_number)
+          .sort((a, b) => a - b);
+        if (!frames.length) return;
+        if (dir < 0) {
+          const prev = [...frames].reverse().find(f => f < _vaCurrentFrame);
+          if (prev != null) _vaLoadFrame(prev);
+        } else {
+          const next = frames.find(f => f > _vaCurrentFrame);
+          if (next != null) _vaLoadFrame(next);
+        }
+      }
+
+      if (vaStatusPrevBtn) vaStatusPrevBtn.addEventListener("click", () => _vaNavAnnot("frame_line_status", _vaActiveStatusChips, -1));
+      if (vaStatusNextBtn) vaStatusNextBtn.addEventListener("click", () => _vaNavAnnot("frame_line_status", _vaActiveStatusChips,  1));
+      if (vaNoteStepPrevBtn) vaNoteStepPrevBtn.addEventListener("click", () => _vaNavAnnot("note", _vaActiveNoteChips, -1));
+      if (vaNoteStepNextBtn) vaNoteStepNextBtn.addEventListener("click", () => _vaNavAnnot("note", _vaActiveNoteChips,  1));
+
+      // ── Companion CSV helpers ────────────────────────────────────
+
+      function _vaCsvSyncPanel() {
+        if (!_vaCsvPath) return;
+        if (vaAnnotFrameNum) vaAnnotFrameNum.textContent = _vaCurrentFrame;
+        const row = _vaCsvRows.find(r => r.frame_number === _vaCurrentFrame);
+        if (vaNoteInput)   vaNoteInput.value   = row ? (row.note || "") : "";
+        if (vaStatusInput) vaStatusInput.value = row ? (row.frame_line_status ?? "0") : "0";
+      }
+
+      function _vaCsvApplyRows(rows, csvPath) {
+        _vaCsvPath  = csvPath;
+        _vaCsvRows  = rows;
+        const noteVals   = [...new Set(rows.map(r => r.note).filter(v => v))];
+        const statusVals = [...new Set(rows.map(r => r.frame_line_status).filter(v => v && v !== "0"))];
+        _vaUserTags     = [...new Set([..._vaUserTags,     ...noteVals])];
+        _vaUserStatuses = [...new Set([..._vaUserStatuses, ...statusVals])];
+
+        if (vaCsvNone)        vaCsvNone.classList.add("hidden");
+        if (vaCsvLoaded)      vaCsvLoaded.classList.remove("hidden");
+        if (vaCsvPathDisplay) { vaCsvPathDisplay.textContent = csvPath; vaCsvPathDisplay.title = csvPath; }
+        if (vaAnnotPanel)     vaAnnotPanel.classList.remove("hidden");
+
+        _vaBuildCsvBars();
+        _vaCsvRenderStatusChips();
+        _vaCsvRenderTags();
+        _vaCsvSyncPanel();
+      }
+
+      function _vaCsvRenderStatusChips() {
+        if (!vaStatusChips) return;
+        vaStatusChips.innerHTML = "";
+        _vaStatusColorMap = {};
+        _vaUserStatuses.forEach((val, i) => {
+          const color = _VA_STATUS_COLORS[i % _VA_STATUS_COLORS.length];
+          _vaStatusColorMap[val] = color;
+          const chip = document.createElement("span");
+          chip.className = "fe-tag-chip" + (_vaActiveStatusChips.has(val) ? " active" : "");
+          chip.textContent = val;
+          chip.style.setProperty("--chip-color", color);
+          chip.title = `Click to show/hide "${val}" on timeline`;
+          chip.addEventListener("click", () => {
+            if (_vaActiveStatusChips.has(val)) _vaActiveStatusChips.delete(val);
+            else _vaActiveStatusChips.add(val);
+            _vaCsvRenderStatusChips();
+            _vaRedrawStatusCanvas();
+          });
+          vaStatusChips.appendChild(chip);
+        });
+        const hasActive = _vaActiveStatusChips.size > 0;
+        if (vaStatusPrevBtn) vaStatusPrevBtn.disabled = !hasActive;
+        if (vaStatusNextBtn) vaStatusNextBtn.disabled = !hasActive;
+      }
+
+      function _vaCsvRenderTags() {
+        if (!vaNoteChips) return;
+        vaNoteChips.innerHTML = "";
+        _vaNoteColorMap = {};
+        _vaUserTags.forEach((tag, i) => {
+          const color = _VA_NOTE_COLORS[i % _VA_NOTE_COLORS.length];
+          _vaNoteColorMap[tag] = color;
+          const chip = document.createElement("span");
+          chip.className = "fe-tag-chip" + (_vaActiveNoteChips.has(tag) ? " active" : "");
+          chip.textContent = tag;
+          chip.style.setProperty("--chip-color", color);
+          chip.title = `Click to show/hide "${tag}" on timeline`;
+          chip.addEventListener("click", () => {
+            if (_vaActiveNoteChips.has(tag)) _vaActiveNoteChips.delete(tag);
+            else _vaActiveNoteChips.add(tag);
+            _vaCsvRenderTags();
+            _vaRedrawNoteCanvas();
+          });
+          vaNoteChips.appendChild(chip);
+        });
+        const hasActive = _vaActiveNoteChips.size > 0;
+        if (vaNoteStepPrevBtn) vaNoteStepPrevBtn.disabled = !hasActive;
+        if (vaNoteStepNextBtn) vaNoteStepNextBtn.disabled = !hasActive;
+      }
+
+      async function _vaCsvSaveStatus() {
+        if (!_vaCsvPath) return;
+        // Read existing note for this frame so saving status doesn't wipe it
+        const existingRow = _vaCsvRows.find(r => r.frame_number === _vaCurrentFrame);
+        const note   = vaNoteInput ? vaNoteInput.value.trim() : (existingRow?.note || "");
+        const status = vaStatusInput ? (vaStatusInput.value || "0") : "0";
+        await _vaCsvDoSave(note, status);
+      }
+
+      async function _vaCsvSaveNote() {
+        if (!_vaCsvPath) return;
+        // Read existing status for this frame so saving note doesn't wipe it
+        const existingRow = _vaCsvRows.find(r => r.frame_number === _vaCurrentFrame);
+        const note   = vaNoteInput ? vaNoteInput.value.trim() : "";
+        const status = vaStatusInput ? (vaStatusInput.value || "0") : (existingRow?.frame_line_status || "0");
+        await _vaCsvDoSave(note, status);
+      }
+
+      async function _vaCsvDoSave(note, status) {
+        if (vaAnnotSaveStatus) { vaAnnotSaveStatus.textContent = "Saving…"; vaAnnotSaveStatus.className = "fe-extract-status"; }
+        try {
+          const res  = await fetch("/annotate/save-row", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({
+              csv_path:          _vaCsvPath,
+              frame_number:      _vaCurrentFrame,
+              note,
+              frame_line_status: status,
+              fps:               _vaFps,
+            }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+
+          const isInteresting = note || (status && status !== "0");
+          const idx = _vaCsvRows.findIndex(r => r.frame_number === _vaCurrentFrame);
+          if (isInteresting) {
+            const savedRow = data.row || { frame_number: _vaCurrentFrame, timestamp: (_vaCurrentFrame / _vaFps).toFixed(3), frame_line_status: status, note };
+            if (idx >= 0) _vaCsvRows[idx] = savedRow;
+            else { _vaCsvRows.push(savedRow); _vaCsvRows.sort((a, b) => a.frame_number - b.frame_number); }
+            if (note && !_vaUserTags.includes(note)) { _vaUserTags.push(note); _vaCsvRenderTags(); }
+            if (status && status !== "0" && !_vaUserStatuses.includes(status)) { _vaUserStatuses.push(status); _vaCsvRenderStatusChips(); }
+          } else {
+            if (idx >= 0) _vaCsvRows.splice(idx, 1);
+          }
+
+          _vaBuildCsvBars();
+
+          if (vaAnnotSaveStatus) {
+            vaAnnotSaveStatus.textContent = "Saved";
+            vaAnnotSaveStatus.className   = "fe-extract-status ok";
+            setTimeout(() => { if (vaAnnotSaveStatus?.textContent === "Saved") vaAnnotSaveStatus.textContent = ""; }, 2000);
+          }
+        } catch (err) {
+          if (vaAnnotSaveStatus) { vaAnnotSaveStatus.textContent = `Error: ${err.message}`; vaAnnotSaveStatus.className = "fe-extract-status err"; }
+        }
+      }
+
+      async function _vaCsvLoad(videoPath) {
+        // Reset CSV state
+        _vaCsvPath = null; _vaCsvRows = []; _vaUserTags = []; _vaUserStatuses = []; _vaActiveNoteFilter = null;
+        _vaActiveNoteChips = new Set(); _vaActiveStatusChips = new Set();
+        _vaNoteColorMap = {}; _vaStatusColorMap = {};
+        if (vaCsvNone)        vaCsvNone.classList.remove("hidden");
+        if (vaCsvLoaded)      vaCsvLoaded.classList.add("hidden");
+        if (vaCsvBars)        vaCsvBars.classList.add("hidden");
+        if (vaAnnotPanel)     vaAnnotPanel.classList.add("hidden");
+        if (vaCsvCreateStatus) vaCsvCreateStatus.textContent = "";
+
+        if (!videoPath) return;
+        try {
+          const res  = await fetch(`/annotate/csv?path=${encodeURIComponent(videoPath)}`);
+          const data = await res.json();
+          if (data.csv_exists) {
+            _vaCsvApplyRows(data.rows, data.csv_path);
+          }
+        } catch (_) {}
+      }
+
+      // Hook into frame navigation
+      _vaCurationFrameHook = () => {
+        _vaCsvSyncPanel();
+      };
+
+      // Load companion CSV when player section becomes visible (video opened)
+      if (typeof MutationObserver !== "undefined" && vaPlayerSec) {
+        new MutationObserver(async () => {
+          if (!vaPlayerSec.classList.contains("hidden") && _vaCurrentVideoPath) {
+            await _vaCsvLoad(_vaCurrentVideoPath);
+          } else if (vaPlayerSec.classList.contains("hidden")) {
+            _vaCsvPath = null; _vaCsvRows = []; _vaUserTags = []; _vaUserStatuses = []; _vaActiveNoteFilter = null;
+            _vaActiveNoteChips = new Set(); _vaActiveStatusChips = new Set();
+            _vaNoteColorMap = {}; _vaStatusColorMap = {};
+            if (vaCsvNone)    vaCsvNone.classList.remove("hidden");
+            if (vaCsvLoaded)  vaCsvLoaded.classList.add("hidden");
+            if (vaCsvBars)    vaCsvBars.classList.add("hidden");
+            if (vaAnnotPanel) vaAnnotPanel.classList.add("hidden");
+          }
+        }).observe(vaPlayerSec, { attributes: true, attributeFilter: ["class"] });
+      }
+
+      // Create CSV
+      if (vaCreateCsvBtn) {
+        vaCreateCsvBtn.addEventListener("click", async () => {
+          if (!_vaCurrentVideoPath) return;
+          if (vaCsvCreateStatus) { vaCsvCreateStatus.textContent = `Creating CSV for ${_vaFrameCount} frames…`; vaCsvCreateStatus.className = "fe-extract-status"; }
+          try {
+            const res  = await fetch("/annotate/create-csv", {
+              method:  "POST",
+              headers: { "Content-Type": "application/json" },
+              body:    JSON.stringify({ video_path: _vaCurrentVideoPath, fps: _vaFps, frame_count: _vaFrameCount }),
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            if (vaCsvCreateStatus) vaCsvCreateStatus.textContent = "";
+            _vaCsvApplyRows(data.rows, data.csv_path);
+          } catch (err) {
+            if (vaCsvCreateStatus) { vaCsvCreateStatus.textContent = `Error: ${err.message}`; vaCsvCreateStatus.className = "fe-extract-status err"; }
+          }
+        });
+      }
+
+      // Save annotation
+      if (vaSaveStatusBtn) {
+        vaSaveStatusBtn.addEventListener("click", _vaCsvSaveStatus);
+      }
+      if (vaSaveNoteBtn) {
+        vaSaveNoteBtn.addEventListener("click", _vaCsvSaveNote);
+      }
+
+      // Add new tag
+      if (vaAddTagBtn) {
+        vaAddTagBtn.addEventListener("click", () => {
+          const tag = vaNewTagInput ? vaNewTagInput.value.trim() : "";
+          if (!tag) return;
+          if (!_vaUserTags.includes(tag)) { _vaUserTags.push(tag); _vaCsvRenderTags(); }
+          if (vaNewTagInput) vaNewTagInput.value = "";
+        });
+      }
+      if (vaNewTagInput) {
+        vaNewTagInput.addEventListener("keydown", e => {
+          if (e.key === "Enter") { e.preventDefault(); vaAddTagBtn?.click(); }
+        });
+      }
+
+    })(); // end Dataset Curation
+
+    // ── Video Metadata Panel (companion CSV viewer) ────────────────────────
+    (() => {
+      const vaMetaCsvInfo   = document.getElementById("va-meta-csv-info");
+      const vaMetaFrameRow  = document.getElementById("va-meta-frame-row");
+      const vaMetaFrameNote = document.getElementById("va-meta-frame-note");
+      const vaMetaFrameStat = document.getElementById("va-meta-frame-status");
+      if (!vaMetaCsvInfo) return;
+
+      let _metaCsvRows = [];
+
+      function _metaClear() {
+        _metaCsvRows = [];
+        vaMetaCsvInfo.textContent = "No companion CSV";
+        vaMetaFrameRow.style.display = "none";
+      }
+
+      function _metaShowFrame(n) {
+        if (!_metaCsvRows.length) { vaMetaFrameRow.style.display = "none"; return; }
+        const row = _metaCsvRows.find(r => r.frame_number === n);
+        const hasContent = row && (row.note || (row.frame_line_status && row.frame_line_status !== "0"));
+        if (!hasContent) { vaMetaFrameRow.style.display = "none"; return; }
+        vaMetaFrameRow.style.display = "flex";
+        vaMetaFrameNote.textContent = row.note || "—";
+        vaMetaFrameStat.textContent = row.frame_line_status || "0";
+      }
+
+      async function _metaLoad(videoPath) {
+        _metaClear();
+        if (!videoPath) return;
+        try {
+          const res  = await fetch(`/annotate/csv?path=${encodeURIComponent(videoPath)}`);
+          const data = await res.json();
+          if (!data.csv_exists) return;
+          // Store only rows with actual annotations for the frame tooltip
+          _metaCsvRows = (data.rows || []).filter(
+            r => r.note || (r.frame_line_status && r.frame_line_status !== "0"),
+          );
+          const fname = (data.csv_path || "").split("/").pop();
+          vaMetaCsvInfo.textContent = _metaCsvRows.length
+            ? `${fname} · ${_metaCsvRows.length.toLocaleString()} annotated frames`
+            : `${fname} · no annotations yet`;
+        } catch (_) {}
+      }
+
+      // Hook into frame navigation (outer scope variable set above)
+      _vaMetadataFrameHook = n => _metaShowFrame(n);
+
+      // Watch vaPlayerSec visibility to auto-load the companion CSV
+      if (typeof MutationObserver !== "undefined" && vaPlayerSec) {
+        new MutationObserver(async () => {
+          if (!vaPlayerSec.classList.contains("hidden") && _vaCurrentVideoPath) {
+            await _metaLoad(_vaCurrentVideoPath);
+            _metaShowFrame(_vaCurrentFrame);
+          } else if (vaPlayerSec.classList.contains("hidden")) {
+            _metaClear();
+          }
+        }).observe(vaPlayerSec, { attributes: true, attributeFilter: ["class"] });
+      }
+    })(); // end Video Metadata Panel
+
   })();
 
   // ── Video Annotator ───────────────────────────────────────────
@@ -4660,6 +6265,9 @@
     const anvPauseIcon      = document.getElementById("anv-pause-icon");
     const anvBtnPrev        = document.getElementById("anv-btn-prev");
     const anvBtnNext        = document.getElementById("anv-btn-next");
+    const anvBtnSkipBack    = document.getElementById("anv-btn-skip-back");
+    const anvBtnSkipFwd     = document.getElementById("anv-btn-skip-fwd");
+    const anvSkipN          = document.getElementById("anv-skip-n");
     const anvFrameCounter   = document.getElementById("anv-frame-counter");
     const anvFrameJump      = document.getElementById("anv-frame-jump");
     const anvTimeDisplay    = document.getElementById("anv-time-display");
@@ -4667,8 +6275,8 @@
     const anvCsvBars        = document.getElementById("anv-csv-bars");
     const anvStatusBarWrap  = document.getElementById("anv-status-bar-wrap");
     const anvNoteBarWrap    = document.getElementById("anv-note-bar-wrap");
-    const anvStatusBar      = document.getElementById("anv-status-bar");
-    const anvNoteBar        = document.getElementById("anv-note-bar");
+    const anvStatusCanvas   = document.getElementById("anv-status-canvas");
+    const anvNoteCanvas     = document.getElementById("anv-note-canvas");
     const anvCsvSection     = document.getElementById("anv-csv-section");
     const anvCsvNone        = document.getElementById("anv-csv-none");
     const anvCsvLoaded      = document.getElementById("anv-csv-loaded");
@@ -4680,13 +6288,29 @@
     const anvNoteInput      = document.getElementById("anv-note-input");
     const anvStatusInput    = document.getElementById("anv-status-input");
     const anvSaveAnnotationBtn = document.getElementById("anv-save-annotation-btn");
+    const anvSaveStatusBtn  = document.getElementById("anv-save-status-btn");
+    const anvSaveNoteBtn    = document.getElementById("anv-save-note-btn");
     const anvSaveStatus     = document.getElementById("anv-save-status");
-    const anvTagChips       = document.getElementById("anv-tag-chips");
+    const anvNoteChips      = document.getElementById("anv-note-chips");
+    const anvStatusChips    = document.getElementById("anv-status-chips");
+    const anvStatusPrevBtn  = document.getElementById("anv-status-prev-btn");
+    const anvStatusNextBtn  = document.getElementById("anv-status-next-btn");
+    const anvNotePrevBtn    = document.getElementById("anv-note-prev-btn");
+    const anvNoteNextBtn    = document.getElementById("anv-note-next-btn");
     const anvNewTagInput    = document.getElementById("anv-new-tag-input");
     const anvAddTagBtn      = document.getElementById("anv-add-tag-btn");
     const anvZoomInput      = document.getElementById("anv-zoom");
     const anvZoomVal        = document.getElementById("anv-zoom-val");
     const anvRefreshCsvBtn  = document.getElementById("anv-refresh-csv-btn");
+    const anvClipSection    = document.getElementById("anv-clip-section");
+    const anvClipStart      = document.getElementById("anv-clip-start");
+    const anvClipFrames     = document.getElementById("anv-clip-frames");
+    const anvClipPostfix    = document.getElementById("anv-clip-postfix");
+    const anvClipOutdir     = document.getElementById("anv-clip-outdir");
+    const anvClipBrowseBtn  = document.getElementById("anv-clip-browse-btn");
+    const anvClipBrowser    = document.getElementById("anv-clip-browser");
+    const anvClipBtn        = document.getElementById("anv-clip-btn");
+    const anvClipStatus     = document.getElementById("anv-clip-status");
 
     // ── State ───────────────────────────────────────────────────
     let _anvZoom          = 100;
@@ -4697,10 +6321,19 @@
     let _anvFrameBusy     = false;
     let _anvSeekDragging  = false;
     let _anvPlayTimer     = null;
-    let _anvCsvPath       = null;
-    let _anvCsvRows       = [];       // {frame_number, timestamp, frame_line_status, note}
-    let _anvUserTags      = [];       // user-defined tags (note values), populated from CSV + user input
-    const _anvCsvPalette = ["#6ee7b7","#60a5fa","#f472b6","#fbbf24","#a78bfa","#34d399","#fb923c","#e879f9"];
+    let _anvCsvPath           = null;
+    let _anvCsvRows           = [];   // {frame_number, timestamp, frame_line_status, note}
+    let _anvUserTags          = [];   // unique note values seen in CSV + user-added labels
+    let _anvUserStatuses      = [];   // unique status values seen in CSV
+
+    // Per-chip active sets and color maps (populated when chips are rendered)
+    let _anvActiveNoteChips   = new Set();
+    let _anvActiveStatusChips = new Set();
+    let _anvNoteColorMap      = {};
+    let _anvStatusColorMap    = {};
+
+    const _ANV_STATUS_COLORS = ["#34d399","#f97316","#e879f9","#facc15","#f87171","#22d3ee","#a78bfa","#fb923c"];
+    const _ANV_NOTE_COLORS   = ["#60a5fa","#f472b6","#4ade80","#38bdf8","#e879f9","#a78bfa","#facc15","#fb7185"];
 
     // ── Viewer sizing (can break out of card borders like VA card) ──
     function _anvFitViewer() {
@@ -4730,7 +6363,9 @@
       _anvZoom = 100; anvZoomInput.value = "100"; anvZoomVal.textContent = "100 %";
       _anvVideoPath = null; _anvFps = 30; _anvFrameCount = 0;
       _anvCurrentFrame = 0; _anvFrameBusy = false; _anvSeekDragging = false;
-      _anvCsvPath = null; _anvCsvRows = []; _anvUserTags = [];
+      _anvCsvPath = null; _anvCsvRows = []; _anvUserTags = []; _anvUserStatuses = [];
+      _anvActiveNoteChips = new Set(); _anvActiveStatusChips = new Set();
+      _anvNoteColorMap = {}; _anvStatusColorMap = {};
       anvPlayIcon.classList.remove("hidden"); anvPauseIcon.classList.add("hidden");
       anvFrameImg.onload = null; anvFrameImg.onerror = null;
       if (anvFrameImg.src && anvFrameImg.src.startsWith("blob:")) URL.revokeObjectURL(anvFrameImg.src);
@@ -4741,14 +6376,24 @@
       anvCsvBars.classList.add("hidden");
       anvStatusBarWrap.classList.add("hidden");
       anvNoteBarWrap.classList.add("hidden");
+      [anvStatusCanvas, anvNoteCanvas].forEach(c => { if (c) { const ctx = c.getContext("2d"); ctx.clearRect(0, 0, c.width, c.height); } });
       anvAnnotationPanel.classList.add("hidden");
+      anvClipSection.classList.add("hidden");
+      anvClipBrowser.classList.add("hidden");
+      anvClipStatus.textContent = ""; anvClipStatus.className = "fe-extract-status";
       anvLoadStatus.textContent = "";
       anvLoadStatus.className = "fe-extract-status";
     }
 
     // ── Frame URL ───────────────────────────────────────────────
     function _anvFrameUrl(n) {
-      return `/annotate/video-frame/${n}?path=${encodeURIComponent(_anvVideoPath)}`;
+      return `/dlc/project/video-frame-ext/${n}?path=${encodeURIComponent(_anvVideoPath)}`;
+    }
+
+    function _anvPrefetch(frames) {
+      frames.forEach(n => {
+        if (n >= 0 && n < _anvFrameCount) new Image().src = _anvFrameUrl(n);
+      });
     }
 
     // ── Frame counter — text node kept separate from the jump input ──
@@ -4762,6 +6407,9 @@
       if (!_anvSeekDragging)
         anvSeek.value = Math.round((_anvCurrentFrame / Math.max(_anvFrameCount - 1, 1)) * 1000);
       _anvSyncAnnotationPanel();
+      // Keep clip-start in sync with the current frame position
+      anvClipStart.value = String(_anvCurrentFrame);
+      anvClipStart.max   = String(Math.max(_anvFrameCount - 1, 0));
     }
 
     // ── Double-click frame counter to jump ───────────────────────
@@ -4816,6 +6464,7 @@
         });
         _anvFitViewer();
         _anvUpdateDisplay();
+        _anvPrefetch([n + 1, n + 2]);
       } catch (err) {
         anvLoadStatus.textContent = `Frame load error: ${err.message}`;
         anvLoadStatus.className   = "fe-extract-status err";
@@ -4844,6 +6493,15 @@
     });
     anvBtnPrev.addEventListener("click", () => _anvLoadFrame(_anvCurrentFrame - 1));
     anvBtnNext.addEventListener("click", () => _anvLoadFrame(_anvCurrentFrame + 1));
+    const _anvSkipN = () => Math.max(1, parseInt(anvSkipN?.value || "10", 10));
+    if (anvBtnSkipBack) anvBtnSkipBack.addEventListener("click", () => _anvLoadFrame(_anvCurrentFrame - _anvSkipN()));
+    if (anvBtnSkipFwd)  anvBtnSkipFwd.addEventListener("click",  () => _anvLoadFrame(_anvCurrentFrame + _anvSkipN()));
+    document.addEventListener("keydown", e => {
+      if (!anvCard || anvCard.classList.contains("hidden")) return;
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.ctrlKey && e.key === "ArrowLeft")  { e.preventDefault(); _anvLoadFrame(_anvCurrentFrame - _anvSkipN()); }
+      if (e.ctrlKey && e.key === "ArrowRight") { e.preventDefault(); _anvLoadFrame(_anvCurrentFrame + _anvSkipN()); }
+    });
 
     anvSeek.addEventListener("mousedown",  () => { _anvSeekDragging = true; });
     anvSeek.addEventListener("touchstart", () => { _anvSeekDragging = true; });
@@ -4861,56 +6519,56 @@
       if (e.key === "ArrowRight") { e.preventDefault(); _anvLoadFrame(_anvCurrentFrame + 1); }
     });
 
-    // ── Build CSV bars — one segment per annotated frame ─────────
+    // ── Build CSV bars — canvas, one fillRect per annotated frame ──
+    // Only frames whose value is in activeSet are drawn; each value uses colorMap.
+    function _anvDrawCanvas(canvas, rows, field, activeSet, colorMap) {
+      if (!canvas) return;
+      const total = Math.max(_anvFrameCount, 1);
+      const W = Math.round(canvas.getBoundingClientRect().width) || canvas.clientWidth || 600;
+      canvas.width = W;
+      const H    = canvas.height || 12;
+      const ctx  = canvas.getContext("2d");
+      const minW = Math.max(1, Math.round(W / total));
+      ctx.clearRect(0, 0, W, H);
+      if (!activeSet || activeSet.size === 0) return;
+      rows.forEach(row => {
+        const val = row[field];
+        if (!val || (field === "frame_line_status" && val === "0")) return;
+        if (!activeSet.has(val)) return;
+        ctx.fillStyle = colorMap[val] || "#888";
+        const x = Math.round((Number(row.frame_number) / total) * W);
+        ctx.fillRect(x, 0, minW, H);
+      });
+    }
+
+    function _anvRedrawNoteCanvas()   { _anvDrawCanvas(anvNoteCanvas,   _anvCsvRows, "note",              _anvActiveNoteChips,   _anvNoteColorMap);   }
+    function _anvRedrawStatusCanvas() { _anvDrawCanvas(anvStatusCanvas, _anvCsvRows, "frame_line_status", _anvActiveStatusChips, _anvStatusColorMap); }
+
     function _anvBuildCsvBars() {
-      const total     = Math.max(_anvFrameCount, 1);
       const hasNote   = _anvCsvRows.some(r => r.note);
       const hasStatus = _anvCsvRows.some(r => r.frame_line_status && r.frame_line_status !== "0");
-
       anvCsvBars.classList.toggle("hidden", !hasNote && !hasStatus);
-
-      // Note bar
       anvNoteBarWrap.classList.toggle("hidden", !hasNote);
-      anvNoteBar.innerHTML = "";
-      if (hasNote) {
-        const vals = [...new Set(_anvCsvRows.filter(r => r.note).map(r => r.note))];
-        const colorMap = {};
-        vals.forEach((v, i) => { colorMap[v] = _anvCsvPalette[i % _anvCsvPalette.length]; });
-        _anvCsvRows.forEach(row => {
-          if (!row.note) return;
-          const fn    = Number(row.frame_number);
-          const color = colorMap[row.note];
-          const seg   = document.createElement("div");
-          seg.className = "fe-timeline-seg";
-          seg.style.cssText = `left:${(fn / total) * 100}%;width:max(0.5%,3px);background:${color}40;border-color:${color};color:${color}`;
-          seg.textContent = row.note;
-          seg.title = `${row.note}  (frame ${fn})`;
-          seg.addEventListener("click", () => _anvLoadFrame(fn));
-          anvNoteBar.appendChild(seg);
-        });
-      }
-
-      // Status bar
       anvStatusBarWrap.classList.toggle("hidden", !hasStatus);
-      anvStatusBar.innerHTML = "";
-      if (hasStatus) {
-        const vals = [...new Set(_anvCsvRows.filter(r => r.frame_line_status && r.frame_line_status !== "0").map(r => r.frame_line_status))];
-        const colorMap = {};
-        vals.forEach((v, i) => { colorMap[v] = _anvCsvPalette[i % _anvCsvPalette.length]; });
-        _anvCsvRows.forEach(row => {
-          if (!row.frame_line_status || row.frame_line_status === "0") return;
-          const fn    = Number(row.frame_number);
-          const color = colorMap[row.frame_line_status];
-          const seg   = document.createElement("div");
-          seg.className = "fe-timeline-seg";
-          seg.style.cssText = `left:${(fn / total) * 100}%;width:max(0.5%,3px);background:${color}40;border-color:${color};color:${color}`;
-          seg.textContent = row.frame_line_status;
-          seg.title = `${row.frame_line_status}  (frame ${fn})`;
-          seg.addEventListener("click", () => _anvLoadFrame(fn));
-          anvStatusBar.appendChild(seg);
-        });
-      }
+      // Canvases start empty; chips toggle individual values onto them.
+      _anvRedrawNoteCanvas();
+      _anvRedrawStatusCanvas();
     }
+
+    // Click on canvas — snap to nearest annotated frame for that field and jump.
+    [anvNoteCanvas, anvStatusCanvas].forEach((canvas, ci) => {
+      if (!canvas) return;
+      const field = ci === 0 ? "note" : "frame_line_status";
+      canvas.addEventListener("click", e => {
+        const rect   = canvas.getBoundingClientRect();
+        const target = Math.round((e.clientX - rect.left) / rect.width * Math.max(_anvFrameCount - 1, 0));
+        const annotated = _anvCsvRows
+          .filter(r => { const v = r[field]; return v && (field !== "frame_line_status" || v !== "0"); })
+          .map(r => r.frame_number);
+        if (!annotated.length) return;
+        _anvLoadFrame(annotated.reduce((a, b) => Math.abs(b - target) < Math.abs(a - target) ? b : a));
+      });
+    });
 
     // ── Sync annotation panel to current frame ───────────────────
     function _anvSyncAnnotationPanel() {
@@ -4926,57 +6584,80 @@
       _anvCsvPath  = csvPath;
       _anvCsvRows  = rows;
 
-      // Collect unique note tags
-      const noteVals = [...new Set(rows.map(r => r.note).filter(v => v))];
-      _anvUserTags  = [...new Set([..._anvUserTags, ...noteVals])];
+      const noteVals   = [...new Set(rows.map(r => r.note).filter(v => v))];
+      const statusVals = [...new Set(rows.map(r => r.frame_line_status).filter(v => v && v !== "0"))];
+      _anvUserTags     = [...new Set([..._anvUserTags,     ...noteVals])];
+      _anvUserStatuses = [...new Set([..._anvUserStatuses, ...statusVals])];
 
-      // Show CSV status
       anvCsvNone.classList.add("hidden");
       anvCsvLoaded.classList.remove("hidden");
       anvCsvPathDisplay.textContent = csvPath;
       anvCsvPathDisplay.title       = csvPath;
-
-      // Show annotation panel
       anvAnnotationPanel.classList.remove("hidden");
 
-      // Build CSV bars
       _anvBuildCsvBars();
-
-      // Render tag chips
+      _anvRenderStatusChips();
       _anvRenderTagChips();
-
-      // Sync to current frame
       _anvSyncAnnotationPanel();
     }
 
-    // ── Render clickable note tag chips ──────────────────────────
-    function _anvRenderTagChips() {
-      anvTagChips.innerHTML = "";
-      _anvUserTags.forEach(tag => {
+    // ── Render status chips — each unique value, unique color, toggle timeline ─
+    function _anvRenderStatusChips() {
+      if (!anvStatusChips) return;
+      anvStatusChips.innerHTML = "";
+      _anvStatusColorMap = {};
+      _anvUserStatuses.forEach((val, i) => {
+        const color = _ANV_STATUS_COLORS[i % _ANV_STATUS_COLORS.length];
+        _anvStatusColorMap[val] = color;
         const chip = document.createElement("span");
-        chip.className = "fe-tag-chip";
-        chip.textContent = tag;
-        chip.style.setProperty("--chip-color", "#6ee7b7");
-        chip.title = `Click to annotate frame ${_anvCurrentFrame} with note "${tag}"`;
-        chip.addEventListener("click", () => _anvApplyTag(tag));
-        anvTagChips.appendChild(chip);
+        chip.className = "fe-tag-chip" + (_anvActiveStatusChips.has(val) ? " active" : "");
+        chip.textContent = val;
+        chip.style.setProperty("--chip-color", color);
+        chip.title = `Click to show/hide "${val}" on timeline`;
+        chip.addEventListener("click", () => {
+          if (_anvActiveStatusChips.has(val)) _anvActiveStatusChips.delete(val);
+          else _anvActiveStatusChips.add(val);
+          _anvRenderStatusChips();
+          _anvRedrawStatusCanvas();
+        });
+        anvStatusChips.appendChild(chip);
       });
+      const hasActive = _anvActiveStatusChips.size > 0;
+      if (anvStatusPrevBtn) anvStatusPrevBtn.disabled = !hasActive;
+      if (anvStatusNextBtn) anvStatusNextBtn.disabled = !hasActive;
     }
 
-    // ── Apply a note tag to the current frame ────────────────────
-    async function _anvApplyTag(tag) {
-      if (!_anvCsvPath) return;
-      anvNoteInput.value = tag;
-      await _anvSaveAnnotation();
+    // ── Render note chips — each unique value, unique color, toggle timeline ──
+    function _anvRenderTagChips() {
+      if (!anvNoteChips) return;
+      anvNoteChips.innerHTML = "";
+      _anvNoteColorMap = {};
+      _anvUserTags.forEach((tag, i) => {
+        const color = _ANV_NOTE_COLORS[i % _ANV_NOTE_COLORS.length];
+        _anvNoteColorMap[tag] = color;
+        const chip = document.createElement("span");
+        chip.className = "fe-tag-chip" + (_anvActiveNoteChips.has(tag) ? " active" : "");
+        chip.textContent = tag;
+        chip.style.setProperty("--chip-color", color);
+        chip.title = `Click to show/hide "${tag}" on timeline`;
+        chip.addEventListener("click", () => {
+          if (_anvActiveNoteChips.has(tag)) _anvActiveNoteChips.delete(tag);
+          else _anvActiveNoteChips.add(tag);
+          _anvRenderTagChips();
+          _anvRedrawNoteCanvas();
+        });
+        anvNoteChips.appendChild(chip);
+      });
+      const hasActive = _anvActiveNoteChips.size > 0;
+      if (anvNotePrevBtn) anvNotePrevBtn.disabled = !hasActive;
+      if (anvNoteNextBtn) anvNoteNextBtn.disabled = !hasActive;
     }
 
-    // ── Save annotation for current frame ────────────────────────
-    async function _anvSaveAnnotation() {
+    // ── Core save — writes note+status for current frame ─────────
+    async function _anvDoSave(note, status) {
       if (!_anvCsvPath) return;
       anvSaveStatus.textContent = "Saving…";
       anvSaveStatus.className   = "fe-extract-status";
-      const note   = anvNoteInput.value.trim();
-      const status = anvStatusInput.value || "0";
       try {
         const res  = await fetch("/annotate/save-row", {
           method:  "POST",
@@ -4992,8 +6673,6 @@
         const data = await res.json();
         if (data.error) throw new Error(data.error);
 
-        // Update _anvCsvRows in-place — only "interesting" rows are tracked
-        // (non-empty note OR status that isn't the default "0")
         const isInteresting = note || (status && status !== "0");
         const idx = _anvCsvRows.findIndex(r => r.frame_number === _anvCurrentFrame);
         if (isInteresting) {
@@ -5004,23 +6683,13 @@
             note,
           };
           if (idx >= 0) _anvCsvRows[idx] = savedRow;
-          else {
-            _anvCsvRows.push(savedRow);
-            _anvCsvRows.sort((a, b) => a.frame_number - b.frame_number);
-          }
-          // Add new note to user tags if needed
-          if (note && !_anvUserTags.includes(note)) {
-            _anvUserTags.push(note);
-            _anvRenderTagChips();
-          }
+          else { _anvCsvRows.push(savedRow); _anvCsvRows.sort((a, b) => a.frame_number - b.frame_number); }
+          if (note && !_anvUserTags.includes(note)) { _anvUserTags.push(note); _anvRenderTagChips(); }
+          if (status && status !== "0" && !_anvUserStatuses.includes(status)) { _anvUserStatuses.push(status); _anvRenderStatusChips(); }
         } else {
-          // Row is now default — remove it from the tracked list
           if (idx >= 0) _anvCsvRows.splice(idx, 1);
         }
-
-        // Rebuild the timeline bars to reflect the change
         _anvBuildCsvBars();
-
         anvSaveStatus.textContent = "Saved";
         anvSaveStatus.className   = "fe-extract-status ok";
         setTimeout(() => { if (anvSaveStatus.textContent === "Saved") anvSaveStatus.textContent = ""; }, 2000);
@@ -5030,7 +6699,44 @@
       }
     }
 
-    anvSaveAnnotationBtn.addEventListener("click", _anvSaveAnnotation);
+    async function _anvSaveStatus() {
+      const existingRow = _anvCsvRows.find(r => r.frame_number === _anvCurrentFrame);
+      const note   = anvNoteInput   ? anvNoteInput.value.trim()       : (existingRow?.note || "");
+      const status = anvStatusInput ? (anvStatusInput.value || "0")   : "0";
+      await _anvDoSave(note, status);
+    }
+
+    async function _anvSaveNote() {
+      const existingRow = _anvCsvRows.find(r => r.frame_number === _anvCurrentFrame);
+      const note   = anvNoteInput   ? anvNoteInput.value.trim()                        : "";
+      const status = anvStatusInput ? (anvStatusInput.value || "0") : (existingRow?.frame_line_status || "0");
+      await _anvDoSave(note, status);
+    }
+
+    if (anvSaveStatusBtn) anvSaveStatusBtn.addEventListener("click", _anvSaveStatus);
+    if (anvSaveNoteBtn)   anvSaveNoteBtn.addEventListener("click",   _anvSaveNote);
+    // Keep old single-button ref working if present (graceful fallback)
+    if (anvSaveAnnotationBtn) anvSaveAnnotationBtn.addEventListener("click", () => _anvDoSave(
+      anvNoteInput ? anvNoteInput.value.trim() : "",
+      anvStatusInput ? (anvStatusInput.value || "0") : "0",
+    ));
+
+    // ── Prev / next navigation within active chip set ─────────────
+    function _anvNavAnnot(field, activeSet, dir) {
+      if (!activeSet.size) return;
+      const frames = _anvCsvRows
+        .filter(r => { const v = r[field]; return v && (field !== "frame_line_status" || v !== "0") && activeSet.has(v); })
+        .map(r => r.frame_number)
+        .sort((a, b) => a - b);
+      if (!frames.length) return;
+      if (dir < 0) { const prev = [...frames].reverse().find(f => f < _anvCurrentFrame); if (prev != null) _anvLoadFrame(prev); }
+      else         { const next = frames.find(f => f > _anvCurrentFrame);                if (next != null) _anvLoadFrame(next); }
+    }
+
+    if (anvStatusPrevBtn) anvStatusPrevBtn.addEventListener("click", () => _anvNavAnnot("frame_line_status", _anvActiveStatusChips, -1));
+    if (anvStatusNextBtn) anvStatusNextBtn.addEventListener("click", () => _anvNavAnnot("frame_line_status", _anvActiveStatusChips,  1));
+    if (anvNotePrevBtn)   anvNotePrevBtn.addEventListener("click",   () => _anvNavAnnot("note", _anvActiveNoteChips, -1));
+    if (anvNoteNextBtn)   anvNoteNextBtn.addEventListener("click",   () => _anvNavAnnot("note", _anvActiveNoteChips,  1));
 
     // ── Add new tag ──────────────────────────────────────────────
     anvAddTagBtn.addEventListener("click", () => {
@@ -5067,6 +6773,13 @@
       anvLoadStatus.textContent = "";
       anvPlayerSec.classList.remove("hidden");
       anvCsvSection.classList.remove("hidden");
+      anvClipSection.classList.remove("hidden");
+      anvClipStart.value  = "0";
+      anvClipStart.max    = String(Math.max(_anvFrameCount - 1, 0));
+      anvClipFrames.value = "100";
+      anvClipOutdir.value = "";
+      anvClipPostfix.value = "";
+      anvClipStatus.textContent = "";
       _anvLoadFrame(0);
 
       // Try to load companion CSV
@@ -5217,19 +6930,148 @@
       _anvReset();
       anvBrowser.classList.add("hidden");
     });
+
+    // ── Clip extractor dir browser ───────────────────────────────
+    async function _anvClipBrowseDir(dirPath) {
+      anvClipBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
+      try {
+        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
+        const data = await res.json();
+        if (data.error) {
+          anvClipBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">${data.error}</span>`;
+          return;
+        }
+        anvClipBrowser.innerHTML = "";
+
+        // Header: current path + Up button
+        const header = document.createElement("div");
+        header.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.15rem .2rem .3rem;border-bottom:1px solid var(--border);margin-bottom:.2rem;min-width:0";
+        const pathLabel = document.createElement("span");
+        pathLabel.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.7rem;color:var(--text-dim)";
+        pathLabel.textContent = data.path;
+        pathLabel.title = data.path;
+        header.appendChild(pathLabel);
+        if (data.parent) {
+          const upBtn = document.createElement("button");
+          upBtn.className = "btn-sm";
+          upBtn.style.cssText = "padding:.12rem .45rem;font-size:.7rem;flex-shrink:0";
+          upBtn.textContent = "↑ Up";
+          upBtn.addEventListener("click", e => { e.stopPropagation(); _anvClipBrowseDir(data.parent); });
+          header.appendChild(upBtn);
+        }
+        anvClipBrowser.appendChild(header);
+
+        // "Use this folder" row for the current directory
+        const useRow = document.createElement("div");
+        useRow.style.cssText = "display:flex;align-items:center;gap:.35rem;padding:.18rem .3rem;border-radius:4px;cursor:pointer;font-size:.77rem;color:var(--accent)";
+        useRow.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>Use this folder</span>`;
+        useRow.addEventListener("mouseenter", () => { useRow.style.background = "var(--surface-3,#2a2a2a)"; });
+        useRow.addEventListener("mouseleave", () => { useRow.style.background = ""; });
+        useRow.addEventListener("click", () => {
+          anvClipOutdir.value = data.path;
+          anvClipBrowser.classList.add("hidden");
+        });
+        anvClipBrowser.appendChild(useRow);
+
+        const dirs = data.entries.filter(e => e.type === "dir");
+        if (!dirs.length) {
+          const empty = document.createElement("span");
+          empty.style.cssText = "font-size:.75rem;color:var(--text-dim);padding:.25rem;display:block";
+          empty.textContent = "(no subdirectories)";
+          anvClipBrowser.appendChild(empty);
+        } else {
+          dirs.forEach(e => {
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;align-items:center;gap:.35rem;padding:.18rem .3rem;border-radius:4px;cursor:pointer;font-size:.77rem";
+            const icon = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;color:var(--text-dim)"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+            row.innerHTML = `${icon}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">${e.name}</span>`;
+            row.addEventListener("mouseenter", () => { row.style.background = "var(--surface-3,#2a2a2a)"; });
+            row.addEventListener("mouseleave", () => { row.style.background = ""; });
+            const fullPath = data.path.replace(/\/+$/, "") + "/" + e.name;
+            row.addEventListener("click", () => _anvClipBrowseDir(fullPath));
+            anvClipBrowser.appendChild(row);
+          });
+        }
+      } catch (err) {
+        anvClipBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">Error: ${err.message}</span>`;
+      }
+    }
+
+    anvClipBrowseBtn.addEventListener("click", () => {
+      if (anvClipBrowser.classList.contains("hidden")) {
+        anvClipBrowser.classList.remove("hidden");
+        // Start browser at current video's directory if possible, else user data dir
+        const startPath = _anvVideoPath
+          ? _anvVideoPath.substring(0, _anvVideoPath.lastIndexOf("/")) || "/"
+          : (_userDataDir || "/");
+        _anvClipBrowseDir(startPath);
+      } else {
+        anvClipBrowser.classList.add("hidden");
+      }
+    });
+
+    // ── Crop video ───────────────────────────────────────────────
+    async function _anvCropVideo() {
+      if (!_anvVideoPath) return;
+      const startFrame = parseInt(anvClipStart.value, 10) || 0;
+      const numFrames  = parseInt(anvClipFrames.value, 10) || 0;
+      if (numFrames <= 0) {
+        anvClipStatus.textContent = "Frames must be > 0.";
+        anvClipStatus.className   = "fe-extract-status err";
+        return;
+      }
+
+      anvClipStatus.textContent = "Cropping…";
+      anvClipStatus.className   = "fe-extract-status";
+      anvClipBtn.disabled       = true;
+
+      try {
+        const res  = await fetch("/annotate/crop-video", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            video_path:  _anvVideoPath,
+            start_frame: startFrame,
+            num_frames:  numFrames,
+            output_dir:  anvClipOutdir.value.trim(),
+            postfix:     anvClipPostfix.value.trim(),
+          }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        const fname = data.output_path.split("/").pop();
+        let msg = `Saved: ${fname}`;
+        if (data.csv_path) {
+          msg += ` + CSV`;
+        }
+        anvClipStatus.textContent = msg;
+        anvClipStatus.className   = "fe-extract-status ok";
+        anvClipStatus.title       = data.output_path;
+      } catch (err) {
+        anvClipStatus.textContent = `Error: ${err.message}`;
+        anvClipStatus.className   = "fe-extract-status err";
+      } finally {
+        anvClipBtn.disabled = false;
+      }
+    }
+
+    anvClipBtn.addEventListener("click", _anvCropVideo);
   })();
 
   // ── GPU & Training Monitor ────────────────────────────────────
   (() => {
-    const gmCard       = document.getElementById("gpu-monitor-card");
-    const gmOpenBtn    = document.getElementById("btn-open-gpu-monitor");
-    const gmCloseBtn   = document.getElementById("btn-close-gpu-monitor");
-    const gmRefreshBtn = document.getElementById("gm-refresh-btn");
-    const gmClearBtn   = document.getElementById("gm-clear-btn");
-    const gmGpuList    = document.getElementById("gm-gpu-list");
-    const gmGpuAge     = document.getElementById("gm-gpu-age");
-    const gmJobsList   = document.getElementById("gm-jobs-list");
-    const gmBadge      = document.getElementById("gpu-monitor-badge");
+    const gmCard          = document.getElementById("gpu-monitor-card");
+    const gmOpenBtn       = document.getElementById("btn-open-gpu-monitor");
+    const gmCloseBtn      = document.getElementById("btn-close-gpu-monitor");
+    const gmRefreshBtn    = document.getElementById("gm-refresh-btn");
+    const gmClearBtn      = document.getElementById("gm-clear-btn");
+    const gmGpuList       = document.getElementById("gm-gpu-list");
+    const gmGpuAge        = document.getElementById("gm-gpu-age");
+    const gmJobsList      = document.getElementById("gm-jobs-list");
+    const gmQueueList     = document.getElementById("gm-queue-list");
+    const gmCancelAllBtn  = document.getElementById("gm-cancel-all-btn");
+    const gmBadge         = document.getElementById("gpu-monitor-badge");
 
     let _gmPollTimer = null;
 
@@ -5254,6 +7096,69 @@
       } catch (e) { console.error(e); }
       gmClearBtn.disabled = false;
     });
+
+    gmCancelAllBtn?.addEventListener("click", async () => {
+      if (!confirm("Cancel all queued tasks? They will not run.")) return;
+      gmCancelAllBtn.disabled = true;
+      try {
+        await fetch("/dlc/training/queue/cancel-all", { method: "POST" });
+        await _gmRefresh();
+      } catch (e) { console.error(e); }
+      gmCancelAllBtn.disabled = false;
+    });
+
+    // ── Render queued tasks ───────────────────────────────────
+    function _gmRenderQueue(data, runningIds = new Set()) {
+      let tasks = data.tasks || [];
+      const INTERNAL_TASKS = new Set(["tasks.dlc_probe_gpu_stats"]);
+      tasks = tasks.filter(t => !INTERNAL_TASKS.has(t.task_name) && !runningIds.has(t.task_id));
+      if (tasks.length === 0) {
+        gmQueueList.innerHTML = '<span style="font-size:.82rem;color:var(--text-dim)">No queued tasks.</span>';
+        gmCancelAllBtn.classList.add("hidden");
+        return;
+      }
+      gmCancelAllBtn.classList.remove("hidden");
+
+      const taskLabel = {
+        "tasks.dlc_train_network":           "Train",
+        "tasks.dlc_create_training_dataset": "Create Dataset",
+        "tasks.dlc_analyze":                 "Analyze",
+        "tasks.dlc_machine_label_frames":    "Machine Label",
+        "tasks.dlc_tapnet_propagate":        "TAPNet",
+      };
+      const queueColor = { pytorch: "#a78bfa", tensorflow: "#f59e0b", celery: "var(--text-dim)" };
+
+      gmQueueList.innerHTML = tasks.map(t => {
+        const label    = taskLabel[t.task_name] || (t.task_name || "task").split(".").pop();
+        const project  = t.config_path ? t.config_path.split("/").slice(-2, -1)[0] : "—";
+        const qClr     = queueColor[t.queue] || "var(--text-dim)";
+        return `
+        <div style="display:flex;align-items:center;gap:.55rem;padding:.45rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:6px">
+          <span style="font-size:.68rem;font-weight:600;color:#f0a030;flex-shrink:0;text-transform:uppercase;letter-spacing:.04em">QUEUED</span>
+          <span style="font-size:.68rem;font-weight:600;color:var(--text-dim);flex-shrink:0;text-transform:uppercase;letter-spacing:.04em">${label}</span>
+          <span style="font-family:var(--mono);font-size:.72rem;color:var(--text-dim);flex-shrink:0">${(t.task_id||"").slice(0,8)}…</span>
+          <span style="font-size:.78rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${project}</span>
+          <span style="font-size:.7rem;color:${qClr};flex-shrink:0">${t.queue}</span>
+          <button class="btn-sm btn-danger gm-cancel-btn" data-task-id="${t.task_id}" style="padding:.15rem .45rem;font-size:.72rem;flex-shrink:0" title="Cancel this task">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>`;
+      }).join("");
+
+      gmQueueList.querySelectorAll(".gm-cancel-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          try {
+            await fetch("/dlc/training/queue/cancel", {
+              method:  "POST",
+              headers: { "Content-Type": "application/json" },
+              body:    JSON.stringify({ task_id: btn.dataset.taskId }),
+            });
+            await _gmRefresh();
+          } catch (e) { console.error(e); btn.disabled = false; }
+        });
+      });
+    }
 
     // ── Render GPU bars ───────────────────────────────────────
     function _gmRenderGpus(data) {
@@ -5297,7 +7202,7 @@
     // ── Render jobs list ──────────────────────────────────────
     function _gmRenderJobs(data) {
       // Update the global training-active flag and the run button
-      _dlcTrainingActive = (data.jobs || []).some(j => j.status === "running" && j.operation !== "analyze");
+      _dlcTrainingActive = (data.jobs || []).some(j => (j.status === "running" || j.status === "dead") && j.operation !== "analyze");
       const tnRunBtn = document.getElementById("btn-run-train-network");
       if (tnRunBtn && !tnRunBtn._tnPolling) {
         tnRunBtn.disabled = _dlcTrainingActive;
@@ -5320,7 +7225,7 @@
         const opBadge   = opLabel[op] || op;
         const opClr     = opColor[op] || "var(--text-dim)";
         const ago       = j.started_at ? _gmTimeAgo(parseFloat(j.started_at)) : "";
-        const canStop   = j.status === "running";
+        const canStop   = j.status === "running" || j.status === "dead";
         // For analyze jobs show target file/folder name as subtitle
         const subtitle  = op === "analyze" && j.target_path
           ? j.target_path.split("/").pop()
@@ -5372,12 +7277,18 @@
 
     async function _gmRefresh() {
       try {
-        const [gpuRes, jobsRes] = await Promise.all([
+        const [gpuRes, jobsRes, queueRes] = await Promise.all([
           fetch("/dlc/gpu/status"),
           fetch("/dlc/training/jobs"),
+          fetch("/dlc/training/queue"),
         ]);
         _gmRenderGpus(await gpuRes.json());
-        _gmRenderJobs(await jobsRes.json());
+        const jobsData  = await jobsRes.json();
+        const queueData = await queueRes.json();
+        _gmRenderJobs(jobsData);
+        // Pass running task IDs so the queue renderer can hide duplicates
+        const runningIds = new Set((jobsData.jobs || []).map(j => j.task_id));
+        _gmRenderQueue(queueData, runningIds);
       } catch (e) {
         console.error("GPU monitor refresh error:", e);
       }
