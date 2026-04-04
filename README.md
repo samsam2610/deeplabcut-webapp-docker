@@ -1,20 +1,6 @@
 # DeepLabCut WebApp
 
-Browser-based pipeline orchestrator for [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut) pose estimation and [Anipose](https://github.com/lambdaloop/anipose) 3D triangulation, with integrated TAPNet/TAPIR label propagation and an active-learning frame curation UI.
-
----
-
-## Hardware Requirements
-
-| Role | Device | Notes |
-|------|--------|-------|
-| DLC inference / TAPNet | RTX 5090 (GPU 0) | `CUDA_VISIBLE_DEVICES=0` enforced in all workers |
-| LLM orchestrator / Claude | Blackwell A6000 (GPU 1) | Never touched by this stack |
-| CPU fallback | Any | TensorFlow worker uses CUDA 11.8 |
-
-> **Critical:** The A6000 is reserved for the orchestrator. No DLC or Anipose task may
-> set `CUDA_VISIBLE_DEVICES=1`. See `src/dlc_tapnet_tracker.py` and `src/dlc/tasks.py`
-> for enforcement points.
+Browser-based pipeline orchestrator for [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut) pose estimation and [Anipose](https://github.com/lambdaloop/anipose) 3D triangulation, with an active-learning frame curation UI.
 
 ---
 
@@ -56,7 +42,7 @@ docker compose build worker && docker compose up -d --no-deps worker
 .
 ├── docker-compose.yml          # Orchestration: flask + worker + worker-tf + redis
 ├── Dockerfile.flask            # python:3.10-slim, gunicorn, no GPU
-├── Dockerfile.worker           # pytorch/pytorch:2.9.1-cuda13.0, DLC + TAPNet
+├── Dockerfile.worker           # pytorch/pytorch:2.9.1-cuda13.0, DLC
 ├── Dockerfile.worker-tf        # tensorflow:2.13.0-gpu (CUDA 11.8), legacy TF DLC
 ├── requirements-flask.txt
 ├── requirements-worker.txt
@@ -71,7 +57,6 @@ docker compose build worker && docker compose up -d --no-deps worker
 │   ├── app.py                  # Flask entry point, blueprint registration
 │   ├── celery_app.py           # Celery instance + worker startup hooks
 │   ├── tasks.py                # Worker entry point (imports dlc + anipose tasks)
-│   ├── dlc_tapnet_tracker.py   # TAPNet/TAPIR label propagation adapter
 │   ├── dlc_dataset_curator.py  # Frame extraction + CollectedData CSV/H5 I/O
 │   ├── dlc/                    # DLC Flask blueprints + Celery tasks
 │   ├── anipose/                # Anipose Flask blueprints + Celery tasks
@@ -96,7 +81,7 @@ Tests run inside the PyTorch worker container (host Python lacks DLC/pandas):
 docker compose exec worker bash -c "cd /app && pip install pytest -q && pytest tests/ -v"
 ```
 
-GPU-dependent tests (TAPNet, video fixture) auto-skip if hardware/data is absent.
+GPU-dependent tests (video fixture) auto-skip if hardware/data is absent.
 
 ---
 
@@ -126,7 +111,6 @@ WORKER_UID / WORKER_GID=1000          # dlcuser inside containers
 
 ## Contributing
 
-- All DLC/TAPNet code must enforce `CUDA_VISIBLE_DEVICES=0`
 - Never modify files under `/user-data/Parra-Data/` directly — use sandbox copies
 - H5 writes use atomic rename via `.tmp` — do not bypass this
 - See `docs/LLM_CONTEXT.md` for design constraints before editing
