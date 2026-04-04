@@ -1,0 +1,240 @@
+"""
+DLC Task Control Blueprint — pause, resume, terminate running DLC tasks.
+
+Routes:
+  POST /dlc/task/<task_id>/pause       Freeze subprocess with SIGSTOP
+  POST /dlc/task/<task_id>/resume      Unfreeze subprocess with SIGCONT
+  POST /dlc/task/<task_id>/terminate   SIGCONT (if paused) then SIGTERM→SIGKILL
+  GET  /dlc/task/<task_id>/log-stream  Server-Sent Events: live log lines
+
+Redis keys used:
+  dlc_train_pid:<task_id>      | dlc_analyze_pid:<task_id>    — subprocess PGID
+  dlc_train_pause:<task_id>    | dlc_analyze_pause:<task_id>  — pause flag
+  dlc_train_stop:<task_id>     | dlc_analyze_stop:<task_id>   — stop flag (emit_loop checks)
+  dlc_train_job:<task_id>      | dlc_analyze_job:<task_id>    — job hash (status field)
+  dlc_task:<task_id>:log                                       — Redis list of log lines (SSE feed)
+"""
+from __future__ import annotations
+
+import os
+import signal
+import time
+
+from flask import Blueprint, Response, jsonify, stream_with_context
+
+from . import ctx as _ctx
+
+bp = Blueprint("dlc_task_control", __name__)
+
+# ── Lookup tables keyed by namespace order (train first, analyze second) ──────
+_PID_PREFIXES   = ("dlc_train_pid:",   "dlc_analyze_pid:")
+_JOB_PREFIXES   = ("dlc_train_job:",   "dlc_analyze_job:")
+_STOP_PREFIXES  = ("dlc_train_stop:",  "dlc_analyze_stop:")
+_PAUSE_PREFIXES = ("dlc_train_pause:", "dlc_analyze_pause:")
+
+_TERMINAL_STATUSES = {"complete", "failed", "stopped", "dead"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _resolve_task(
+    task_id: str,
+) -> tuple[int | None, str | None, str | None, str | None]:
+    """
+    Return (pid, job_key, stop_key, pause_key) for the given task_id.
+    Searches the train namespace first, then the analyze namespace.
+    Returns (None, None, None, None) when the task is not found or has no PID
+    (i.e. it has already finished and its PID key has been deleted).
+    """
+    r = _ctx.redis_client()
+    for pid_pfx, job_pfx, stop_pfx, pause_pfx in zip(
+        _PID_PREFIXES, _JOB_PREFIXES, _STOP_PREFIXES, _PAUSE_PREFIXES
+    ):
+        raw = r.get(pid_pfx + task_id)
+        if raw:
+            try:
+                return int(raw), job_pfx + task_id, stop_pfx + task_id, pause_pfx + task_id
+            except (ValueError, TypeError):
+                pass
+    return None, None, None, None
+
+
+def _update_job_status(job_key: str, status: str) -> None:
+    r = _ctx.redis_client()
+    if r.exists(job_key):
+        r.hset(job_key, "status", status)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Control endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@bp.route("/dlc/task/<task_id>/pause", methods=["POST"])
+def task_pause(task_id: str):
+    """
+    Freeze the DLC subprocess with SIGSTOP.
+
+    SIGSTOP cannot be caught or ignored — it immediately suspends the entire
+    process group (DLC + PyTorch DataLoader workers).  The Celery emit_loop
+    continues running in the parent worker process and keeps the job TTL alive.
+    """
+    pid, job_key, _, pause_key = _resolve_task(task_id)
+    if pid is None:
+        return jsonify({"error": "Task not found or no longer running."}), 404
+
+    r = _ctx.redis_client()
+    try:
+        os.killpg(pid, signal.SIGSTOP)
+    except (ProcessLookupError, OSError) as exc:
+        return jsonify({"error": f"Could not pause process group {pid}: {exc}"}), 500
+
+    r.setex(pause_key, 7200, "1")
+    _update_job_status(job_key, "paused")
+    return jsonify({"status": "paused", "task_id": task_id})
+
+
+@bp.route("/dlc/task/<task_id>/resume", methods=["POST"])
+def task_resume(task_id: str):
+    """Unfreeze the DLC subprocess with SIGCONT and mark the job as running."""
+    pid, job_key, _, pause_key = _resolve_task(task_id)
+    if pid is None:
+        return jsonify({"error": "Task not found or no longer running."}), 404
+
+    r = _ctx.redis_client()
+    try:
+        os.killpg(pid, signal.SIGCONT)
+    except (ProcessLookupError, OSError) as exc:
+        return jsonify({"error": f"Could not resume process group {pid}: {exc}"}), 500
+
+    r.delete(pause_key)
+    _update_job_status(job_key, "running")
+    return jsonify({"status": "running", "task_id": task_id})
+
+
+@bp.route("/dlc/task/<task_id>/terminate", methods=["POST"])
+def task_terminate(task_id: str):
+    """
+    Terminate a running, paused, or dead/orphaned DLC task.
+
+    Two paths depending on whether the subprocess PID key still exists:
+
+    A. PID key present (process is running or paused):
+       1. SIGCONT if paused, so SIGTERM is deliverable.
+       2. Set the Redis stop flag — the Celery worker's emit_loop picks this
+          up within ~3 s and performs SIGTERM → wait(12 s) → SIGKILL, then
+          atomically cleans up all Redis state and returns the GPU to the pool.
+       3. Also call celery.control.revoke() to prevent re-queuing on restart.
+
+    B. PID key absent (job is "dead" / orphaned — Reaper cleaned up the PID,
+       or the worker container restarted mid-task):
+       The emit_loop is gone, so stop_key would never be read.  Instead, do
+       direct Celery-level cleanup: revoke task, remove from sorted set, mark
+       status "stopped".  This is the same path the legacy stop endpoints took.
+    """
+    pid, job_key, stop_key, pause_key = _resolve_task(task_id)
+    r = _ctx.redis_client()
+
+    if pid is not None:
+        # ── Path A: process is alive — use the emit_loop kill path ──────────
+        if r.get(pause_key):
+            try:
+                os.killpg(pid, signal.SIGCONT)
+            except (ProcessLookupError, OSError):
+                pass
+            r.delete(pause_key)
+
+        r.setex(stop_key, 120, "1")
+        _update_job_status(job_key, "stopping")
+
+        # Also revoke via Celery so the task won't be re-queued on restart
+        try:
+            _ctx.celery().control.revoke(task_id, terminate=False)
+        except Exception:
+            pass
+
+        return jsonify({"status": "terminating", "task_id": task_id})
+
+    # ── Path B: PID key gone — dead / orphaned job ───────────────────────────
+    # The emit_loop is no longer running.  Perform direct Celery-level cleanup
+    # so the job disappears from the UI and can't be re-queued on restart.
+    _JOB_NAMESPACES = [
+        ("dlc_train_job:",   "dlc_train_stop:",   "dlc_train_jobs"),
+        ("dlc_analyze_job:", "dlc_analyze_stop:", "dlc_analyze_jobs"),
+    ]
+
+    try:
+        _ctx.celery().control.revoke(task_id, terminate=False)
+    except Exception:
+        pass
+
+    for job_pfx, stop_pfx, zset_key in _JOB_NAMESPACES:
+        jk = job_pfx + task_id
+        if r.exists(jk):
+            r.hset(jk, "status", "stopped")
+            r.expire(jk, 3600)
+            r.zrem(zset_key, task_id)
+            r.delete(stop_pfx + task_id)
+            return jsonify({"status": "stopped", "task_id": task_id})
+
+    return jsonify({"error": "Task not found."}), 404
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SSE log streaming
+# ─────────────────────────────────────────────────────────────────────────────
+
+@bp.route("/dlc/task/<task_id>/log-stream")
+def task_log_stream(task_id: str):
+    """
+    Server-Sent Events endpoint that streams live log output for a task.
+
+    The Celery worker's emit_loop RPUSH's log lines to the Redis list
+    ``dlc_task:<task_id>:log`` every ~3 seconds.  This generator reads
+    that list incrementally using a cursor and yields each new line as an
+    SSE ``data:`` frame.
+
+    The stream closes automatically when the job reaches a terminal state
+    AND no more new lines appear for two consecutive poll cycles.
+    """
+    r = _ctx.redis_client()
+    log_key = f"dlc_task:{task_id}:log"
+
+    def _generate():
+        cursor = 0
+        idle_after_terminal = 0
+
+        while True:
+            # Read all log lines since last cursor position
+            new_lines = r.lrange(log_key, cursor, -1)
+            if new_lines:
+                idle_after_terminal = 0
+                for line in new_lines:
+                    yield f"data: {line}\n\n"
+                cursor += len(new_lines)
+
+            # Check terminal state
+            status = None
+            for pfx in ("dlc_train_job:", "dlc_analyze_job:"):
+                status = r.hget(pfx + task_id, "status")
+                if status:
+                    break
+
+            if status in _TERMINAL_STATUSES:
+                if not new_lines:
+                    idle_after_terminal += 1
+                if idle_after_terminal >= 2:
+                    yield "event: done\ndata: {}\n\n"
+                    return
+
+            time.sleep(1)
+
+    return Response(
+        stream_with_context(_generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control":     "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

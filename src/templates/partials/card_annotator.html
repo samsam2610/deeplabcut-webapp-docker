@@ -1,0 +1,219 @@
+    <section class="card dlc-theme hidden" id="annotate-video-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>Video Annotator</h2>
+        <button class="btn-sm" id="btn-close-annotate-video" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Browse to any video on the mounted drive, load or create a companion CSV, and annotate frames with notes and status tags.</p>
+
+      <!-- ── Video file browser ──────────────────────────────── -->
+      <div id="anv-source-section" style="margin-bottom:.75rem">
+        <label style="display:block;margin-bottom:.4rem">Video file</label>
+        <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.4rem">
+          <input type="text" id="anv-video-path" placeholder="/userdata/path/to/video.mp4"
+            spellcheck="false" autocorrect="off" autocapitalize="off"
+            style="flex:1;min-width:0;font-family:var(--mono);font-size:.78rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.3rem .5rem" />
+          <button id="anv-browse-btn" class="btn-sm btn-server-pick" title="Browse mounted drive">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            Browse
+          </button>
+          <button id="anv-load-btn" class="btn-sm btn-create">Load</button>
+        </div>
+        <!-- File browser panel -->
+        <div id="anv-browser" class="hidden"
+          style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.3rem .4rem;font-size:.77rem;margin-bottom:.5rem">
+        </div>
+        <span id="anv-load-status" class="fe-extract-status"></span>
+      </div>
+
+      <!-- ── Player section (shown after video loaded) ─────────── -->
+      <div id="anv-player-section" class="hidden">
+
+        <!-- Video wrap: no overflow:hidden, no max-height — scales at aspect ratio -->
+        <div id="anv-video-wrap" style="position:relative;background:#000;border-radius:8px;border:1px solid var(--border);margin-bottom:.75rem">
+          <img id="anv-frame-img" alt="" draggable="false" style="width:100%;display:block;height:auto;user-select:none" />
+          <div id="anv-frame-spinner" class="fe-frame-spinner hidden"></div>
+        </div>
+
+        <!-- Controls row -->
+        <div class="fe-controls">
+          <button id="anv-btn-play" class="btn-sm fe-ctrl-btn" title="Play / Pause">
+            <svg id="anv-play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <svg id="anv-pause-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" class="hidden"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          </button>
+          <button id="anv-btn-prev" class="btn-sm fe-ctrl-btn" title="Previous frame (←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/><line x1="9" y1="6" x2="9" y2="18"/></svg>
+          </button>
+          <button id="anv-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
+          </button>
+          <button id="anv-btn-skip-back" class="btn-sm fe-ctrl-btn" title="Skip backward N frames (Ctrl+←)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="19 18 13 12 19 6"/><polyline points="13 18 7 12 13 6"/></svg>
+          </button>
+          <input type="number" id="anv-skip-n" value="10" min="1" max="9999" step="1"
+            title="Frames to skip (Ctrl+← / Ctrl+→)"
+            style="width:72px;text-align:center;font-family:var(--mono);font-size:.78rem;padding:.18rem .3rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+          <button id="anv-btn-skip-fwd" class="btn-sm fe-ctrl-btn" title="Skip forward N frames (Ctrl+→)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="5 18 11 12 5 6"/><polyline points="11 18 17 12 11 6"/></svg>
+          </button>
+          <span class="fe-frame-counter" id="anv-frame-counter" title="Double-click to jump to frame">Frame 0 / 0<input id="anv-frame-jump" class="fe-frame-jump hidden" type="number" min="0" step="1" /></span>
+          <span class="fe-time-display" id="anv-time-display">0.000 s</span>
+        </div>
+
+        <!-- Seek slider -->
+        <input type="range" id="anv-seek" class="fe-seek" min="0" max="1000" value="0" step="1" />
+
+        <!-- Viewer size + Refresh CSV row -->
+        <div style="display:flex;align-items:center;gap:1.2rem;margin-top:.4rem;margin-bottom:.2rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);white-space:nowrap">
+            Viewer size
+            <input type="range" id="anv-zoom" min="50" max="300" value="100" step="25" style="width:80px;accent-color:var(--accent)">
+            <span id="anv-zoom-val" style="min-width:2.5rem;text-align:right;color:var(--text)">100 %</span>
+          </label>
+          <button id="anv-refresh-csv-btn" class="btn-sm" style="margin-left:auto" title="Reload CSV from disk">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh CSV
+          </button>
+        </div>
+
+        <!-- ── CSV annotation bars ───────────────────────────── -->
+        <div id="anv-csv-bars" class="hidden">
+          <div id="anv-status-bar-wrap" class="hidden">
+            <div style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;margin-bottom:.18rem">
+              <span class="fe-csv-bar-label" style="flex:1;margin:0">Status</span>
+              <button id="anv-status-prev-btn" class="btn-sm" disabled title="Previous status frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">◀</button>
+              <button id="anv-status-next-btn" class="btn-sm" disabled title="Next status frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">▶</button>
+            </div>
+            <canvas id="anv-status-canvas" height="12"
+              style="width:100%;display:block;cursor:pointer;border-radius:3px;background:var(--surface)"
+              title="Click to jump to frame"></canvas>
+            <div id="anv-status-chips" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
+          </div>
+          <div id="anv-note-bar-wrap" class="hidden" style="margin-top:.4rem">
+            <div style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;margin-bottom:.18rem">
+              <span class="fe-csv-bar-label" style="flex:1;margin:0">Notes</span>
+              <button id="anv-note-prev-btn" class="btn-sm" disabled title="Previous note frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">◀</button>
+              <button id="anv-note-next-btn" class="btn-sm" disabled title="Next note frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">▶</button>
+            </div>
+            <canvas id="anv-note-canvas" height="12"
+              style="width:100%;display:block;cursor:pointer;border-radius:3px;background:var(--surface)"
+              title="Click to jump to frame"></canvas>
+            <div id="anv-note-chips" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
+          </div>
+        </div>
+
+        <!-- ── CSV status row ──────────────────────────────────── -->
+        <div id="anv-csv-section" style="margin-top:.75rem;padding:.55rem .7rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
+          <!-- No CSV found -->
+          <div id="anv-csv-none">
+            <span style="font-size:.82rem;color:var(--text-dim)">No companion CSV found. Create one to start annotating.</span>
+            <div style="margin-top:.5rem;display:flex;align-items:center;gap:.6rem">
+              <button id="anv-create-csv-btn" class="btn-sm btn-create">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Create CSV
+              </button>
+              <span id="anv-csv-create-status" class="fe-extract-status"></span>
+            </div>
+          </div>
+          <!-- CSV loaded -->
+          <div id="anv-csv-loaded" class="hidden" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+            <span style="font-size:.75rem;color:var(--text-dim);flex-shrink:0">CSV: </span>
+            <span id="anv-csv-path-display" style="font-family:var(--mono);font-size:.73rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
+          </div>
+        </div>
+
+        <!-- ── Annotation panel (shown when CSV ready) ─────────── -->
+        <div id="anv-annotation-panel" class="hidden" style="margin-top:.75rem">
+          <div style="font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim);margin-bottom:.45rem">
+            Annotate frame <span id="anv-annotate-frame-num" style="color:var(--text);font-family:var(--mono)">0</span>
+          </div>
+
+          <!-- Status row -->
+          <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem">
+            <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0;min-width:3rem">Status</label>
+            <input type="number" id="anv-status-input" value="0"
+              style="width:4.5rem;font-size:.8rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .4rem" />
+            <button id="anv-save-status-btn" class="btn-sm btn-create" style="padding:.28rem .65rem">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Save Status
+            </button>
+          </div>
+          <!-- Note row -->
+          <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.45rem">
+            <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0;min-width:3rem">Note</label>
+            <input type="text" id="anv-note-input" placeholder="Enter note…"
+              style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .45rem" />
+            <button id="anv-save-note-btn" class="btn-sm btn-create" style="padding:.28rem .65rem">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Save Note
+            </button>
+          </div>
+          <span id="anv-save-status" class="fe-extract-status"></span>
+
+          <!-- ── Add note tag shortcut ────────────────────────── -->
+          <div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border);display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+            <input type="text" id="anv-new-tag-input" placeholder="New note tag…"
+              style="flex:1;min-width:120px;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.25rem .45rem" />
+            <button id="anv-add-tag-btn" class="btn-sm">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add Note Tag
+            </button>
+          </div>
+        </div>
+
+        <!-- ── Clip extractor ────────────────────────────────────── -->
+        <div id="anv-clip-section" style="margin-top:.75rem;padding:.55rem .7rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
+          <div style="font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim);margin-bottom:.6rem">Clip Extractor</div>
+
+          <!-- Start / Frames / Postfix row -->
+          <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.5rem">
+            <label style="font-size:.78rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Start</label>
+            <input type="number" id="anv-clip-start" value="0" min="0" step="1"
+              style="width:5.5rem;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.28rem .4rem" />
+            <label style="font-size:.78rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Frames</label>
+            <input type="number" id="anv-clip-frames" value="100" min="1" step="1"
+              style="width:5.5rem;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.28rem .4rem" />
+            <label style="font-size:.78rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0">Postfix</label>
+            <input type="text" id="anv-clip-postfix" placeholder="optional…"
+              style="flex:1;min-width:80px;font-size:.82rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.28rem .45rem" />
+          </div>
+
+          <!-- Lock start frame -->
+          <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.5rem">
+            <input type="checkbox" id="anv-clip-lock-start" style="cursor:pointer;accent-color:var(--accent)" />
+            <label for="anv-clip-lock-start" style="font-size:.78rem;color:var(--text-dim);cursor:pointer;user-select:none">Lock start frame</label>
+          </div>
+
+          <!-- Output folder row -->
+          <label style="display:block;font-size:.78rem;color:var(--text-dim);margin-bottom:.3rem">
+            Output folder
+            <span style="font-size:.72rem">(blank = auto-named subfolder next to video)</span>
+          </label>
+          <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.35rem">
+            <input type="text" id="anv-clip-outdir" placeholder="leave blank for auto…"
+              spellcheck="false" autocorrect="off" autocapitalize="off"
+              style="flex:1;min-width:0;font-family:var(--mono);font-size:.78rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.3rem .5rem" />
+            <button id="anv-clip-browse-btn" class="btn-sm btn-server-pick" title="Browse for output folder">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              Browse
+            </button>
+          </div>
+
+          <!-- Dir browser for output folder (dirs only) -->
+          <div id="anv-clip-browser" class="hidden"
+            style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.3rem .4rem;font-size:.77rem;margin-bottom:.35rem">
+          </div>
+
+          <!-- Action row -->
+          <div style="display:flex;align-items:center;gap:.6rem;margin-top:.45rem">
+            <button id="anv-clip-btn" class="btn-sm btn-create">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+              Crop Video
+            </button>
+            <span id="anv-clip-status" class="fe-extract-status"></span>
+          </div>
+        </div>
+      </div>
+    </section>
