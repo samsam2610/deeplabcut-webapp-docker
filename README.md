@@ -1,112 +1,132 @@
-# Anipose Processing Pipeline
+# DeepLabCut WebApp
 
-A Dockerized web application for 3-D motion capture using **Anipose** with architectural hooks for **DeepLabCut**.
+Browser-based pipeline orchestrator for [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut) pose estimation and [Anipose](https://github.com/lambdaloop/anipose) 3D triangulation, with integrated TAPNet/TAPIR label propagation and an active-learning frame curation UI.
 
-## Architecture
+---
 
-```
-┌──────────────┐      ┌───────────┐      ┌──────────────────────────┐
-│  Browser UI  │◄────►│  Flask    │─────►│  Celery Worker           │
-│  (HTML/JS)   │      │  :5000    │      │  pytorch 2.9.1           │
-└──────────────┘      └─────┬─────┘      │  CUDA 13.0 + cuDNN 9    │
-                            │            │  DLC + Anipose (source)  │
-                       ┌────▼─────┐      └────────┬───────────────--┘
-                       │  Redis   │               │
-                       │  Broker  │          ┌────▼─────┐
-                       └──────────┘          │  Shared  │
-                                             │  Volume  │
-                                             │ /app/data│
-                                             └──────────┘
-```
+## Hardware Requirements
 
-The worker image is adapted from your existing Dockerfile:
-- **Base**: `pytorch/pytorch:2.9.1-cuda13.0-cudnn9-runtime`
-- **User**: Non-root `dlcuser` (UID/GID 1000)
-- **DLC**: Cloned from source, editable install
-- **Anipose**: Cloned from source, editable install
-- **OpenCV**: Headless build (`4.7.0.68`) — avoids GUI deps
-- **NumPy**: Pinned to `1.26.4`
+| Role | Device | Notes |
+|------|--------|-------|
+| DLC inference / TAPNet | RTX 5090 (GPU 0) | `CUDA_VISIBLE_DEVICES=0` enforced in all workers |
+| LLM orchestrator / Claude | Blackwell A6000 (GPU 1) | Never touched by this stack |
+| CPU fallback | Any | TensorFlow worker uses CUDA 11.8 |
 
-## Prerequisites
+> **Critical:** The A6000 is reserved for the orchestrator. No DLC or Anipose task may
+> set `CUDA_VISIBLE_DEVICES=1`. See `src/dlc_tapnet_tracker.py` and `src/dlc/tasks.py`
+> for enforcement points.
 
-- Docker & Docker Compose v2+
-- NVIDIA GPU with drivers installed
-- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+---
 
 ## Quick Start
 
-```bash
-# 1. Create the shared data directory
-mkdir -p data
+### Prerequisites
+- Docker + NVIDIA Container Toolkit
+- `docker compose` v2+
+- Host paths (edit `docker-compose.yml` if needed):
+  - `/home/sam/data-disk/Parra-Data` → `/user-data/Parra-Data/Disk`
+  - `/home/sam/synology/Parra-Lab-Data` → `/user-data/Parra-Data/Cloud`
 
-# 2. Build and launch
+### Build & Run
+
+```bash
+# First run — build all images
 docker compose up --build -d
 
-# 3. Open the UI
-open http://localhost:5000
+# Subsequent runs
+docker compose up -d
+
+# Tail logs
+docker compose logs -f flask worker
 ```
 
-### Optional environment variables
+UI available at **http://localhost:5000**
+
+### Rebuild a single service
 
 ```bash
-# Custom host path for the shared volume (default: ./data)
-export HOST_DATA_DIR=/path/to/your/data
-
-# Match the UID/GID to your host user (default: 1000)
-export WORKER_UID=$(id -u)
-export WORKER_GID=$(id -g)
+docker compose build worker && docker compose up -d --no-deps worker
 ```
+
+---
 
 ## Project Structure
 
 ```
-anipose-app/
-├── docker-compose.yml        # Service orchestration (3 containers)
-├── Dockerfile.flask          # Lightweight Flask image (UID 1000)
-├── Dockerfile.worker         # GPU worker — adapted from your Dockerfile
-├── requirements-flask.txt    # Flask/Gunicorn/Celery client deps
-├── app.py                    # Flask routes (/upload, /status)
-├── tasks.py                  # Celery task definitions
-├── templates/
-│   └── index.html            # Upload & progress UI
-├── static/
-│   ├── style.css
-│   └── main.js
-└── data/                     # Shared volume (bind mount)
-    └── <project_id>/
-        ├── config.toml
-        └── videos-raw/
-            ├── cam1.mp4
-            └── cam2.mp4
+.
+├── docker-compose.yml          # Orchestration: flask + worker + worker-tf + redis
+├── Dockerfile.flask            # python:3.10-slim, gunicorn, no GPU
+├── Dockerfile.worker           # pytorch/pytorch:2.9.1-cuda13.0, DLC + TAPNet
+├── Dockerfile.worker-tf        # tensorflow:2.13.0-gpu (CUDA 11.8), legacy TF DLC
+├── requirements-flask.txt
+├── requirements-worker.txt
+├── pytest.ini
+├── scripts/
+│   └── training_heartbeat.py   # Telegram training progress daemon
+├── docs/
+│   ├── ARCHITECTURE_MAP.md
+│   ├── DATA_PIPELINE.md
+│   └── LLM_CONTEXT.md
+├── src/
+│   ├── app.py                  # Flask entry point, blueprint registration
+│   ├── celery_app.py           # Celery instance + worker startup hooks
+│   ├── tasks.py                # Worker entry point (imports dlc + anipose tasks)
+│   ├── dlc_tapnet_tracker.py   # TAPNet/TAPIR label propagation adapter
+│   ├── dlc_dataset_curator.py  # Frame extraction + CollectedData CSV/H5 I/O
+│   ├── dlc/                    # DLC Flask blueprints + Celery tasks
+│   ├── anipose/                # Anipose Flask blueprints + Celery tasks
+│   ├── anipose_src/            # Anipose algorithm implementations
+│   ├── routes/                 # Legacy route modules (annotate, custom_script)
+│   ├── config_templates/       # Example config.toml / config.yaml
+│   ├── templates/              # Jinja2 HTML templates
+│   └── static/                 # JS / CSS frontend
+└── tests/
+    ├── conftest.py
+    └── test_*.py               # pytest test modules
 ```
 
-## Usage
+---
 
-1. **Select a pipeline** — Anipose (default) or DeepLabCut (placeholder).
-2. **Upload** your `config.toml` and one or more camera video files.
-3. **Monitor** the progress bar and live worker logs in the UI.
-4. Results are written back into `/app/data/<project_id>/` on the shared volume.
+## Running Tests
 
-## API Endpoints
+Tests run inside the PyTorch worker container (host Python lacks DLC/pandas):
 
-| Method | Path               | Description                        |
-|--------|--------------------|------------------------------------|
-| GET    | `/`                | Serve the web UI                   |
-| POST   | `/upload`          | Upload config + videos, start task |
-| GET    | `/status/<task_id>`| Poll task progress                 |
-| GET    | `/projects`        | List all project IDs               |
+```bash
+# Copy tests into the mounted src volume, run inside worker
+docker compose exec worker bash -c "cd /app && pip install pytest -q && pytest tests/ -v"
+```
 
-## Adding DeepLabCut
+GPU-dependent tests (TAPNet, video fixture) auto-skip if hardware/data is absent.
 
-The `tasks.py` file contains a `_run_deeplabcut()` placeholder. To activate:
+---
 
-1. Uncomment the DLC imports and API calls in `_run_deeplabcut()`.
-2. Ensure your DLC model weights are accessible on the shared volume.
-3. The frontend dropdown already includes the DLC option.
+## Services
 
-## Permissions
+| Service | Image | Port | Queue |
+|---------|-------|------|-------|
+| `flask` | `python:3.10-slim` (custom) | 5000 | — |
+| `redis` | `redis:7-alpine` | 6379 | — |
+| `worker` | `pytorch:2.9.1-cuda13.0` (custom) | — | `celery,pytorch` |
+| `worker-tf` | `tensorflow:2.13.0-gpu` (custom) | — | `tensorflow` |
 
-Both containers run as UID 1000 so the shared bind-mount is readable
-and writable by both Flask (upload) and the Worker (processing). If your
-host user has a different UID, set `WORKER_UID` / `WORKER_GID` before
-building.
+---
+
+## Key Environment Variables
+
+```
+DATA_DIR=/app/data                    # Project storage root
+USER_DATA_DIR=/user-data              # External data mounts
+CELERY_BROKER_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/0
+FLASK_SECRET_KEY=<set in .env>
+WORKER_UID / WORKER_GID=1000          # dlcuser inside containers
+```
+
+---
+
+## Contributing
+
+- All DLC/TAPNet code must enforce `CUDA_VISIBLE_DEVICES=0`
+- Never modify files under `/user-data/Parra-Data/` directly — use sandbox copies
+- H5 writes use atomic rename via `.tmp` — do not bypass this
+- See `docs/LLM_CONTEXT.md` for design constraints before editing

@@ -9,7 +9,15 @@ ARG GID=1000
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    DATA_DIR=/app/data
+    DATA_DIR=/app/data \
+    # Auth token — leave empty to auto-generate (printed to container logs).
+    # Pass ?token=<TOKEN> on first visit, or set AUTH_DISABLED=true to bypass.
+    APP_TOKEN="" \
+    AUTH_DISABLED=""
+
+# System dependencies (ffmpeg for video cropping)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create a matching non-root user
 RUN groupadd -g ${GID} appuser \
@@ -28,6 +36,10 @@ ENV PATH="/home/appuser/.local/bin:${PATH}"
 
 # ---------- Application code ----------
 COPY --chown=appuser:appuser src/app.py .
+COPY --chown=appuser:appuser src/celery_app.py .
+COPY --chown=appuser:appuser src/dlc/ dlc/
+COPY --chown=appuser:appuser src/anipose/ anipose/
+COPY --chown=appuser:appuser src/routes/ routes/
 COPY --chown=appuser:appuser src/templates/ templates/
 COPY --chown=appuser:appuser src/static/ static/
 

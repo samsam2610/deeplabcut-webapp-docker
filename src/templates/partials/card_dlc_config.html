@@ -1,0 +1,23 @@
+    <section class="card dlc-theme hidden" id="dlc-project-config-card">
+      <div class="config-header">
+        <div style="display:flex;align-items:center;justify-content:space-between;width:100%">
+          <div class="dlc-config-header" style="margin:0">
+            <span class="dlc-config-title">DLC config.yaml</span>
+            <span class="dlc-config-path" id="dlc-project-config-path"></span>
+          </div>
+          <button class="btn-sm" id="btn-close-dlc-config-editor" title="Close">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            Close
+          </button>
+        </div>
+      </div>
+      <p class="dlc-config-subtitle">Edit the active DLC project's <code>config.yaml</code>, then save to apply changes.</p>
+      <textarea id="dlc-config-editor" spellcheck="false" autocorrect="off" autocapitalize="off"></textarea>
+      <div class="config-footer">
+        <span id="dlc-config-save-status" class="config-save-status"></span>
+        <button id="save-dlc-config-btn" class="btn-sm btn-create">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save config.yaml
+        </button>
+      </div>
+    </section>
