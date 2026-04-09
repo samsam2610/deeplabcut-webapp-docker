@@ -342,6 +342,95 @@ def flush_task_cache():
     return jsonify({"deleted": len(task_meta_keys)})
 
 
+@app.route("/admin/hard-reset-jobs", methods=["POST"])
+def hard_reset_jobs():
+    """
+    Kill every running and queued DLC job, then restore a clean idle state.
+
+    Requires the passphrase "deeplabcut" in the request body so the button
+    cannot be triggered accidentally.
+
+    Steps:
+      1. SIGKILL all running subprocess PGIDs tracked in Redis.
+      2. Delete all broker queues (tensorflow, pytorch, celery).
+      3. Clear all job tracking sets and hashes from Redis.
+      4. Purge stop/pause flags and log-stream lists.
+      5. Reset the GPU pool to {"0"} so the next job can check out a GPU.
+      6. Flush all Celery task-result metadata keys.
+
+    Body (JSON): { "passphrase": "deeplabcut" }
+    """
+    import signal as _sig
+
+    body = request.get_json(force=True) or {}
+    if body.get("passphrase") != "deeplabcut":
+        return jsonify({"error": "Invalid passphrase."}), 403
+
+    processes_killed = 0
+    queued_cleared = 0
+    jobs_cleared = 0
+
+    # ── 1. Kill all running subprocesses ─────────────────────────────────────
+    for pattern in ("dlc_train_pid:*", "dlc_analyze_pid:*", "dlc_ml_pid:*"):
+        for key in _redis_client.scan_iter(pattern):
+            try:
+                pid = int(_redis_client.get(key) or 0)
+                if pid:
+                    try:
+                        os.killpg(pid, _sig.SIGKILL)
+                        processes_killed += 1
+                    except (ProcessLookupError, OSError):
+                        pass
+            except (ValueError, TypeError):
+                pass
+            _redis_client.delete(key)
+
+    # ── 2. Drain all broker queues ────────────────────────────────────────────
+    for queue_name in ("tensorflow", "pytorch", "celery"):
+        q_len = _redis_client.llen(queue_name)
+        if q_len:
+            queued_cleared += q_len
+            _redis_client.delete(queue_name)
+
+    # ── 3. Clear job tracking sorted-sets and their hashes ───────────────────
+    for zset_key, job_prefix in (
+        ("dlc_train_jobs",   "dlc_train_job:"),
+        ("dlc_analyze_jobs", "dlc_analyze_job:"),
+    ):
+        for jid in _redis_client.zrange(zset_key, 0, -1):
+            _redis_client.delete(job_prefix + jid)
+            jobs_cleared += 1
+        _redis_client.delete(zset_key)
+
+    # ── 4. Purge stop/pause flags and log streams ─────────────────────────────
+    for pattern in (
+        "dlc_train_stop:*",
+        "dlc_analyze_stop:*",
+        "dlc_train_pause:*",
+        "dlc_analyze_pause:*",
+        "dlc_task:*:log",
+    ):
+        for key in _redis_client.scan_iter(pattern):
+            _redis_client.delete(key)
+
+    # ── 5. Reset GPU pool ─────────────────────────────────────────────────────
+    _redis_client.delete("dlc_available_gpus")
+    _redis_client.sadd("dlc_available_gpus", "0")
+
+    # ── 6. Flush Celery task-result metadata ──────────────────────────────────
+    task_meta_keys = list(_redis_client.scan_iter("celery-task-meta-*"))
+    if task_meta_keys:
+        _redis_client.delete(*task_meta_keys)
+
+    return jsonify({
+        "status": "reset",
+        "processes_killed": processes_killed,
+        "queued_tasks_cleared": queued_cleared,
+        "jobs_cleared": jobs_cleared,
+        "task_meta_cleared": len(task_meta_keys),
+    })
+
+
 @app.route("/config")
 def get_config():
     """Return client-facing configuration values."""

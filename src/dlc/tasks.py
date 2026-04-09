@@ -671,6 +671,15 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         # acks_late=False on this task ensures the broker message is already
         # acknowledged before we reach here, so SIGTERM cannot cause the
         # current job to be re-queued.
+        #
+        # IMPORTANT: Skip auto-shutdown when the user aborted the job.
+        # After an abort the user is likely to re-queue another training run
+        # immediately; if we shut the worker down here, that next job will sit
+        # in the broker queue forever (restart: on-failure does NOT bring the
+        # worker back after a clean SIGTERM exit).
+        if _user_killed[0]:
+            return  # keep worker alive so the next queued job can be processed
+
         _worker_queues = ("tensorflow",) if engine == "tensorflow" else ("celery", "pytorch")
         _train_task_id = task_id   # capture for closure
 

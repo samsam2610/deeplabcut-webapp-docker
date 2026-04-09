@@ -173,6 +173,43 @@
     }, 5000);
   });
 
+  // ── Hard Reset (kill all jobs) ────────────────────────────────
+  const btnHardReset = document.getElementById("btn-hard-reset");
+
+  btnHardReset.addEventListener("click", async () => {
+    const passphrase = prompt(
+      "Hard Reset will immediately kill ALL running and queued jobs and restore a clean idle state.\n\n" +
+      "This cannot be undone. Enter the passphrase to continue:"
+    );
+    if (passphrase === null) return; // user cancelled
+    btnHardReset.disabled = true;
+    try {
+      const res  = await fetch("/admin/hard-reset-jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ passphrase }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        flushCacheStatus.textContent =
+          `Hard reset: killed ${data.processes_killed} process(es), ` +
+          `cleared ${data.queued_tasks_cleared} queued + ${data.jobs_cleared} tracked job(s).`;
+        flushCacheStatus.className = "flush-cache-status ok";
+      } else {
+        flushCacheStatus.textContent = data.error || "Error";
+        flushCacheStatus.className   = "flush-cache-status err";
+      }
+    } catch {
+      flushCacheStatus.textContent = "Network error";
+      flushCacheStatus.className   = "flush-cache-status err";
+    }
+    btnHardReset.disabled = false;
+    setTimeout(() => {
+      flushCacheStatus.textContent = "";
+      flushCacheStatus.className   = "flush-cache-status";
+    }, 7000);
+  });
+
   // ── Restore session state on page load ──────────────────────
   (async () => {
     // Pre-fetch /config so _userDataDir is set before applySessionState runs.
