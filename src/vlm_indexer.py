@@ -5,8 +5,8 @@ Scans a DLC project's labeled-data/, generates compact feature vectors for
 every labeled PNG, and persists a searchable index alongside the project.
 
 Feature strategy (no CLIP required):
-  1. Pixel features  — resize to 32×32 grayscale, flatten → 1024-dim float
-                        Stored in the index; always available with only PIL.
+  1. Pixel features  — resize to 32×32 grayscale, flatten → 1024-dim float.
+                        Uses cv2 (flask container) or PIL (worker container).
   2. Ollama embed    — optional text embedding of a VLM description;
                         activated when OLLAMA_URL is reachable and
                         nomic-embed-text (or similar) is available.
@@ -39,12 +39,20 @@ from pathlib import Path
 from typing import Any
 
 
-# ── PIL import ────────────────────────────────────────────────────────────────
+# ── Image backends (cv2 preferred; PIL fallback) ──────────────────────────────
+try:
+    import cv2 as _cv2
+    _CV2_OK = True
+except ImportError:
+    _CV2_OK = False
+
 try:
     from PIL import Image as _PILImage
     _PIL_OK = True
 except ImportError:
     _PIL_OK = False
+
+_IMG_OK = _CV2_OK or _PIL_OK   # at least one backend available
 
 
 # ── Optional Ollama embedding ─────────────────────────────────────────────────
@@ -56,16 +64,34 @@ _OLLAMA_URL = _os.environ.get("OLLAMA_URL", _OLLAMA_URL_DEFAULT)
 
 
 def _pixel_vector(image_path: Path, size: int = 32) -> list[float] | None:
-    """Return a normalised pixel feature vector, or None on failure."""
-    if not _PIL_OK:
-        return None
-    try:
-        img = _PILImage.open(str(image_path)).convert("L").resize((size, size))
-        raw = list(img.getdata())   # 1024 floats 0–255
-        norm = math.sqrt(sum(v * v for v in raw)) or 1.0
-        return [v / norm for v in raw]
-    except Exception:
-        return None
+    """Return a normalised pixel feature vector, or None on failure.
+
+    Tries cv2 first (available in the Flask container via opencv-python-headless),
+    then PIL as a fallback.
+    """
+    if _CV2_OK:
+        try:
+            import numpy as _np
+            img = _cv2.imread(str(image_path), _cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                raise ValueError("cv2.imread returned None")
+            img = _cv2.resize(img, (size, size), interpolation=_cv2.INTER_AREA)
+            raw = img.flatten().tolist()
+            norm = math.sqrt(sum(v * v for v in raw)) or 1.0
+            return [v / norm for v in raw]
+        except Exception:
+            pass  # fall through to PIL
+
+    if _PIL_OK:
+        try:
+            img = _PILImage.open(str(image_path)).convert("L").resize((size, size))
+            raw = list(img.getdata())
+            norm = math.sqrt(sum(v * v for v in raw)) or 1.0
+            return [v / norm for v in raw]
+        except Exception:
+            pass
+
+    return None
 
 
 def _ollama_embed(text: str, model: str = _OLLAMA_EMBED_MODEL) -> list[float] | None:
