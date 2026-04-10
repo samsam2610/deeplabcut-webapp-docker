@@ -128,7 +128,7 @@ def tiny_project(tmp_path):
 @pytest.fixture()
 def built_index(tiny_project):
     """Build the visual index on the tiny project and return (project_path, index)."""
-    import vlm_indexer
+    from dlc import vlm_indexer
     index = vlm_indexer.build_index(tiny_project, use_ollama=False)
     return tiny_project, index
 
@@ -154,7 +154,7 @@ class TestReferencePanelKNN:
         find_similar returns at most k results and each result has frame_path
         pointing to a file that actually exists on disk.
         """
-        import vlm_indexer
+        from dlc import vlm_indexer
         proj, index = built_index
 
         # Query with img0001's own vector — top result (excluding self) should be
@@ -253,7 +253,7 @@ class TestToggleUI:
 
         fake_vlm_result = {"snout": [12.0, 22.0], "tailbase": [32.0, 42.0]}
 
-        with patch("vlm_indexer.refine_coords_with_vlm", return_value=fake_vlm_result):
+        with patch("dlc.vlm_indexer.refine_coords_with_vlm", return_value=fake_vlm_result):
             resp = client.post("/vlm/refine", json={
                 "active_video_stem":    "stem_A",
                 "active_frame":         "img0001.png",
@@ -290,7 +290,7 @@ class TestToggleUI:
 
         # V layer (mocked)
         fake_vlm = {"snout": [99.0, 88.0], "tailbase": None}
-        with patch("vlm_indexer.refine_coords_with_vlm", return_value=fake_vlm):
+        with patch("dlc.vlm_indexer.refine_coords_with_vlm", return_value=fake_vlm):
             refine_resp = client.post("/vlm/refine", json={
                 "active_video_stem":    "stem_A",
                 "active_frame":         "img0001.png",
@@ -322,7 +322,7 @@ class TestOriginalProjectUnmodified:
         build_index writes vlm_index.json only inside the project it is given.
         A second 'original' project must remain untouched.
         """
-        import vlm_indexer
+        from dlc import vlm_indexer
 
         # Create a separate 'original' project — a copy of tiny_project
         original = tmp_path / "original"
@@ -385,7 +385,7 @@ class TestOriginalProjectUnmodified:
         Building the index twice on the same project is safe and produces a
         consistent result — no leftover temp files, same frame count.
         """
-        import vlm_indexer
+        from dlc import vlm_indexer
 
         idx1 = vlm_indexer.build_index(tiny_project, use_ollama=False)
         idx2 = vlm_indexer.build_index(tiny_project, use_ollama=False)

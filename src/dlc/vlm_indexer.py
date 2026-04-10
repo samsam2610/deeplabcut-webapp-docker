@@ -322,32 +322,48 @@ def get_frame_vector(index: dict, video_stem: str, frame: str) -> list[float]:
 
 # ── VLM description helper (used during indexing with use_ollama=True) ────────
 
-def _describe_frame(image_path: Path, model: str = "qwen3-vl:32b") -> str | None:
-    """Ask qwen3-vl to produce a 1-sentence description of a labeled frame."""
+def _b64_image(path: Path) -> str:
+    """Return raw base64 (no data-URI prefix) for an image file."""
+    import base64
+    with open(str(path), "rb") as fh:
+        return base64.b64encode(fh.read()).decode()
+
+
+def _ollama_chat(messages: list, model: str, timeout: int = 120, fmt: str | None = None) -> str | None:
+    """
+    POST to Ollama /api/chat using the native format.
+    Returns the assistant message content string, or None on failure.
+
+    Ollama image format: each message with images uses
+      {"role": "user", "content": "<text>", "images": ["<base64_no_prefix>", ...]}
+    NOT the OpenAI content-array format.
+    """
     try:
-        import base64, requests as _req
-        with open(str(image_path), "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-        payload = {
-            "model": model,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                    {"type": "text", "text":
-                     "Describe the animal posture and keypoint positions in this frame in one concise sentence. "
-                     "Focus on body orientation, limb positions, and any visible keypoints."},
-                ],
-            }],
-            "stream": False,
-            "options": {"temperature": 0.0},
-        }
-        resp = _req.post(f"{_OLLAMA_URL}/api/chat", json=payload, timeout=60)
+        import requests as _req
+        payload: dict = {"model": model, "messages": messages, "stream": False,
+                         "options": {"temperature": 0.0}}
+        if fmt:
+            payload["format"] = fmt
+        resp = _req.post(f"{_OLLAMA_URL}/api/chat", json=payload, timeout=timeout)
         if resp.status_code == 200:
             return resp.json().get("message", {}).get("content", "")
+        # Surface the error so callers can log it
+        return None
     except Exception:
-        pass
-    return None
+        return None
+
+
+def _describe_frame(image_path: Path, model: str = "qwen3-vl:32b") -> str | None:
+    """Ask qwen3-vl to produce a 1-sentence description of a labeled frame."""
+    messages = [{
+        "role": "user",
+        "content": (
+            "Describe the animal posture and keypoint positions in this frame "
+            "in one concise sentence. Focus on body orientation and limb positions."
+        ),
+        "images": [_b64_image(image_path)],
+    }]
+    return _ollama_chat(messages, model, timeout=60)
 
 
 def refine_coords_with_vlm(
@@ -361,15 +377,9 @@ def refine_coords_with_vlm(
     Ask qwen3-vl to suggest corrected keypoint coordinates for the active frame
     by referencing a visually similar labeled frame.
 
-    Returns {bodypart: [x, y]} or {} on failure.
+    Returns {bodypart: [x, y] | null} for every bodypart, or {} on failure.
     """
     try:
-        import base64, requests as _req
-
-        def _b64(path: Path) -> str:
-            with open(str(path), "rb") as fh:
-                return base64.b64encode(fh.read()).decode()
-
         ref_coord_str = "; ".join(
             f"{bp}=({v[0]:.1f},{v[1]:.1f})" if v else f"{bp}=unknown"
             for bp, v in reference_labels.items()
@@ -377,50 +387,46 @@ def refine_coords_with_vlm(
         )
 
         prompt = (
-            f"You are a pose estimation assistant. "
-            f"The REFERENCE image shows a labeled animal with these keypoints: {ref_coord_str}. "
-            f"The ACTIVE image is the frame to correct. "
-            f"Based on the animal's anatomy and the reference, estimate the (x, y) pixel coordinates "
-            f"for each of these bodyparts in the ACTIVE image: {', '.join(bodyparts)}. "
-            f"Reply ONLY with a JSON object: {{\"bodypart\": [x, y], ...}}. "
-            f"Use null for any bodypart that is not visible."
+            "You are a pose estimation assistant. "
+            f"The first image is a REFERENCE frame with known keypoints: {ref_coord_str}. "
+            "The second image is the ACTIVE frame to label. "
+            "Based on the animal anatomy and the reference coordinates, estimate the (x, y) pixel "
+            f"coordinates for each bodypart in the ACTIVE image: {', '.join(bodyparts)}. "
+            'Reply ONLY with a JSON object like {"Snout": [123, 456], "Wrist": null, ...}. '
+            "Use null for bodyparts that are not visible."
         )
 
-        payload = {
-            "model": model,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "REFERENCE IMAGE:"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_b64(Path(reference_frame_path))}"}},
-                    {"type": "text", "text": "ACTIVE IMAGE TO CORRECT:"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_b64(Path(active_frame_path))}"}},
-                    {"type": "text", "text": prompt},
-                ],
-            }],
-            "stream": False,
-            "options": {"temperature": 0.0},
-            "format": "json",
-        }
-        resp = _req.post(f"{_OLLAMA_URL}/api/chat", json=payload, timeout=120)
-        if resp.status_code == 200:
-            raw = resp.json().get("message", {}).get("content", "{}")
-            # Extract JSON from the response (sometimes wrapped in markdown)
-            m = re.search(r"\{.*\}", raw, re.DOTALL)
-            if m:
-                coords = json.loads(m.group())
-                # Validate and sanitise
-                result = {}
-                for bp in bodyparts:
-                    val = coords.get(bp)
-                    if isinstance(val, (list, tuple)) and len(val) >= 2:
-                        try:
-                            result[bp] = [float(val[0]), float(val[1])]
-                        except (TypeError, ValueError):
-                            result[bp] = None
-                    else:
-                        result[bp] = None
-                return result
+        # Ollama native format: both images in one message via the images list.
+        # First image = reference, second image = active (order matches the prompt text).
+        messages = [{
+            "role": "user",
+            "content": prompt,
+            "images": [
+                _b64_image(Path(reference_frame_path)),
+                _b64_image(Path(active_frame_path)),
+            ],
+        }]
+
+        raw = _ollama_chat(messages, model, timeout=180, fmt="json")
+        if not raw:
+            return {}
+
+        # Extract JSON (sometimes wrapped in markdown fences)
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
+            return {}
+
+        coords = json.loads(m.group())
+        result = {}
+        for bp in bodyparts:
+            val = coords.get(bp)
+            if isinstance(val, (list, tuple)) and len(val) >= 2:
+                try:
+                    result[bp] = [float(val[0]), float(val[1])]
+                except (TypeError, ValueError):
+                    result[bp] = None
+            else:
+                result[bp] = None
+        return result
     except Exception:
-        pass
-    return {}
+        return {}

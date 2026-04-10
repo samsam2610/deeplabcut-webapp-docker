@@ -53,13 +53,8 @@ def _project_path_checked() -> tuple[Path | None, str | None]:
 
 
 def _import_indexer():
-    """Late import to avoid loading PIL at startup when it's not needed."""
-    import sys, os
-    # vlm_indexer.py lives one level up from the dlc/ package
-    src_dir = Path(__file__).parent.parent
-    if str(src_dir) not in sys.path:
-        sys.path.insert(0, str(src_dir))
-    import vlm_indexer
+    """Late import to avoid loading cv2 at startup when it's not needed."""
+    from dlc import vlm_indexer
     return vlm_indexer
 
 
