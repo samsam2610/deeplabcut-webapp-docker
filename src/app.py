@@ -183,6 +183,7 @@ from dlc.monitoring import bp as _dlc_monitoring_bp
 from dlc.viewer import bp as _dlc_viewer_bp
 from dlc.curator import bp as _dlc_curator_bp
 from dlc.task_control import bp as _dlc_task_control_bp
+from dlc.vlm_routes import bp as _dlc_vlm_bp
 
 app.register_blueprint(_dlc_project_bp)
 app.register_blueprint(_dlc_config_bp)
@@ -194,6 +195,7 @@ app.register_blueprint(_dlc_monitoring_bp)
 app.register_blueprint(_dlc_viewer_bp)
 app.register_blueprint(_dlc_curator_bp)
 app.register_blueprint(_dlc_task_control_bp)
+app.register_blueprint(_dlc_vlm_bp)
 
 # ── Register Anipose Blueprints ───────────────────────────────────
 from anipose.session import bp as _anipose_session_bp
