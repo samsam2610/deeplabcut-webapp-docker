@@ -286,12 +286,12 @@ def _cosine_sim(a: list[float], b: list[float]) -> float:
 def find_similar(
     index: dict,
     query_vector: list[float],
-    k: int = 3,
-    exclude_frame: str | None = None,
+    k: int = 5,
     exclude_video_stem: str | None = None,
 ) -> list[dict]:
     """
-    Return the top-k most similar frames from *index* for the given vector.
+    Return the top-k most similar frames from *index* for the given vector,
+    drawn exclusively from stems *other than* exclude_video_stem.
 
     Each result is the frame entry dict augmented with a 'score' key (0–1).
     """
@@ -300,7 +300,7 @@ def find_similar(
 
     scored = []
     for entry in index.get("frames", []):
-        if exclude_frame and entry.get("frame") == exclude_frame and entry.get("video_stem") == exclude_video_stem:
+        if exclude_video_stem and entry.get("video_stem") == exclude_video_stem:
             continue
         vec = entry.get("vector", [])
         if not vec:

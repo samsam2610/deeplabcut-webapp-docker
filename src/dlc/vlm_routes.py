@@ -153,7 +153,7 @@ def vlm_similar():
 
     video_stem = request.args.get("video_stem", "")
     frame      = request.args.get("frame", "")
-    k          = int(request.args.get("k", 3))
+    k          = int(request.args.get("k", 5))
 
     if not video_stem or not frame:
         return jsonify({"error": "video_stem and frame are required."}), 400
@@ -171,7 +171,6 @@ def vlm_similar():
 
     results = vi.find_similar(
         index, query_vec, k=k,
-        exclude_frame=frame,
         exclude_video_stem=video_stem,
     )
 
@@ -284,8 +283,7 @@ def vlm_frame_data():
             frame_path = pp / "labeled-data" / secure_filename(video_stem) / secure_filename(frame)
             query_vec  = vi._pixel_vector(frame_path) or []
         similar = vi.find_similar(
-            index, query_vec, k=3,
-            exclude_frame=frame,
+            index, query_vec, k=5,
             exclude_video_stem=video_stem,
         )
         for r in similar:

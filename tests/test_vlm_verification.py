@@ -162,14 +162,18 @@ class TestReferencePanelKNN:
         query_vec = vlm_indexer.get_frame_vector(index, "stem_A", "img0001.png")
         assert query_vec, "Expected a non-empty vector for img0001.png"
 
+        # exclude the whole stem — results must come from a different stem
         results = vlm_indexer.find_similar(
             index, query_vec, k=2,
-            exclude_frame="img0001.png",
             exclude_video_stem="stem_A",
         )
 
         assert len(results) <= 2
         for r in results:
+            # Must be from a different stem
+            assert r["video_stem"] != "stem_A", (
+                f"Result came from excluded stem: {r['video_stem']}/{r['frame']}"
+            )
             # The path returned must exist
             assert Path(r["frame_path"]).is_file(), (
                 f"KNN result frame_path does not exist: {r['frame_path']}"
