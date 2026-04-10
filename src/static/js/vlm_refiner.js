@@ -57,7 +57,7 @@ const els = {
   chkOllama:      document.getElementById('chk-use-ollama'),
 
   refTabs:        document.getElementById('vlm-ref-tabs'),
-  refImg:         document.getElementById('ref-img'),
+  refCanvas:      document.getElementById('ref-canvas'),
   refPlaceholder: document.getElementById('ref-placeholder'),
   refScoreBadge:  document.getElementById('ref-score-badge'),
   refFooter:      document.getElementById('ref-footer'),
@@ -82,6 +82,7 @@ const els = {
 };
 
 const activeCtx  = els.activeCanvas.getContext('2d');
+const refCtx     = els.refCanvas.getContext('2d');
 const cropCtx    = els.cropCanvas.getContext('2d');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -260,20 +261,19 @@ function loadActiveImage(stem, frame) {
 function loadRefImage(idx) {
   const ref = state.similar[idx];
   if (!ref) {
-    els.refImg.style.display = 'none';
+    els.refCanvas.style.display = 'none';
     els.refPlaceholder.style.display = '';
-    els.refFooter.textContent = state.indexAvailable ? 'No similar frames found' : 'Index not built — build index to enable reference panel';
+    els.refFooter.textContent = state.indexAvailable
+      ? 'No similar frames found'
+      : 'Index not built — build index to enable reference panel';
     els.refScoreBadge.textContent = '';
     return;
   }
   els.refPlaceholder.style.display = 'none';
-  els.refImg.src = '';
   const img = new Image();
   img.onload = () => {
     state.refImg = img;
-    els.refImg.src = img.src;
-    els.refImg.style.display = 'block';
-    drawRefLabels(ref);
+    drawRefCanvas(ref);
   };
   img.onerror = () => { els.refPlaceholder.style.display = ''; };
   img.src = `/vlm/reference-image/${encodeURIComponent(ref.video_stem)}/${encodeURIComponent(ref.frame)}`;
@@ -281,34 +281,42 @@ function loadRefImage(idx) {
   els.refFooter.textContent = `${ref.video_stem} / ${ref.frame}`;
 }
 
-function drawRefLabels(ref) {
-  // Overlay label dots on reference image using an SVG overlay approach
-  // (we don't use a canvas here to keep it simple)
-  const container = document.getElementById('ref-panel-body');
-  container.querySelectorAll('.ref-dot').forEach(d => d.remove());
+function drawRefCanvas(ref) {
+  if (!state.refImg) return;
+  const img    = state.refImg;
+  const canvas = els.refCanvas;
+  const parent = canvas.parentElement;
 
-  const imgEl  = els.refImg;
-  const rect   = imgEl.getBoundingClientRect();
-  const scaleX = rect.width  / imgEl.naturalWidth;
-  const scaleY = rect.height / imgEl.naturalHeight;
+  // Fit inside the panel, same logic as active canvas
+  const maxW  = parent.clientWidth  - 4;
+  const maxH  = parent.clientHeight - 4;
+  const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
 
+  canvas.width  = Math.round(img.naturalWidth  * scale);
+  canvas.height = Math.round(img.naturalHeight * scale);
+  canvas.style.display = 'block';
+
+  // Draw the frame
+  refCtx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  // Draw label dots — coordinates are in original image space, scale to canvas
   Object.entries(ref.labels || {}).forEach(([bp, pt]) => {
     if (!pt) return;
-    const dot = document.createElement('div');
-    dot.className = 'ref-dot';
-    dot.title = `${bp}: (${Math.round(pt[0])}, ${Math.round(pt[1])})`;
-    Object.assign(dot.style, {
-      position: 'absolute',
-      width: '6px', height: '6px',
-      borderRadius: '50%',
-      background: 'var(--accent)',
-      border: '1px solid rgba(0,0,0,.5)',
-      left: `${pt[0] * scaleX - 3}px`,
-      top:  `${pt[1] * scaleY - 3}px`,
-      pointerEvents: 'none',
-      zIndex: '5',
-    });
-    container.appendChild(dot);
+    const cx = pt[0] * scale;
+    const cy = pt[1] * scale;
+
+    refCtx.beginPath();
+    refCtx.arc(cx, cy, 4, 0, Math.PI * 2);
+    refCtx.fillStyle = 'rgba(110,231,183,0.85)';
+    refCtx.fill();
+    refCtx.strokeStyle = 'rgba(0,0,0,0.6)';
+    refCtx.lineWidth = 1;
+    refCtx.stroke();
+
+    // Label text
+    refCtx.font = '9px monospace';
+    refCtx.fillStyle = 'rgba(110,231,183,0.9)';
+    refCtx.fillText(bp, cx + 6, cy - 2);
   });
 }
 
@@ -519,7 +527,8 @@ els.stemSelect.addEventListener('change', () => {
   els.btnSave.disabled   = true;
   buildFrameList(state.activeStem);
   // Reset panels
-  els.refImg.style.display = 'none';
+  els.refCanvas.style.display = 'none';
+  refCtx.clearRect(0, 0, els.refCanvas.width, els.refCanvas.height);
   els.refPlaceholder.style.display = '';
   els.activeCanvas.style.display = 'none';
   els.activePlaceholder.style.display = '';
