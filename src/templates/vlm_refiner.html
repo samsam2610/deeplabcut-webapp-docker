@@ -109,7 +109,7 @@
 /* ── Main 3-panel area ────────────────────────────────────── */
 .vlm-panels {
   display: grid;
-  grid-template-columns: 1fr 1fr 180px;
+  grid-template-columns: 1fr 1fr 220px;
   gap: .75rem;
   overflow: hidden;
   margin-left: .75rem;
@@ -226,13 +226,14 @@
 }
 .vlm-coord-row {
   display: grid;
-  grid-template-columns: 90px 1fr;
+  grid-template-columns: 80px 1fr auto;
   gap: .3rem;
   align-items: baseline;
 }
 .vlm-coord-name { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vlm-coord-val  { color: var(--text-dim); }
 .vlm-coord-val.has-val { color: var(--accent); }
+.vlm-coord-delta { font-size: .65rem; white-space: nowrap; }
 
 /* Crop canvas in panel 3 */
 #vlm-crop-canvas {
@@ -301,10 +302,14 @@
     <h1>VLM Label Refiner</h1>
 
     <!-- Index status -->
-    <span id="vlm-index-badge" style="font-size:.75rem;padding:.2rem .55rem;border-radius:4px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-dim)">Index: checking…</span>
+    <span id="vlm-index-badge"
+          style="font-size:.75rem;padding:.2rem .65rem;border-radius:4px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-dim);display:inline-flex;align-items:center;gap:.35rem;white-space:nowrap;cursor:default"
+          title="Index persists on disk — no need to rebuild unless labeled data changes">
+      <span style="color:var(--text-dim)">○</span> Index: checking…
+    </span>
 
-    <!-- Build index -->
-    <button class="btn-sm btn-vlm-primary" id="btn-build-index" title="Build or rebuild the visual similarity index for this project">
+    <!-- Build / Rebuild index -->
+    <button class="btn-sm btn-vlm-primary" id="btn-build-index" title="Build the visual similarity index for this project">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
       Build Index
     </button>
@@ -366,6 +371,16 @@
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <span class="panel-title">Reference</span>
         <span id="ref-score-badge" style="margin-left:auto;font-size:.7rem;color:var(--text-dim)"></span>
+      </div>
+      <!-- Reference folder filter -->
+      <div style="padding:.25rem .5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.4rem;font-size:.72rem;color:var(--text-dim)">
+        <span style="white-space:nowrap">Ref folder:</span>
+        <div class="select-wrap" style="flex:1;min-width:0">
+          <select id="vlm-ref-stem-select" style="font-size:.72rem;padding:.15rem .3rem">
+            <option value="">Any (best match)</option>
+          </select>
+          <svg class="chevron" width="14" height="14" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+        </div>
       </div>
       <!-- Similar tabs -->
       <div class="vlm-ref-tabs" id="vlm-ref-tabs">

@@ -66,6 +66,19 @@ def vlm_refiner_ui():
     return render_template("vlm_refiner.html")
 
 
+@bp.route("/vlm/index-stems")
+def vlm_index_stems():
+    """GET /vlm/index-stems — list all video_stem values present in the index."""
+    pp, err = _project_path_checked()
+    if err:
+        return jsonify({"error": err}), 400
+    vi    = _import_indexer()
+    index = vi.load_index(pp)
+    if index is None:
+        return jsonify({"stems": []})
+    return jsonify({"stems": vi.index_stems(index)})
+
+
 @bp.route("/vlm/index-status")
 def vlm_index_status():
     pp, err = _project_path_checked()
@@ -117,6 +130,11 @@ def vlm_build_index():
 
         try:
             index = vi.build_index(pp, use_ollama=use_ollama, progress_cb=_cb)
+            # Also build the posture index (best-effort — never fails the stream)
+            try:
+                vi.build_posture_index(pp)
+            except Exception:
+                pass
             # Flush any accumulated progress events, then send the final event
             yield from progress_events
             yield json.dumps({
@@ -146,9 +164,10 @@ def vlm_similar():
     if err:
         return jsonify({"error": err}), 400
 
-    video_stem = request.args.get("video_stem", "")
-    frame      = request.args.get("frame", "")
-    k          = int(request.args.get("k", 5))
+    video_stem    = request.args.get("video_stem", "")
+    frame         = request.args.get("frame", "")
+    k             = int(request.args.get("k", 5))
+    reference_stem = request.args.get("reference_stem", "") or None
 
     if not video_stem or not frame:
         return jsonify({"error": "video_stem and frame are required."}), 400
@@ -167,6 +186,7 @@ def vlm_similar():
     results = vi.find_similar(
         index, query_vec, k=k,
         exclude_video_stem=video_stem,
+        require_video_stem=reference_stem,
     )
 
     # Strip heavy vector data from response
@@ -195,12 +215,13 @@ def vlm_refine():
         return jsonify({"error": err}), 400
 
     body = request.get_json(force=True) or {}
-    active_stem  = secure_filename(body.get("active_video_stem", ""))
-    active_frame = secure_filename(body.get("active_frame", ""))
-    ref_stem     = secure_filename(body.get("reference_video_stem", ""))
-    ref_frame    = secure_filename(body.get("reference_frame", ""))
-    ref_labels   = body.get("reference_labels", {})
-    bodyparts    = body.get("bodyparts", [])
+    active_stem    = secure_filename(body.get("active_video_stem", ""))
+    active_frame   = secure_filename(body.get("active_frame", ""))
+    ref_stem       = secure_filename(body.get("reference_video_stem", ""))
+    ref_frame      = secure_filename(body.get("reference_frame", ""))
+    ref_labels     = body.get("reference_labels", {})
+    machine_coords = body.get("machine_coords", {})
+    bodyparts      = body.get("bodyparts", [])
 
     if not all([active_stem, active_frame, ref_stem, ref_frame]):
         return jsonify({"error": "active_video_stem, active_frame, reference_video_stem, reference_frame are required."}), 400
@@ -222,33 +243,88 @@ def vlm_refine():
         return jsonify({"error": f"Reference frame not found: {ref_frame}"}), 404
 
     vi = _import_indexer()
-    vlm_coords = vi.refine_coords_with_vlm(
+    vlm_coords, vlm_debug = vi.refine_coords_posture_aware(
         active_frame_path=active_path,
         reference_frame_path=ref_path,
         reference_labels=ref_labels,
+        machine_coords=machine_coords,
         bodyparts=bodyparts,
     )
-    return jsonify({"vlm_coords": vlm_coords})
+
+    # Persist so the result survives page reloads and frame re-selections
+    stem_dir = pp / "labeled-data" / active_stem
+    vi.save_vlm_result(stem_dir, active_frame, vlm_coords, vlm_debug)
+
+    return jsonify({"vlm_coords": vlm_coords, "vlm_debug": vlm_debug})
 
 
-@bp.route("/vlm/frame-data")
-def vlm_frame_data():
+@bp.route("/vlm/stem-vlm-frames")
+def vlm_stem_vlm_frames():
     """
-    GET /vlm/frame-data?video_stem=<stem>&frame=<filename>
+    GET /vlm/stem-vlm-frames?video_stem=<stem>
 
-    Returns the frame's current CSV labels plus the top-3 similar reference frames.
-    Combines /vlm/similar + label lookup in a single round-trip for the UI.
+    Returns the list of frame names that have a saved VLM result for this stem,
+    so the UI can show a badge next to each frame in the frame list.
     """
     pp, err = _project_path_checked()
     if err:
         return jsonify({"error": err}), 400
 
     video_stem = request.args.get("video_stem", "")
-    frame      = request.args.get("frame", "")
+    if not video_stem:
+        return jsonify({"error": "video_stem is required."}), 400
+
+    vi       = _import_indexer()
+    stem_dir = pp / "labeled-data" / secure_filename(video_stem)
+    frames   = vi.list_vlm_frames(stem_dir)
+    return jsonify({"frames": frames})
+
+
+@bp.route("/vlm/stem-likelihoods")
+def vlm_stem_likelihoods():
+    """
+    GET /vlm/stem-likelihoods?video_stem=<stem>
+
+    Returns {frame: min_likelihood} from _machine_predictions_raw.csv so the
+    UI can populate the likelihood filter badges and per-frame lh values.
+    """
+    pp, err = _project_path_checked()
+    if err:
+        return jsonify({"error": err}), 400
+
+    video_stem = request.args.get("video_stem", "")
+    if not video_stem:
+        return jsonify({"error": "video_stem is required."}), 400
+
+    vi       = _import_indexer()
+    stem_dir = pp / "labeled-data" / secure_filename(video_stem)
+    mins     = vi.frame_min_likelihoods(stem_dir)
+    return jsonify({"likelihoods": mins})
+
+
+@bp.route("/vlm/frame-data")
+def vlm_frame_data():
+    """
+    GET /vlm/frame-data?video_stem=<stem>&frame=<filename>&min_lh=<float>
+
+    Returns the frame's current labels (filtered by min_lh when raw predictions
+    are available) plus the top-5 similar reference frames.
+    """
+    pp, err = _project_path_checked()
+    if err:
+        return jsonify({"error": err}), 400
+
+    video_stem     = request.args.get("video_stem", "")
+    frame          = request.args.get("frame", "")
+    reference_stem = request.args.get("reference_stem", "") or None
+    try:
+        min_lh = float(request.args.get("min_lh", 0.0))
+    except ValueError:
+        min_lh = 0.0
     if not video_stem or not frame:
         return jsonify({"error": "video_stem and frame are required."}), 400
 
-    # Load current labels from CSV
+    # Load current labels — prefer raw predictions CSV (supports live lh filter)
     from .labeling import _get_dlc_project_and_config
     project_data, cfg, label_err = _get_dlc_project_and_config()
     if label_err:
@@ -256,42 +332,91 @@ def vlm_frame_data():
     scorer    = (cfg or {}).get("scorer", "User")
     bodyparts = (cfg or {}).get("bodyparts", [])
 
-    stem_dir  = pp / "labeled-data" / secure_filename(video_stem)
-    csv_path  = stem_dir / f"CollectedData_{scorer}.csv"
-    if not csv_path.is_file():
-        candidates = sorted(stem_dir.glob("CollectedData_*.csv"))
-        csv_path   = candidates[0] if candidates else None
+    vi       = _import_indexer()
+    stem_dir = pp / "labeled-data" / secure_filename(video_stem)
 
     current_labels: dict = {}
-    if csv_path and csv_path.is_file():
-        vi = _import_indexer()
-        all_labels = vi._read_labels_from_csv(csv_path)
-        current_labels = all_labels.get(frame, {})
+    raw_labels = vi.read_raw_predictions(stem_dir, min_lh=min_lh)
+    if raw_labels is not None:
+        current_labels = raw_labels.get(frame, {})
 
-    # KNN
-    vi    = _import_indexer()
-    index = vi.load_index(pp)
+    # Fallback to CollectedData CSV when raw predictions don't cover this frame.
+    # This handles: (a) no raw predictions file at all, or (b) raw predictions
+    # exist but this particular frame wasn't machine-labeled (e.g. manually
+    # labeled frames added after machine labeling was run).
+    if not current_labels:
+        csv_path = stem_dir / f"CollectedData_{scorer}.csv"
+        if not csv_path.is_file():
+            candidates = sorted(stem_dir.glob("CollectedData_*.csv"))
+            csv_path   = candidates[0] if candidates else None
+        if csv_path and csv_path.is_file():
+            all_labels = vi._read_labels_from_csv(csv_path)
+            current_labels = all_labels.get(frame, {})
+
+    has_raw = vi._ensure_raw_pred_csv(stem_dir)
+
+    # Load saved VLM result for this frame (if any)
+    saved_vlm_coords, saved_vlm_debug = vi.load_vlm_result(stem_dir, frame)
+
+    # KNN — prefer posture index; fall back to pixel index
     similar: list[dict] = []
-    if index:
-        query_vec = vi.get_frame_vector(index, video_stem, frame)
+    index_stems: list[str] = []
+    match_type = "none"
+
+    posture_index = vi.load_posture_index(pp)
+    pixel_index   = vi.load_index(pp)
+
+    # Collect index_stems from whichever index exists
+    if posture_index:
+        index_stems = sorted({e["video_stem"] for e in posture_index.get("frames", []) if e.get("video_stem")})
+    elif pixel_index:
+        index_stems = vi.index_stems(pixel_index)
+
+    # Posture KNN (skip when reference_stem filter is requested — pixel index handles that)
+    if posture_index and not reference_stem:
+        bp_list   = posture_index.get("bodyparts") or list(bodyparts)
+        query_sig = vi.get_posture_signature_for_frame(posture_index, video_stem, frame)
+        if not query_sig:
+            query_sig = vi.posture_signature(current_labels, bp_list)
+        if query_sig:
+            similar = vi.find_similar_posture(
+                posture_index, query_sig, k=5,
+                exclude_video_stem=video_stem,
+            )
+            for r in similar:
+                r.pop("signature", None)
+            match_type = "posture"
+
+    # Pixel KNN fallback (also used when reference_stem filter is active)
+    if not similar and pixel_index:
+        query_vec = vi.get_frame_vector(pixel_index, video_stem, frame)
         if not query_vec:
             frame_path = pp / "labeled-data" / secure_filename(video_stem) / secure_filename(frame)
             query_vec  = vi._pixel_vector(frame_path) or []
         similar = vi.find_similar(
-            index, query_vec, k=5,
+            pixel_index, query_vec, k=5,
             exclude_video_stem=video_stem,
+            require_video_stem=reference_stem,
         )
         for r in similar:
             r.pop("vector", None)
+        match_type = "pixel"
+
+    index_available = posture_index is not None or pixel_index is not None
 
     return jsonify({
-        "video_stem":     video_stem,
-        "frame":          frame,
-        "current_labels": current_labels,
-        "bodyparts":      bodyparts,
-        "scorer":         scorer,
-        "similar":        similar,
-        "index_available": index is not None,
+        "video_stem":          video_stem,
+        "frame":               frame,
+        "current_labels":      current_labels,
+        "has_raw_predictions": has_raw,
+        "vlm_coords":          saved_vlm_coords,
+        "vlm_debug":           saved_vlm_debug,
+        "bodyparts":           bodyparts,
+        "scorer":              scorer,
+        "similar":             similar,
+        "match_type":          match_type,
+        "index_available":     index_available,
+        "index_stems":         index_stems,
     })
 
 
