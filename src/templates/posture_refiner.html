@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}Posture-Centric VLM Refiner{% endblock %}
+
+{% block extra_head %}
+<style>
+/* ── Posture Refiner layout ───────────────────────────────── */
+.pr-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr 1fr;
+  grid-template-rows: auto 1fr;
+  gap: 0;
+  height: calc(100vh - 56px - 40px);
+  padding: 1rem;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* ── Top controls bar ─────────────────────────────────────── */
+.pr-controls {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  flex-wrap: wrap;
+  margin-bottom: .75rem;
+}
+.pr-controls h1 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-right: auto;
+  letter-spacing: -.01em;
+}
+
+/* ── Left sidebar ─────────────────────────────────────────── */
+.pr-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: .6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .7rem;
+  overflow: hidden;
+}
+.pr-sidebar-hdr {
+  font-size: .72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-dim);
+}
+.pr-frame-list {
+  list-style: none;
+  margin: 0; padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+.frame-item {
+  padding: .28rem .5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: .78rem;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.frame-item:hover  { background: var(--surface-2); }
+.frame-item.active { background: var(--accent-dim); color: var(--accent); }
+.frame-item.dim    { color: var(--text-dim); cursor: default; }
+.frame-item.error  { color: var(--error); }
+
+/* ── Canvas panels ────────────────────────────────────────── */
+.pr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .7rem;
+  overflow: hidden;
+  margin-left: .5rem;
+}
+.pr-panel-hdr {
+  font-size: .72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+.pr-canvas-wrap {
+  flex: 1;
+  overflow: auto;
+  background: #0a0a0a;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pr-canvas-wrap canvas {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+}
+.ref-meta {
+  font-size: .72rem;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  min-height: 1.4em;
+}
+.ref-tabs {
+  display: flex;
+  gap: .35rem;
+  flex-wrap: wrap;
+}
+.ref-tab {
+  padding: .2rem .6rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: .72rem;
+  cursor: pointer;
+  color: var(--text);
+}
+.ref-tab.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Layer toggle buttons ─────────────────────────────────── */
+.layer-toggle { display: flex; gap: .3rem; }
+.layer-btn {
+  padding: .25rem .65rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: .75rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text-dim);
+  transition: background .15s, color .15s;
+}
+.layer-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.layer-btn.has-data::after {
+  content: "●";
+  font-size: .55rem;
+  margin-left: .3rem;
+  vertical-align: super;
+  color: #facc15;
+}
+
+/* ── Badge ────────────────────────────────────────────────── */
+.badge-ok   { background: rgba(74,222,128,.12); color: #4ade80; }
+.badge-warn { background: rgba(250,204,21,.12);  color: #facc15; }
+
+/* ── Status bar ───────────────────────────────────────────── */
+.status-bar {
+  grid-column: 1 / -1;
+  font-size: .72rem;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  padding: .3rem .5rem;
+  min-height: 1.5em;
+}
+.status-bar.ok    { color: #4ade80; }
+.status-bar.error { color: #f87171; }
+
+/* ── Pose score ───────────────────────────────────────────── */
+#poseScore {
+  font-size: .78rem;
+  font-family: var(--font-mono);
+  color: #818cf8;
+  margin-left: .5rem;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="pr-layout">
+
+  <!-- ── Top controls ─────────────────────────────────────── -->
+  <div class="pr-controls">
+    <h1>Posture-Centric VLM Refiner</h1>
+
+    <span id="indexBadge" class="badge badge-warn">Index: checking…</span>
+    <span id="poseScore"></span>
+
+    <div class="layer-toggle">
+      <button id="layerM" class="layer-btn active" title="Machine labels (green)">M</button>
+      <button id="layerV" class="layer-btn"        title="VLM labels (yellow)">V</button>
+    </div>
+
+    <button id="refineBtn" class="btn btn-primary" disabled>
+      Refine with VLM
+    </button>
+    <button id="buildIndexBtn" class="btn btn-secondary">
+      Build Posture Index
+    </button>
+  </div>
+
+  <!-- ── Left sidebar: frame list ─────────────────────────── -->
+  <div class="pr-sidebar">
+    <div class="pr-sidebar-hdr">Video Stem</div>
+    <select id="stemSelect" class="input-sm" style="font-size:.78rem">
+      <option value="">— select stem —</option>
+    </select>
+    <div class="pr-sidebar-hdr" style="margin-top:.5rem">Frames</div>
+    <ul id="frameList" class="pr-frame-list">
+      <li class="frame-item dim">Select a stem above.</li>
+    </ul>
+  </div>
+
+  <!-- ── Active frame canvas ───────────────────────────────── -->
+  <div class="pr-panel">
+    <div class="pr-panel-hdr">
+      Active Frame
+      <span style="font-size:.68rem;color:var(--text-dim);margin-left:auto">green = machine · yellow = VLM</span>
+    </div>
+    <div class="pr-canvas-wrap">
+      <canvas id="activeCanvas"></canvas>
+    </div>
+  </div>
+
+  <!-- ── Reference frame canvas ────────────────────────────── -->
+  <div class="pr-panel">
+    <div class="pr-panel-hdr">
+      Posture Reference
+      <span style="font-size:.68rem;color:var(--text-dim);margin-left:auto">indigo = human labels</span>
+    </div>
+    <div id="refTabs" class="ref-tabs"></div>
+    <div class="pr-canvas-wrap">
+      <canvas id="refCanvas"></canvas>
+    </div>
+    <div id="refMeta" class="ref-meta">No reference loaded.</div>
+  </div>
+
+  <!-- ── Status bar ────────────────────────────────────────── -->
+  <div id="statusBar" class="status-bar">Ready.</div>
+
+</div>
+
+<script src="/static/js/posture_refiner.js"></script>
+{% endblock %}
