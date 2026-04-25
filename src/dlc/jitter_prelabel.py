@@ -26,7 +26,10 @@ def _parse_frame_number(filename: str) -> int:
 def _apply_median_filter(series: pd.Series, window: int = 5) -> pd.Series:
     """Median-filter a coordinate series, preserving NaN positions."""
     filled = series.ffill().bfill()
-    filtered = medfilt(filled.values.astype(float), kernel_size=window)
+    effective_window = min(window, len(filled))
+    if effective_window % 2 == 0:
+        effective_window = max(1, effective_window - 1)
+    filtered = medfilt(filled.values.astype(float), kernel_size=effective_window)
     result = pd.Series(filtered, index=series.index)
     result[series.isna()] = np.nan
     return result
@@ -153,11 +156,20 @@ def upsert_frames(
         except ValueError:
             continue
 
-    next_nnnn = len(existing)
+    if existing:
+        nnnn_vals = []
+        for fname in existing.values():
+            m = re.match(r"img(\d+)-", fname)
+            if m:
+                nnnn_vals.append(int(m.group(1)))
+        next_nnnn = (max(nnnn_vals) + 1) if nnnn_vals else 0
+    else:
+        next_nnnn = 0
     csv_path = stem_dir / f"CollectedData_{scorer}.csv"
 
     rows_to_write: dict[str, dict[str, tuple[float, float] | None]] = {}
     new_images: list[tuple[int, str]] = []  # (frame_num, filename) needing extraction
+    _planned_rows: dict[str, dict[str, tuple[float, float] | None]] = {}
 
     added = updated = 0
 
@@ -179,12 +191,11 @@ def upsert_frames(
             updated += 1
         else:
             filename = f"img{next_nnnn:04d}-{frame_num:05d}.png"
-            rows_to_write[filename] = coord_map
+            _planned_rows[filename] = coord_map
             new_images.append((frame_num, filename))
             next_nnnn += 1
-            added += 1
 
-    # Extract new frames from video in one pass
+    # Extract new frames from video in one pass, only write CSV rows for successful extracts
     if new_images:
         cap = cv2.VideoCapture(str(video_path))
         for frame_num, filename in new_images:
@@ -192,6 +203,8 @@ def upsert_frames(
             ret, frame = cap.read()
             if ret:
                 cv2.imwrite(str(stem_dir / filename), frame)
+                rows_to_write[filename] = _planned_rows[filename]
+                added += 1
         cap.release()
 
     # Upsert CSV
