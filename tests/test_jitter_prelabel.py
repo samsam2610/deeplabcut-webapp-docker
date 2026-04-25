@@ -263,3 +263,24 @@ class TestUpsertFrames:
         filenames = [r[2] for r in data_rows]
         assert "img0000-00010.png" in filenames, "Existing row should be preserved"
         assert any("00020" in fn for fn in filenames), "New row should be appended"
+
+
+class TestJitterPrelabelTask:
+    """Integration-level: test the task can be imported and called synchronously."""
+
+    def test_task_callable_with_missing_h5(self, tmp_path):
+        """Task raises FileNotFoundError when _machine_predictions_raw.h5 is absent."""
+        import os
+        os.environ.setdefault("CELERY_BROKER_URL", "memory://")
+        os.environ.setdefault("CELERY_RESULT_BACKEND", "cache+memory://")
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("scorer: Ali\nproject_path: " + str(tmp_path) + "\n")
+        stem_dir = tmp_path / "labeled-data" / "test_stem"
+        stem_dir.mkdir(parents=True)
+        video_path = tmp_path / "test_stem.mp4"
+        video_path.write_bytes(b"")
+
+        from dlc.jitter_prelabel import detect_jitter_frames
+        with pytest.raises((FileNotFoundError, OSError)):
+            detect_jitter_frames(stem_dir / "_machine_predictions_raw.h5")

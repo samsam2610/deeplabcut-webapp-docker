@@ -317,6 +317,31 @@ def dlc_convert_labels_to_h5(self, config_path: str, scorer: str = None):
 _TRAIN_PID_PREFIX = "dlc_train_pid:"
 
 
+def _wait_gpu_memory_free(gpu_id: str = "0", timeout: int = 20) -> None:
+    """
+    Poll nvidia-smi until no compute processes remain on the given GPU,
+    or until `timeout` seconds elapse.  Called after killing a DLC subprocess
+    so the CUDA driver has time to reclaim VRAM before the next task starts.
+    A fixed sleep is unreliable — large models (>20 GB) can take >5 s to drain.
+    """
+    import time as _t
+    deadline = _t.monotonic() + timeout
+    while _t.monotonic() < deadline:
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-compute-apps=pid,used_memory",
+                 "--format=csv,noheader",
+                 f"--id={gpu_id}"],
+                text=True, timeout=3,
+            ).strip()
+            if not out:          # no processes holding memory → done
+                return
+        except Exception:
+            break                # nvidia-smi unavailable; fall through to sleep
+        _t.sleep(1)
+    _t.sleep(2)                  # final buffer after the loop
+
+
 def _cuda_cleanup_with_timeout(timeout: int = 10) -> None:
     """
     Release GPU resources in a daemon thread so that a hung cuda.synchronize()
@@ -598,10 +623,10 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         except (ProcessLookupError, OSError):
             pass  # process group already gone — that's fine
 
-        # Give the CUDA driver time to fully reclaim GPU resources after the
-        # process group has been torn down.  1 s is often insufficient; 3 s
-        # avoids the GPU appearing stuck when the next task starts.
-        time.sleep(3)
+        # Wait until nvidia-smi reports no processes on the GPU (20 s max).
+        # A fixed sleep is unreliable for large models — VRAM can take >5 s
+        # to drain after SIGKILL.
+        _wait_gpu_memory_free(_gpu_id, timeout=20)
 
         _stop_emit.set()
         _emitter.join(timeout=5)
@@ -657,54 +682,6 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
             os.unlink(log_path)
         except OSError:
             pass
-
-        # ── Shut down this worker when there is nothing left to do ───────────
-        # After a short delay (lets any prefetched task register itself in Redis
-        # before we decide to exit), check whether this worker's broker queues
-        # are empty and no other job is marked "running".  If so, send SIGTERM
-        # to the Celery worker process for a graceful warm shutdown.
-        #
-        # docker-compose uses `restart: on-failure`, so the container is only
-        # restarted after a crash (non-zero exit), not after a clean shutdown.
-        # This means the worker stays off until explicitly started again.
-        #
-        # acks_late=False on this task ensures the broker message is already
-        # acknowledged before we reach here, so SIGTERM cannot cause the
-        # current job to be re-queued.
-        #
-        # IMPORTANT: Skip auto-shutdown when the user aborted the job.
-        # After an abort the user is likely to re-queue another training run
-        # immediately; if we shut the worker down here, that next job will sit
-        # in the broker queue forever (restart: on-failure does NOT bring the
-        # worker back after a clean SIGTERM exit).
-        if _user_killed[0]:
-            return  # keep worker alive so the next queued job can be processed
-
-        _worker_queues = ("tensorflow",) if engine == "tensorflow" else ("celery", "pytorch")
-        _train_task_id = task_id   # capture for closure
-
-        def _shutdown_if_idle():
-            import time as _t_
-            _t_.sleep(5)
-            try:
-                pending = sum(_redis.llen(q) for q in _worker_queues)
-                # Check whether any *other* job is still running on this worker
-                other_running = 0
-                for _jid in _redis.zrevrange("dlc_train_jobs", 0, 99):
-                    if _jid != _train_task_id:
-                        _j = _redis.hgetall("dlc_train_job:" + _jid)
-                        if _j.get("status") == "running":
-                            other_running += 1
-                for _jid in _redis.zrevrange("dlc_analyze_jobs", 0, 99):
-                    _j = _redis.hgetall("dlc_analyze_job:" + _jid)
-                    if _j.get("status") == "running":
-                        other_running += 1
-                if pending == 0 and other_running == 0:
-                    os.kill(os.getpid(), _signal.SIGTERM)
-            except Exception:
-                pass  # never let a shutdown-check error surface
-
-        _threading.Thread(target=_shutdown_if_idle, daemon=True).start()
 
 
 # ── GPU stats probe ───────────────────────────────────────────────
@@ -1200,7 +1177,7 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
         except (ProcessLookupError, OSError):
             pass  # process group already gone — that's fine
 
-        time.sleep(3)
+        _wait_gpu_memory_free(_gpu_id, timeout=20)
 
         _stop_emit.set()
         _emitter.join(timeout=5)
@@ -1767,6 +1744,35 @@ def _dlc_machine_label_subprocess(
                     except Exception:
                         pass
 
+            # Write a plain CSV of ALL raw predictions (before threshold filter)
+            # so the Flask container can re-apply likelihood thresholds without HDF5.
+            raw_pred_csv = frame_dir / "_machine_predictions_raw.csv"
+            try:
+                _raw_rows = [["frame", "bodypart", "x", "y", "likelihood"]]
+                for _idx, _row in df.iterrows():
+                    _img = _Path(str(_idx[-1] if isinstance(_idx, tuple) else _idx)).name
+                    for _bp in bodyparts:
+                        _cols = bp_col_map.get(_bp)
+                        if _cols is None:
+                            continue
+                        _xc, _yc, _lkc = _cols
+                        try:
+                            _x  = float(_row[_xc])
+                            _y  = float(_row[_yc])
+                            _lk = float(_row[_lkc]) if _lkc is not None else 1.0
+                            if not (_pd.isna(_x) or _pd.isna(_y)):
+                                _raw_rows.append([_img, _bp,
+                                                  round(_x, 4), round(_y, 4),
+                                                  round(_lk, 4)])
+                        except Exception:
+                            pass
+                with open(str(raw_pred_csv), "w", newline="") as _rpc:
+                    _csv.writer(_rpc).writerows(_raw_rows)
+                _f.write(f"Written raw pred CSV: {raw_pred_csv.name} "
+                         f"({len(_raw_rows) - 1} predictions)\n")
+            except Exception as _rpce:
+                _f.write(f"Warning: could not write raw pred CSV ({_rpce})\n")
+
             # Write metadata for debugging / information only.
             # Protection is now purely per-bodypart: non-NaN CSV value = approved.
             import json as _json_mod
@@ -1926,7 +1932,7 @@ def dlc_machine_label_frames(
             os.killpg(_pgid, _sig.SIGKILL)
         except (ProcessLookupError, OSError):
             pass
-        time.sleep(3)
+        _wait_gpu_memory_free("0", timeout=20)
 
         _stop_emit.set()
         _emitter.join(timeout=5)
@@ -2311,3 +2317,90 @@ def dlc_tapnet_propagate(
             os.unlink(log_path)
         except OSError:
             pass
+
+
+# ── Jitter Prelabel ───────────────────────────────────────────────────────────
+
+@celery.task(bind=True, name="tasks.dlc_jitter_prelabel")
+def dlc_jitter_prelabel(
+    self,
+    config_path: str,
+    stem_path: str,
+    video_path: str,
+    px_threshold: float = 10.0,
+    min_jittery_parts: int = 3,
+    max_frames: int = 200,
+    webapp_public_url: str = "",
+):
+    import os as _os
+    import yaml as _yaml_mod
+    from dlc.jitter_prelabel import detect_jitter_frames, upsert_frames
+    from pathlib import Path as _Path
+
+    def _progress(pct, stage):
+        self.update_state(state="PROGRESS", meta={"progress": pct, "stage": stage})
+
+    _progress(5, "Loading config…")
+
+    config_path = _Path(config_path)
+    stem_dir    = _Path(stem_path)
+    video_path  = _Path(video_path)
+
+    if not config_path.is_file():
+        raise FileNotFoundError(f"config.yaml not found: {config_path}")
+    if not stem_dir.is_dir():
+        raise FileNotFoundError(f"Stem directory not found: {stem_dir}")
+    if not video_path.is_file():
+        raise FileNotFoundError(f"Video not found: {video_path}")
+
+    h5_path = stem_dir / "_machine_predictions_raw.h5"
+    if not h5_path.is_file():
+        raise FileNotFoundError(
+            f"_machine_predictions_raw.h5 not found in {stem_dir}. "
+            "Run 'Machine Label Frames' first."
+        )
+
+    with open(str(config_path)) as _f:
+        cfg = _yaml_mod.safe_load(_f)
+    scorer    = cfg.get("scorer", "")
+    bodyparts = cfg.get("bodyparts", [])
+    if not scorer:
+        raise ValueError("scorer not found in config.yaml")
+    if not bodyparts:
+        raise ValueError("bodyparts not found in config.yaml")
+
+    _progress(20, "Detecting jitter frames…")
+
+    jitter_frames = detect_jitter_frames(
+        h5_path,
+        px_threshold=px_threshold,
+        min_jittery_parts=min_jittery_parts,
+        max_frames=max_frames,
+    )
+
+    flagged = len(jitter_frames)
+    _progress(50, f"Found {flagged} jitter frames. Extracting…")
+
+    result = upsert_frames(
+        stem_dir=stem_dir,
+        video_path=video_path,
+        jitter_frames=jitter_frames,
+        scorer=scorer,
+        bodyparts=bodyparts,
+    )
+
+    _progress(95, "Writing labels…")
+
+    stem_name = stem_dir.name
+    link = ""
+    if webapp_public_url:
+        app_token = _os.environ.get("APP_TOKEN", "")
+        link = f"{webapp_public_url}/vlm/refiner?token={app_token}&stem={stem_name}"
+
+    return {
+        "flagged_frames": flagged,
+        "added":          result["added"],
+        "updated":        result["updated"],
+        "stem":           stem_name,
+        "webapp_link":    link,
+    }
