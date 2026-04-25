@@ -270,17 +270,48 @@ class TestJitterPrelabelTask:
 
     def test_task_callable_with_missing_h5(self, tmp_path):
         """Task raises FileNotFoundError when _machine_predictions_raw.h5 is absent."""
-        import os
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
         os.environ.setdefault("CELERY_BROKER_URL", "memory://")
         os.environ.setdefault("CELERY_RESULT_BACKEND", "cache+memory://")
 
         config_path = tmp_path / "config.yaml"
-        config_path.write_text("scorer: Ali\nproject_path: " + str(tmp_path) + "\n")
+        config_path.write_text(
+            "scorer: Ali\n"
+            "project_path: " + str(tmp_path) + "\n"
+            "bodyparts:\n"
+            "  - Snout\n"
+            "  - Wrist\n"
+        )
         stem_dir = tmp_path / "labeled-data" / "test_stem"
         stem_dir.mkdir(parents=True)
         video_path = tmp_path / "test_stem.mp4"
-        video_path.write_bytes(b"")
+        video_path.write_bytes(b"fake")
 
-        from dlc.jitter_prelabel import detect_jitter_frames
-        with pytest.raises((FileNotFoundError, OSError)):
-            detect_jitter_frames(stem_dir / "_machine_predictions_raw.h5")
+        # Import and call the Celery task directly (synchronous, no broker needed).
+        # dlc.tasks imports `deeplabcut` at module level which is only available
+        # inside the Docker worker container. Inject a stub so the module loads.
+        import unittest.mock as _mock
+        import types as _types
+        _dlc_stub = _types.ModuleType("deeplabcut")
+        _celery_app_stub = _types.ModuleType("celery_app")
+        # Provide a minimal Celery stub so @celery.task decorator works
+        import celery as _celery_lib
+        _real_celery = _celery_lib.Celery()
+        _celery_app_stub.celery = _real_celery
+
+        with _mock.patch.dict("sys.modules", {
+            "deeplabcut": _dlc_stub,
+            "celery_app": _celery_app_stub,
+        }):
+            # Remove cached module if already imported in a previous test run
+            import sys as _sys
+            _sys.modules.pop("dlc.tasks", None)
+            from dlc.tasks import dlc_jitter_prelabel
+
+        with pytest.raises(FileNotFoundError, match="_machine_predictions_raw.h5"):
+            dlc_jitter_prelabel.apply(kwargs={
+                "config_path": str(config_path),
+                "stem_path": str(stem_dir),
+                "video_path": str(video_path),
+            }).get()
