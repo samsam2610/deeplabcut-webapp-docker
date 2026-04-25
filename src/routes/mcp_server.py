@@ -378,7 +378,7 @@ def _tool_get_task_status(args: dict) -> str:
     info = result.info
     if isinstance(info, Exception):
         info = str(info)
-    return json.dumps({"state": state, "result": info, "task_id": task_id})
+    return json.dumps({"state": state, "result": info, "task_id": task_id}, default=str)
 
 
 def _tool_webapp_link(args: dict) -> str:
@@ -390,7 +390,7 @@ def _tool_webapp_link(args: dict) -> str:
         url = f"{base}/vlm/refiner?token={token}&stem={stem}"
     else:
         url = f"{base}/?token={token}"
-    return url
+    return json.dumps({"url": url})
 
 
 _TOOL_DISPATCH = {

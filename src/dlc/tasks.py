@@ -2321,7 +2321,7 @@ def dlc_tapnet_propagate(
 
 # ── Jitter Prelabel ───────────────────────────────────────────────────────────
 
-@celery.task(bind=True, name="tasks.dlc_jitter_prelabel")
+@celery.task(bind=True, name="tasks.dlc_jitter_prelabel", acks_late=False)
 def dlc_jitter_prelabel(
     self,
     config_path: str,
@@ -2332,19 +2332,17 @@ def dlc_jitter_prelabel(
     max_frames: int = 200,
     webapp_public_url: str = "",
 ):
-    import os as _os
     import yaml as _yaml_mod
     from dlc.jitter_prelabel import detect_jitter_frames, upsert_frames
-    from pathlib import Path as _Path
 
     def _progress(pct, stage):
         self.update_state(state="PROGRESS", meta={"progress": pct, "stage": stage})
 
     _progress(5, "Loading config…")
 
-    config_path = _Path(config_path)
-    stem_dir    = _Path(stem_path)
-    video_path  = _Path(video_path)
+    config_path = Path(config_path)
+    stem_dir    = Path(stem_path)
+    video_path  = Path(video_path)
 
     if not config_path.is_file():
         raise FileNotFoundError(f"config.yaml not found: {config_path}")
@@ -2394,7 +2392,7 @@ def dlc_jitter_prelabel(
     stem_name = stem_dir.name
     link = ""
     if webapp_public_url:
-        app_token = _os.environ.get("APP_TOKEN", "")
+        app_token = os.environ.get("APP_TOKEN", "")
         link = f"{webapp_public_url}/vlm/refiner?token={app_token}&stem={stem_name}"
 
     return {

@@ -315,3 +315,52 @@ class TestJitterPrelabelTask:
                 "stem_path": str(stem_dir),
                 "video_path": str(video_path),
             }).get()
+
+    def test_task_happy_path_returns_expected_dict(self, tmp_path):
+        """Task returns correct result dict when all inputs are valid and h5 exists."""
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+        os.environ.setdefault("CELERY_BROKER_URL", "memory://")
+        os.environ.setdefault("CELERY_RESULT_BACKEND", "cache+memory://")
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "scorer: Ali\n"
+            "project_path: " + str(tmp_path) + "\n"
+            "bodyparts:\n"
+            "  - Snout\n"
+            "  - Wrist\n"
+        )
+        stem_dir = tmp_path / "labeled-data" / "test_stem"
+        stem_dir.mkdir(parents=True)
+        # Create placeholder h5
+        h5_path = stem_dir / "_machine_predictions_raw.h5"
+        h5_path.write_bytes(b"fake")
+        video_path = tmp_path / "test_stem.mp4"
+        video_path.write_bytes(b"fake")
+
+        import unittest.mock as _mock
+        deeplabcut_stub = _mock.MagicMock()
+        celery_app_stub = _mock.MagicMock()
+        real_celery = __import__("celery")
+        celery_app_stub.celery = real_celery.Celery()
+
+        with _mock.patch.dict("sys.modules", {
+            "deeplabcut": deeplabcut_stub,
+            "celery_app": celery_app_stub,
+        }):
+            sys.modules.pop("dlc.tasks", None)
+            from dlc.tasks import dlc_jitter_prelabel
+            with _mock.patch("dlc.jitter_prelabel.detect_jitter_frames", return_value=[]) as mock_detect, \
+                 _mock.patch("dlc.jitter_prelabel.upsert_frames", return_value={"added": 2, "updated": 1, "stem": "test_stem"}) as mock_upsert:
+                result = dlc_jitter_prelabel.apply(kwargs={
+                    "config_path": str(config_path),
+                    "stem_path": str(stem_dir),
+                    "video_path": str(video_path),
+                }).get()
+
+        assert result["flagged_frames"] == 0
+        assert result["added"] == 2
+        assert result["updated"] == 1
+        assert result["stem"] == "test_stem"
+        assert "webapp_link" in result
