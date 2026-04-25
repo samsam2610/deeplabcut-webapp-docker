@@ -207,6 +207,7 @@ from anipose.visualization import bp as _anipose_visualization_bp
 from anipose.inspector import bp as _anipose_inspector_bp
 from routes.annotate import bp as _annotate_bp
 from routes.custom_script import bp as _custom_script_bp
+from routes.mcp_server import bp as _mcp_bp
 
 app.register_blueprint(_anipose_session_bp)
 app.register_blueprint(_anipose_pipeline_bp)
@@ -215,6 +216,7 @@ app.register_blueprint(_anipose_visualization_bp)
 app.register_blueprint(_anipose_inspector_bp)
 app.register_blueprint(_annotate_bp)
 app.register_blueprint(_custom_script_bp)
+app.register_blueprint(_mcp_bp)
 
 
 # ── Core Routes ───────────────────────────────────────────────────
