@@ -111,9 +111,9 @@ class TestMCPToolsCall:
                 "arguments": {"session_token": "test-token"}
             })
             data = resp.get_json()
-            link = data["result"]["content"][0]["text"]
-            assert "192.168.1.13:5000" in link
-            assert "token=test-token" in link
+            content = json.loads(data["result"]["content"][0]["text"])
+            assert "192.168.1.13:5000" in content["url"]
+            assert "token=test-token" in content["url"]
 
     def test_get_task_status_pending(self):
         app = _make_app()
