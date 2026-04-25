@@ -80,8 +80,6 @@ class TestDetectJitterFrames:
         # Inject a spike: frame 5, Snout x deviates by 50px
         scorer = df.columns.get_level_values("scorer")[0]
         df_mod = df.copy()
-        for bp in bodyparts:
-            df_mod.iloc[5]  # touch to confirm indexing
         df_mod.iloc[5, df_mod.columns.get_loc((scorer, "Snout", "x"))] = \
             df_mod.iloc[5, df_mod.columns.get_loc((scorer, "Snout", "x"))] + 100.0
         df_mod.iloc[5, df_mod.columns.get_loc((scorer, "Wrist", "x"))] = \
@@ -233,3 +231,35 @@ class TestUpsertFrames:
             with patch("cv2.imwrite", side_effect=lambda p, _: written_paths.append(p)):
                 upsert_frames(stem_dir, tmp_path / "vid.mp4", jitter_frames, scorer, bodyparts)
         assert any("158299" in p for p in written_paths)
+
+    def test_existing_csv_row_preserved_when_appending(self, tmp_path):
+        """Existing CSV rows are preserved when a new frame is added."""
+        stem_dir = self._make_stem(tmp_path)
+        scorer = "Ali"
+        bodyparts = ["Snout"]
+        csv_path = stem_dir / "CollectedData_Ali.csv"
+        # Pre-write a CSV with one existing frame
+        with open(csv_path, "w", newline="") as f:
+            import csv as csv_mod
+            w = csv_mod.writer(f)
+            w.writerow(["scorer", "", ""] + ["Ali", "Ali"])
+            w.writerow(["bodyparts", "", ""] + ["Snout", "Snout"])
+            w.writerow(["coords", "", ""] + ["x", "y"])
+            w.writerow(["labeled-data", "test_stem", "img0000-00010.png", "50.0", "60.0"])
+        # Now add a new frame
+        jitter_frames = [(20, {"Snout": {"x": 70.0, "y": 80.0, "likelihood": 0.9}})]
+        with patch("cv2.VideoCapture") as mock_cap_cls:
+            mock_cap = MagicMock()
+            mock_cap_cls.return_value = mock_cap
+            mock_cap.read.return_value = (True, np.zeros((10, 10, 3), dtype=np.uint8))
+            mock_cap.release.return_value = None
+            with patch("cv2.imwrite"):
+                result = upsert_frames(stem_dir, tmp_path / "vid.mp4", jitter_frames, scorer, bodyparts)
+        assert result["added"] == 1
+        import csv as csv_mod
+        with open(csv_path) as f:
+            rows = list(csv_mod.reader(f))
+        data_rows = rows[3:]
+        filenames = [r[2] for r in data_rows]
+        assert "img0000-00010.png" in filenames, "Existing row should be preserved"
+        assert any("00020" in fn for fn in filenames), "New row should be appended"
