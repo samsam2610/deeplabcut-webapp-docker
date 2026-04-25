@@ -227,9 +227,11 @@ def _tool_browse_project(args: dict) -> str:
     subpath = args.get("subpath", "")
     data_dir = _data_dir()
     project_dir = (data_dir / project_id).resolve()
-    if not str(project_dir).startswith(str(data_dir)):
+    if not project_dir.is_relative_to(data_dir):
         raise ValueError("Access denied")
     target = (project_dir / subpath).resolve() if subpath else project_dir
+    if not target.is_relative_to(project_dir):
+        raise ValueError("Access denied")
     if not target.is_dir():
         raise FileNotFoundError(f"Directory not found: {target}")
     entries = []
