@@ -145,7 +145,7 @@ def _require_auth():
     """Jupyter-style token gate: authenticate once, session persists."""
     if _AUTH_DISABLED:
         return
-    if request.path.startswith("/static") or request.endpoint == "login":
+    if request.path.startswith("/static") or request.path.startswith("/mcp") or request.endpoint == "login":
         return
     if flask_session.get("authenticated"):
         return
@@ -402,6 +402,7 @@ def hard_reset_jobs():
     for zset_key, job_prefix in (
         ("dlc_train_jobs",   "dlc_train_job:"),
         ("dlc_analyze_jobs", "dlc_analyze_job:"),
+        ("dlc_ml_jobs",      "dlc_ml_job:"),
     ):
         for jid in _redis_client.zrange(zset_key, 0, -1):
             _redis_client.delete(job_prefix + jid)
@@ -412,6 +413,7 @@ def hard_reset_jobs():
     for pattern in (
         "dlc_train_stop:*",
         "dlc_analyze_stop:*",
+        "dlc_ml_stop:*",
         "dlc_train_pause:*",
         "dlc_analyze_pause:*",
         "dlc_task:*:log",
@@ -435,6 +437,99 @@ def hard_reset_jobs():
         "jobs_cleared": jobs_cleared,
         "task_meta_cleared": len(task_meta_keys),
     })
+
+
+# ── Docker socket helpers (worker health + restart) ───────────────────────────
+
+_DOCKER_SOCK = "/var/run/docker.sock"
+# Worker container name — override via WORKER_CONTAINER_NAME env var.
+_WORKER_CONTAINER = os.environ.get(
+    "WORKER_CONTAINER_NAME", "deeplabcut-webapp-docker-worker-1"
+)
+
+
+def _docker_request(method: str, path: str, timeout: int = 5):
+    """
+    Issue a request to the Docker Engine REST API over the Unix socket.
+    Returns (status_code, parsed_json_or_None).
+    Raises OSError if the socket is not available.
+    """
+    import socket as _sock_mod
+    import http.client as _http
+
+    class _UnixConn(_http.HTTPConnection):
+        def connect(self):
+            s = _sock_mod.socket(_sock_mod.AF_UNIX, _sock_mod.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(_DOCKER_SOCK)
+            self.sock = s
+
+    conn = _UnixConn("localhost")
+    conn.request(method, path, headers={"Content-Type": "application/json"})
+    resp = conn.getresponse()
+    try:
+        import json as _json
+        body = _json.loads(resp.read().decode())
+    except Exception:
+        body = None
+    return resp.status, body
+
+
+@app.route("/admin/worker-status")
+def admin_worker_status():
+    """
+    Check whether the Celery GPU worker is alive.
+
+    First tries Celery's control.inspect().ping() (fast, definitive).
+    Falls back to the Docker API (if docker.sock is mounted) to check the
+    container's running state when the Celery ping times out.
+    """
+    # ── Celery ping ───────────────────────────────────────────────────────────
+    try:
+        inspector = celery.control.inspect(timeout=3)
+        pong = inspector.ping()
+        if pong:
+            return jsonify({"alive": True, "source": "celery"})
+    except Exception:
+        pass
+
+    # ── Docker API fallback ───────────────────────────────────────────────────
+    if os.path.exists(_DOCKER_SOCK):
+        try:
+            status, data = _docker_request(
+                "GET", f"/containers/{_WORKER_CONTAINER}/json"
+            )
+            if status == 200 and data:
+                running = data.get("State", {}).get("Running", False)
+                return jsonify({"alive": running, "source": "docker",
+                                "container_state": data.get("State", {})})
+        except Exception:
+            pass
+
+    return jsonify({"alive": False, "source": "unknown"})
+
+
+@app.route("/admin/restart-worker", methods=["POST"])
+def admin_restart_worker():
+    """
+    Restart the Celery GPU worker container via the Docker Engine API.
+    Requires /var/run/docker.sock to be mounted into this container.
+    """
+    if not os.path.exists(_DOCKER_SOCK):
+        return jsonify({
+            "error": "docker.sock not mounted — cannot restart worker from here. "
+                     "Run: docker compose up -d worker"
+        }), 503
+
+    try:
+        status, _ = _docker_request(
+            "POST", f"/containers/{_WORKER_CONTAINER}/restart?t=10"
+        )
+        if status in (200, 204):
+            return jsonify({"status": "restarting", "container": _WORKER_CONTAINER})
+        return jsonify({"error": f"Docker API returned {status}"}), 502
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
 
 
 @app.route("/config")
