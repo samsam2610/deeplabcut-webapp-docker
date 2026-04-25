@@ -49,18 +49,24 @@ services:
       - ./src/static:/app/static
       - ./src/dlc_tapnet_tracker.py:/app/dlc_tapnet_tracker.py
       - ./src/dlc_dataset_curator.py:/app/dlc_dataset_curator.py
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "977"   # host docker group GID — grants flask access to docker.sock
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DATA_DIR=/app/data
       - USER_DATA_DIR=/user-data
       - FLASK_APP=app.py
-      - FLASK_DEBUG=1
       - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-change-me-in-production}
       - APP_TOKEN=deeplabcut
       - OLLAMA_URL=http://172.26.0.1:11434
-    # Use Flask dev server instead of gunicorn for auto-reload
-    command: flask run --debug --host=0.0.0.0 --port=5000
+      - WEBAPP_PUBLIC_URL=http://192.168.1.13:5000
+    networks:
+      default:
+      llm-net:
+        aliases:
+          - dlc-webapp
     depends_on:
       redis:
         condition: service_healthy
@@ -162,3 +168,7 @@ services:
 
 volumes:
   redis-data:
+
+networks:
+  llm-net:
+    external: true
