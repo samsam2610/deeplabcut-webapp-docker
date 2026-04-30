@@ -588,6 +588,28 @@ def static_files(filename):
     return send_from_directory("static", filename)
 
 
+@app.route("/dlc-3d/", defaults={"path": ""})
+@app.route("/dlc-3d/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+def proxy_dlc_3d(path):
+    import requests as _req
+    url = f"http://dlc-3d:5050/dlc-3d/{path}"
+    try:
+        resp = _req.request(
+            method=request.method,
+            url=url,
+            headers={k: v for k, v in request.headers if k.lower() not in ("host", "content-length", "transfer-encoding")},
+            data=request.get_data(),
+            params=request.args,
+            stream=True,
+            timeout=60,
+        )
+    except _req.exceptions.ConnectionError:
+        return jsonify({"error": "dlc-3d module is not running"}), 502
+    excluded = {"content-encoding", "transfer-encoding", "connection"}
+    headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded}
+    return Response(resp.iter_content(chunk_size=8192), status=resp.status_code, headers=headers)
+
+
 # ── Entry point ───────────────────────────────────────────────────
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)

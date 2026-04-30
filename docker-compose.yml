@@ -166,6 +166,28 @@ services:
     # so Docker will NOT restart it automatically after idle shutdown.
     restart: on-failure
 
+  # ── DLC-3D Support Module ───────────────────────────────────────
+  dlc-3d:
+    build:
+      context: ../deeplabcut-webapp-docker-supports/dlc-3D
+      dockerfile: Dockerfile
+    image: dlc-3d:latest
+    volumes:
+      - /home/sam/data-disk/Parra-Data:/user-data/Parra-Data/Disk
+      - /home/sam/synology/Parra-Lab-Data:/user-data/Parra-Data/Cloud
+      - /home/sam/data-mount-dir:/user-data/Martin-Data/USB
+      - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/routes.py:/app/routes.py
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/config.py:/app/config.py
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/viewer.py:/app/viewer.py
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/templates:/app/templates
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/static:/app/static
+    environment:
+      - DLC_3D_PORT=5050
+    networks:
+      - default
+    restart: unless-stopped
+
 volumes:
   redis-data:
 
