@@ -115,10 +115,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    # on-failure: restart only on crash (non-zero exit).
-    # The worker shuts itself down cleanly (exit 0) when the queue is empty,
-    # so Docker will NOT restart it automatically after idle shutdown.
-    restart: on-failure
+    restart: unless-stopped
 
   # ── Celery Worker — TensorFlow (GPU-enabled) ────────────────────
   # Handles: legacy TF DLC projects (tensorflow queue)
@@ -161,10 +158,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    # on-failure: restart only on crash (non-zero exit).
-    # The worker shuts itself down cleanly (exit 0) when the queue is empty,
-    # so Docker will NOT restart it automatically after idle shutdown.
-    restart: on-failure
+    restart: unless-stopped
 
   # ── DLC-3D Support Module ───────────────────────────────────────
   dlc-3d:
@@ -184,6 +178,7 @@ services:
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/viewer.py:/app/viewer.py
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/dlc_3d.html:/app/templates/dlc_3d.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/static:/app/static
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_3d_extract.html:/app/templates/partials/card_3d_extract.html
     environment:
       - AUTH_DISABLED=true
       - DLC_3D_PORT=5050
