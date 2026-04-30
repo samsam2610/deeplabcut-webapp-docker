@@ -182,8 +182,7 @@ services:
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/dlc_3d_bp:/app/dlc_3d_bp
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/config.py:/app/config.py
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/viewer.py:/app/viewer.py
-      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates:/app/templates
-      - ./src/templates/base.html:/app/templates/base.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/dlc_3d.html:/app/templates/dlc_3d.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/static:/app/static
     environment:
       - AUTH_DISABLED=true
