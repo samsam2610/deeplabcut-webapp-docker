@@ -169,20 +169,24 @@ services:
   # ── DLC-3D Support Module ───────────────────────────────────────
   dlc-3d:
     build:
-      context: ../deeplabcut-webapp-docker-supports/dlc-3D
-      dockerfile: Dockerfile
+      context: ../
+      dockerfile: deeplabcut-webapp-docker-supports/dlc-3D/Dockerfile
     image: dlc-3d:latest
     volumes:
       - /home/sam/data-disk/Parra-Data:/user-data/Parra-Data/Disk
       - /home/sam/synology/Parra-Lab-Data:/user-data/Parra-Data/Cloud
       - /home/sam/data-mount-dir:/user-data/Martin-Data/USB
       - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
-      - ../deeplabcut-webapp-docker-supports/dlc-3D/routes.py:/app/routes.py
-      - ../deeplabcut-webapp-docker-supports/dlc-3D/config.py:/app/config.py
-      - ../deeplabcut-webapp-docker-supports/dlc-3D/viewer.py:/app/viewer.py
-      - ../deeplabcut-webapp-docker-supports/dlc-3D/templates:/app/templates
-      - ../deeplabcut-webapp-docker-supports/dlc-3D/static:/app/static
+      # Live-reload source files without rebuild
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/app.py:/app/app.py
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/dlc_3d_bp:/app/dlc_3d_bp
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/config.py:/app/config.py
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/viewer.py:/app/viewer.py
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates:/app/templates
+      - ./src/templates/base.html:/app/templates/base.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/static:/app/static
     environment:
+      - AUTH_DISABLED=true
       - DLC_3D_PORT=5050
     networks:
       - default
