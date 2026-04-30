@@ -605,7 +605,7 @@ def proxy_dlc_3d(path):
         )
     except _req.exceptions.ConnectionError:
         return jsonify({"error": "dlc-3d module is not running"}), 502
-    excluded = {"content-encoding", "transfer-encoding", "connection"}
+    excluded = {"content-encoding", "transfer-encoding", "connection", "content-length"}
     headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded}
     return Response(resp.iter_content(chunk_size=8192), status=resp.status_code, headers=headers)
 
