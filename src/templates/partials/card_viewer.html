@@ -239,11 +239,18 @@
         <!-- ── Dataset Curation Panel ──────────────────────────────── -->
         <div id="va-curation-panel" style="margin-top:.65rem;padding:.5rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
 
-          <!-- Header -->
-          <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.45rem">
-            <span style="font-size:.8rem;font-weight:600;color:var(--text)">Dataset Curation</span>
+          <!-- Toggle row (master kill-switch for the curation tools) -->
+          <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:.45rem;font-size:.8rem;font-weight:500;cursor:pointer;user-select:none">
+              <input type="checkbox" id="va-curation-toggle"
+                     style="accent-color:var(--accent);width:14px;height:14px"/>
+              Dataset Curation
+            </label>
             <span id="va-curation-status" class="fe-extract-status" style="font-size:.73rem;flex:1;min-width:0"></span>
           </div>
+
+          <!-- Existing inner rows wrapped in a hidden-by-default div -->
+          <div id="va-curation-controls" class="hidden" style="margin-top:.5rem">
 
           <!-- Row 1: Quick-extract + Add to Dataset -->
           <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.4rem">
@@ -357,6 +364,8 @@
               </button>
             </div>
           </div>
+          </div>
+          <!-- end va-curation-controls -->
         </div>
         <!-- ── end Dataset Curation Panel ──────────────────────────── -->
 
