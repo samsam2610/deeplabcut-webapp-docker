@@ -44,7 +44,7 @@ def test_button_sits_between_view_and_annotate():
 def test_new_ids_are_unique_across_partials():
     new_ids = {
         "postprocess-card", "btn-close-postprocess", "btn-open-postprocess",
-        "pp-tool", "pp-input-mode-file", "pp-input-mode-folder",
+        "pp-tool", "pp-input-path", "pp-browse-btn", "pp-browser",
         "pp-params-deeplabcut", "pp-params-refine",
         "pp-run", "pp-cancel", "pp-status", "pp-log", "pp-recent",
     }
@@ -74,3 +74,24 @@ def test_postprocess_js_handles_open_and_close():
     assert "pp-tool" in js
     assert "pp-params-deeplabcut" in js
     assert "pp-params-refine" in js
+
+
+def test_postprocess_js_does_not_hide_other_cards():
+    """Regression: opening the post-process card MUST NOT hide other open cards.
+
+    The original implementation called document.querySelectorAll('section.card')
+    and added 'hidden' to every other card — clobbering the sidebar and any
+    cards the user already had open. Cards in this app are independent.
+    """
+    js = (ROOT / "src" / "static" / "js" / "postprocess.js").read_text()
+    assert "querySelectorAll(\"section.card\")" not in js
+    assert "querySelectorAll('section.card')" not in js
+    assert "hideAllOtherCards" not in js
+
+
+def test_postprocess_js_has_browse_logic():
+    """The card must mimic annotator-style browse: /fs/ls + browser pane toggle."""
+    js = (ROOT / "src" / "static" / "js" / "postprocess.js").read_text()
+    assert "/fs/ls" in js
+    assert "pp-browse-btn" in js
+    assert "pp-browser" in js
