@@ -149,3 +149,63 @@ def test_smoothing_rejects_invalid_window():
         ppr.step_smoothing(df, window=4, polyorder=2)  # even window
     with pytest.raises(ValueError):
         ppr.step_smoothing(df, window=3, polyorder=3)  # polyorder >= window
+
+
+def test_run_pipeline_applies_steps_in_fixed_order(monkeypatch):
+    """Steps must execute in: filter → outliers → interp → smooth."""
+    df = _make_dlc_dataframe()
+    order = []
+
+    def make_spy(name, real):
+        def wrapped(d, **kwargs):
+            order.append(name)
+            return real(d, **kwargs)
+        return wrapped
+
+    monkeypatch.setattr(ppr, "step_likelihood_filter",
+                        make_spy("filter", ppr.step_likelihood_filter))
+    monkeypatch.setattr(ppr, "step_outlier_removal",
+                        make_spy("outliers", ppr.step_outlier_removal))
+    monkeypatch.setattr(ppr, "step_interpolation",
+                        make_spy("interp", ppr.step_interpolation))
+    monkeypatch.setattr(ppr, "step_smoothing",
+                        make_spy("smooth", ppr.step_smoothing))
+
+    cfg = {
+        "likelihood_filter": {"enabled": True, "threshold": 0.5},
+        "outlier_removal":   {"enabled": True, "z_threshold": 3.0},
+        "interpolation":     {"enabled": True, "method": "linear", "limit": 5},
+        "smoothing":         {"enabled": True, "window": 5, "polyorder": 2},
+    }
+    ppr.run_pipeline(df, cfg)
+    assert order == ["filter", "outliers", "interp", "smooth"]
+
+
+def test_run_pipeline_skips_disabled_steps(monkeypatch):
+    df = _make_dlc_dataframe()
+    called = []
+    monkeypatch.setattr(ppr, "step_likelihood_filter",
+                        lambda d, **kw: called.append("filter") or d)
+    monkeypatch.setattr(ppr, "step_smoothing",
+                        lambda d, **kw: called.append("smooth") or d)
+
+    cfg = {
+        "likelihood_filter": {"enabled": False, "threshold": 0.5},
+        "smoothing":         {"enabled": True, "window": 5, "polyorder": 2},
+    }
+    ppr.run_pipeline(df, cfg)
+    assert called == ["smooth"]
+
+
+def test_run_single_dispatches_to_named_step():
+    df = _make_dlc_dataframe(bodyparts=("nose",), n_frames=5)
+    scorer = df.columns.levels[0][0]
+    df.loc[:, (scorer, "nose", "likelihood")] = [0.9, 0.9, 0.1, 0.9, 0.1]
+    out = ppr.run_single(df, "likelihood_filter", {"threshold": 0.5})
+    assert pd.isna(out.loc[2, (scorer, "nose", "x")])
+
+
+def test_run_single_unknown_step():
+    df = _make_dlc_dataframe()
+    with pytest.raises(ValueError):
+        ppr.run_single(df, "nope", {})
