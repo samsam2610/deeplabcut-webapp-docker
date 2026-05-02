@@ -1092,6 +1092,13 @@ import { state } from './state.js';
     // Backwards-compat wrapper for callers that still reference the old name.
     function _vaFetchPosesWindow(fromFrame) { return _vaPrefetchPoseWindow(fromFrame); }
 
+    // ── Dataset Curation master toggle ────────────────────────
+    const vaCurationToggle   = document.getElementById("va-curation-toggle");
+    const vaCurationControls = document.getElementById("va-curation-controls");
+    vaCurationToggle?.addEventListener("change", () => {
+      vaCurationControls?.classList.toggle("hidden", !vaCurationToggle.checked);
+    });
+
     // ── Kinematic overlay controls ────────────────────────────
     const vaOverlayToggle    = document.getElementById("va-overlay-toggle");
     const vaOverlayControls  = document.getElementById("va-overlay-controls");
