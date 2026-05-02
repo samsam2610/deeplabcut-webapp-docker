@@ -141,3 +141,67 @@ def test_viewer_js_play_step_helper_present():
     js = VIEWER_JS.read_text()
     assert "_vaPlayStep" in js, "_vaPlayStep helper must exist"
     assert "va-play-step" in js, "viewer.js must read the va-play-step input"
+
+
+NEW_TWEAK_IDS = {
+    "va-overlay-primary-row",
+    "va-overlay-primary-visible",
+    "va-overlay-primary-shape",
+    "va-overlay-primary-label",
+    "va-play-fps",
+    "va-curation-toggle",
+    "va-curation-controls",
+}
+
+
+def test_new_tweak_ids_present_and_unique():
+    seen_global: dict[str, int] = {}
+    for f in PARTIALS.glob("*.html"):
+        for m in re.finditer(r'id="([^"]+)"', f.read_text()):
+            seen_global[m.group(1)] = seen_global.get(m.group(1), 0) + 1
+    for nid in NEW_TWEAK_IDS:
+        assert seen_global.get(nid, 0) == 1, (
+            f"id {nid!r} appears {seen_global.get(nid, 0)} times across partials"
+        )
+
+
+def test_viewer_js_diamond_replaces_circle_open():
+    js = VIEWER_JS.read_text()
+    assert "_drawDiamond" in js, "filled diamond primitive must be defined"
+    assert '"diamond"' in js, '_SHAPE_ORDER / _SHAPE_FN must include "diamond"'
+    assert "_drawCircleOpen" not in js, "_drawCircleOpen must be removed"
+    assert '"circle-open"' not in js, '"circle-open" slot must be gone from _SHAPE_ORDER'
+
+
+def test_viewer_js_playback_fps_helpers_present():
+    js = VIEWER_JS.read_text()
+    assert "_vaPlaybackFps" in js, "_vaPlaybackFps helper must exist"
+    assert "_vaPlayDelayMs" in js, "_vaPlayDelayMs helper must exist"
+    assert "va-play-fps" in js, "viewer.js must read the va-play-fps input"
+    # The play loop MUST consume _vaPlayDelayMs(); the legacy `1000 / _vaFps`
+    # arithmetic in the play loop is gone.
+    assert "1000 / _vaFps) - elapsed" not in js, (
+        "play loop must use _vaPlayDelayMs(), not 1000 / _vaFps"
+    )
+
+
+def test_viewer_js_atomic_swap_pattern_present():
+    """Regression: _vaLoadFrame must preload the image and pose-fetch in
+    parallel and only commit both atomically."""
+    js = VIEWER_JS.read_text()
+    assert "Promise.all([imgReady, posesReady])" in js, (
+        "_vaLoadFrame must await Promise.all([imgReady, posesReady]) before "
+        "swapping the visible image"
+    )
+
+
+def test_viewer_js_curation_toggle_handler_present():
+    js = VIEWER_JS.read_text()
+    assert "va-curation-toggle" in js
+    assert "va-curation-controls" in js
+
+
+def test_viewer_js_primary_visibility_handler_present():
+    js = VIEWER_JS.read_text()
+    assert "va-overlay-primary-visible" in js
+    assert "_vaSyncPrimaryRow" in js, "_vaSyncPrimaryRow helper must exist"
