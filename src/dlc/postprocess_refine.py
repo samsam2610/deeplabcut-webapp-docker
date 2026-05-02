@@ -151,3 +151,38 @@ def step_smoothing(
             )
             out[col] = smoothed
     return out
+
+
+PIPELINE_ORDER = ("likelihood_filter", "outlier_removal", "interpolation", "smoothing")
+
+_STEP_FUNCS = {
+    "likelihood_filter": "step_likelihood_filter",
+    "outlier_removal":   "step_outlier_removal",
+    "interpolation":     "step_interpolation",
+    "smoothing":         "step_smoothing",
+}
+
+
+def run_pipeline(df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Apply enabled refineDLC steps in fixed order: filter → outliers → interp → smooth.
+
+    `config` shape: {step_name: {"enabled": bool, **step_kwargs}}.
+    Disabled or missing steps are skipped.
+    """
+    out = df
+    for step in PIPELINE_ORDER:
+        cfg = config.get(step) or {}
+        if not cfg.get("enabled"):
+            continue
+        kwargs = {k: v for k, v in cfg.items() if k != "enabled"}
+        func = globals()[_STEP_FUNCS[step]]
+        out = func(out, **kwargs)
+    return out
+
+
+def run_single(df: pd.DataFrame, step: str, params: dict) -> pd.DataFrame:
+    """Apply exactly one step by name."""
+    if step not in _STEP_FUNCS:
+        raise ValueError(f"unknown step: {step!r}")
+    func = globals()[_STEP_FUNCS[step]]
+    return func(df, **params)
