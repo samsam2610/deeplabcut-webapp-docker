@@ -325,8 +325,8 @@ import { state } from './state.js';
       } catch (_) { _vaFps = 30; _vaFrameCount = 0; }
       vaPlayerSec.classList.remove("hidden");
       _vaLoadFrame(0);
-      // Auto-detect companion h5 in the same directory
-      _vaAutoDetectH5(absPath);
+      // Discover companion h5 variants in the same directory
+      _vaDiscoverVariants(absPath);
     }
 
     // ── Browse-tab folder navigator ────────────────────────────
@@ -910,7 +910,6 @@ import { state } from './state.js';
     const vaOverlayControls  = document.getElementById("va-overlay-controls");
     const vaOverlayStatus    = document.getElementById("va-overlay-status");
     const vaOverlayH5Path    = document.getElementById("va-overlay-h5-path");
-    const vaOverlayH5Auto    = document.getElementById("va-overlay-h5-auto");
     const vaOverlayH5Browse  = document.getElementById("va-overlay-h5-browse");
     const vaOverlayH5Clear   = document.getElementById("va-overlay-h5-clear");
     const vaOverlayH5Browser = document.getElementById("va-overlay-h5-browser");
@@ -1028,30 +1027,82 @@ import { state } from './state.js';
       if (_vaAllBodyParts.length && !_vaSelectedBp) _vaSelectBp(_vaAllBodyParts[0]);
     }
 
-    async function _vaAutoDetectH5(videoPath) {
-      const dir  = videoPath.substring(0, videoPath.lastIndexOf("/"));
-      const name = videoPath.substring(videoPath.lastIndexOf("/") + 1);
-      const stem = name.replace(/\.[^.]+$/, "");
-      _vaOverlayStatus("Scanning for .h5…");
+    // Cached on the page for re-populating after add/remove.
+    let _vaLastVariants = [];
+
+    async function _vaDiscoverVariants(videoPath) {
+      // Fetch every analyzable h5 near `videoPath` and populate the Primary <select>.
+      // Default the primary to the first 'raw' entry, or the first variant otherwise.
+      const select = document.getElementById("va-overlay-primary-select");
+      const addCmp = document.getElementById("va-overlay-add-compare");
+      if (!select || !addCmp) return;
+
+      // Reset both controls to their empty states.
+      select.innerHTML = '<option value="">(no h5 detected — use Browse)</option>';
+      addCmp.innerHTML = '<option value="">+ add comparison…</option>';
+
+      let data;
       try {
-        const res  = await fetch(`/dlc/viewer/h5-find?dir=${encodeURIComponent(dir)}&stem=${encodeURIComponent(stem)}`);
-        const data = await res.json();
-        if (data.error) { _vaOverlayStatus(data.error.includes("No .h5") ? "No .h5 found — browse to select one." : data.error); return; }
-        const layer = _vaMakeLayer({
-          path:  data.h5_path,
-          label: `Raw — ${data.h5_path.split("/").pop()}`,
-          type:  "raw",
-        });
-        _vaSetPrimaryLayer(layer);
-        vaOverlayH5Path.value = _vaH5Path;
-        _vaOverlayStatus("h5 auto-detected");
-        await _vaLoadH5Info(_vaH5Path);
-        await _vaLoadLayerInfo(layer);
-        // Load any pending edits from the server-side JSON cache
-        await _vaLoadEditCacheForPrimary();
-      } catch (e) {
-        _vaOverlayStatus("Auto-detect failed: " + e.message);
-      }
+        const r = await fetch(`/dlc/viewer/h5-variants?video=${encodeURIComponent(videoPath)}`);
+        data = await r.json();
+        if (!r.ok || !Array.isArray(data.variants)) return;
+      } catch (e) { return; }
+
+      _vaLastVariants = data.variants;
+      if (!data.variants.length) return;
+
+      // Populate primary select.
+      data.variants.forEach((v) => {
+        const opt = document.createElement("option");
+        opt.value = v.path;
+        opt.textContent = v.label;
+        if (v.disabled) opt.disabled = true;
+        opt.dataset.type  = v.type;
+        opt.dataset.label = v.label;
+        select.appendChild(opt);
+      });
+
+      // Default selection.
+      const defaultEntry = data.variants.find(v => v.type === "raw" && !v.disabled)
+                        || data.variants.find(v => !v.disabled);
+      if (!defaultEntry) return;
+      select.value = defaultEntry.path;
+      await _vaApplyPrimaryFromSelect();
+      _vaRefreshAddComparisonOptions(data.variants);
+    }
+
+    function _vaRefreshAddComparisonOptions(variants) {
+      const addCmp = document.getElementById("va-overlay-add-compare");
+      if (!addCmp) return;
+      addCmp.innerHTML = '<option value="">+ add comparison…</option>';
+      const taken = new Set(_vaLayers.map(l => l.path));
+      variants.forEach((v) => {
+        if (v.disabled) return;
+        if (taken.has(v.path)) return;
+        const opt = document.createElement("option");
+        opt.value = v.path;
+        opt.textContent = v.label;
+        opt.dataset.type  = v.type;
+        opt.dataset.label = v.label;
+        addCmp.appendChild(opt);
+      });
+    }
+
+    async function _vaApplyPrimaryFromSelect() {
+      const select = document.getElementById("va-overlay-primary-select");
+      if (!select) return;
+      const path  = select.value;
+      if (!path) return;
+      const opt   = select.options[select.selectedIndex];
+      const label = opt?.dataset.label || path.split("/").pop();
+      const type  = opt?.dataset.type  || "raw";
+
+      const layer = _vaMakeLayer({ path, label, type });
+      _vaSetPrimaryLayer(layer);
+      document.getElementById("va-overlay-h5-path").value = path;
+      await _vaLoadLayerInfo(layer);
+      await _vaLoadEditCacheForPrimary();
+      if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
     }
 
     vaOverlayToggle?.addEventListener("change", () => {
@@ -1064,13 +1115,12 @@ import { state } from './state.js';
         return;
       }
       if (_vaAllBodyParts.length && vaBpListWrap) vaBpListWrap.classList.remove("hidden");
-      if (!_vaH5Path && _vaCurrentVideoPath) _vaAutoDetectH5(_vaCurrentVideoPath);
+      if (!_vaH5Path && _vaCurrentVideoPath) _vaDiscoverVariants(_vaCurrentVideoPath);
       if (_vaH5Path && !_vaPlayTimer) _vaFetchPoses(_vaCurrentFrame);
     });
 
-    vaOverlayH5Auto?.addEventListener("click", () => {
-      if (_vaCurrentVideoPath) _vaAutoDetectH5(_vaCurrentVideoPath);
-    });
+    const vaOverlayPrimarySelect = document.getElementById("va-overlay-primary-select");
+    vaOverlayPrimarySelect?.addEventListener("change", _vaApplyPrimaryFromSelect);
 
     vaOverlayH5Clear?.addEventListener("click", () => {
       _vaSetPrimaryLayer(null);
