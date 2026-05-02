@@ -42,7 +42,9 @@ from __future__ import annotations
 
 import collections as _collections
 import colorsys as _colorsys
+import datetime as _dt
 import json as _json
+import re as _re
 import threading as _threading
 import uuid
 
@@ -480,6 +482,148 @@ def viewer_h5_find():
         "h5_path":     str(candidates[0]),
         "method":      "prefix",
         "all_matches": [str(c) for c in candidates],
+    })
+
+
+# ── /dlc/viewer/h5-variants — discover all h5 layers around a video ──────────
+
+# tool_tag → human-readable label/type
+_LABEL_BY_TYPE = {
+    "raw":              "Raw",
+    "filtered":         "filtered",
+    "refine_pipeline":  "refine_pipeline",
+    "refine_lh":        "refine_lh",
+    "refine_outliers":  "refine_outliers",
+    "refine_interp":    "refine_interp",
+    "refine_smooth":    "refine_smooth",
+}
+
+
+_RUN_DIR_RE = _re.compile(r"^(?P<ts>\d{8}-\d{6})_(?P<tag>.+)$")
+
+
+def _parse_run_dirname(dirname: str) -> tuple[str | None, str | None]:
+    """`20260502-113642_filterpredictions` → ('20260502-113642', 'filterpredictions')."""
+    m = _RUN_DIR_RE.match(dirname)
+    if not m:
+        return None, None
+    return m.group("ts"), m.group("tag")
+
+
+def _ts_to_iso(ts: str | None) -> str | None:
+    """`20260502-113642` → `2026-05-02T11:36:42Z`."""
+    if not ts:
+        return None
+    try:
+        d = _dt.datetime.strptime(ts, "%Y%m%d-%H%M%S")
+    except ValueError:
+        return None
+    return d.replace(tzinfo=_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _label_for_variant(*, type_: str, ts: str | None, all_ts: set[str]) -> str:
+    """`filtered @ 11:36:42`. Adds the date when two variants share HH:MM:SS."""
+    head = _LABEL_BY_TYPE.get(type_, type_)
+    if not ts:
+        return head
+    base = ts[9:11] + ":" + ts[11:13] + ":" + ts[13:15]  # HH:MM:SS
+    same_clock = sum(1 for t in all_ts if t and t[9:] == ts[9:])
+    if same_clock > 1:
+        date = ts[:4] + "-" + ts[4:6] + "-" + ts[6:8]
+        return f"{head} @ {date} {base}"
+    return f"{head} @ {base}"
+
+
+def _read_run_status(run_dir: Path) -> str | None:
+    sidecar = run_dir / "run.json"
+    if not sidecar.is_file():
+        return None
+    try:
+        return _json.loads(sidecar.read_text()).get("status")
+    except (OSError, _json.JSONDecodeError):
+        return None
+
+
+def _h5_variants_for_video(video: Path) -> list[dict]:
+    """Pure helper. Returns the variants list (no allowlist, no Flask)."""
+    parent = video.parent
+    stem = video.stem
+
+    out: list[dict] = []
+
+    # 1. Companion h5(s) in the parent dir whose name starts with the stem,
+    #    excludes filtered/refined.
+    if parent.is_dir():
+        for cand in sorted(parent.glob(f"{stem}*.h5")):
+            n = cand.name.lower()
+            if "_filtered" in n or "_refined" in n:
+                continue
+            out.append({
+                "path":     str(cand),
+                "label":    f"Raw — {cand.name}",
+                "type":     "raw",
+                "run_id":   None,
+                "tool_tag": None,
+                "ts":       None,
+                "status":   None,
+                "disabled": False,
+            })
+
+    # 2. postproc/<ts>_<tag>/<stem>...h5
+    pp_root = parent / "postproc"
+    if pp_root.is_dir():
+        # First pass: collect to compute date-collision labels.
+        collected: list[tuple[Path, str, str | None, str | None]] = []  # (h5, type, ts, status)
+        for run_dir in sorted(pp_root.iterdir()):
+            if not run_dir.is_dir():
+                continue
+            ts, tag = _parse_run_dirname(run_dir.name)
+            type_ = (
+                "refine_pipeline"  if tag == "refine_pipeline"  else
+                "refine_lh"        if tag == "refine_lh"        else
+                "refine_outliers"  if tag == "refine_outliers"  else
+                "refine_interp"    if tag == "refine_interp"    else
+                "refine_smooth"    if tag == "refine_smooth"    else
+                "filtered"
+            )
+            status = _read_run_status(run_dir)
+            for h5 in sorted(run_dir.glob(f"{stem}*.h5")):
+                collected.append((h5, type_, ts, status))
+
+        all_ts = {t for _h, _ty, t, _s in collected if t}
+        for h5, type_, ts, status in collected:
+            run_match = _RUN_DIR_RE.match(h5.parent.name)
+            out.append({
+                "path":     str(h5),
+                "label":    _label_for_variant(type_=type_, ts=ts, all_ts=all_ts),
+                "type":     type_,
+                "run_id":   h5.parent.name,
+                "tool_tag": run_match.group("tag") if run_match else None,
+                "ts":       _ts_to_iso(ts),
+                "status":   status,
+                "disabled": status == "failed",
+            })
+
+    return out
+
+
+@bp.route("/dlc/viewer/h5-variants")
+def viewer_h5_variants():
+    """List every analyzable h5 near the loaded video.
+
+    Query: ?video=<abs-path>
+    """
+    video_arg = request.args.get("video", "").strip()
+    if not video_arg:
+        return jsonify({"error": "video parameter required."}), 400
+
+    p = Path(video_arg)
+    if not _viewer_sec_check(p.parent):
+        return jsonify({"error": "Access denied."}), 403
+
+    return jsonify({
+        "video":    str(p),
+        "variants": _h5_variants_for_video(p),
     })
 
 
