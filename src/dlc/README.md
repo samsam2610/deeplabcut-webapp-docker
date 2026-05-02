@@ -35,3 +35,26 @@ def my_route():
 ```
 
 `app.py` keeps module-level globals and syncs them to `ctx` on every request.
+
+## Post-Process Predictions
+
+Module: `src/dlc/postprocess.py` (Flask), `src/dlc/postprocess_dlc.py` (DLC wrapper),
+`src/dlc/postprocess_refine.py` (refineDLC drivers), `src/dlc/_refinedlc/` (vendored).
+
+UI: card `postprocess-card` (button between View Analyzed and Annotate Video).
+
+| Route | Method | Purpose |
+|---|---|---|
+| `/dlc/postprocess/scan` | POST | List analyzable files in a path. Body `{path, mode: "file" \| "folder"}`. |
+| `/dlc/postprocess/run` | POST | Dispatch a Celery task. Returns `{task_id}`. |
+| `/dlc/postprocess/status/<id>` | GET | Celery state + progress meta. |
+| `/dlc/postprocess/logs/<id>` | GET | Tail of run log. |
+| `/dlc/postprocess/cancel/<id>` | POST | Revoke the running task. |
+| `/dlc/postprocess/recent` | GET | List recent runs from sidecar `run.json` files under the active project. |
+
+Outputs land at `<input-parent>/postproc/<YYYYMMDD-HHMMSS>_<tool-tag>/`.
+Source files are never modified.
+
+**Known TODOs:**
+- `_active_project_root()` in `postprocess.py` returns `None` until wired to the per-request session-uid + redis lookup used elsewhere (see `tests/test_dlc_labeling_routes.py::_set_project`). Until wired, `/recent` returns `[]` in production.
+- The vendored `smoothing.py` is a local stub (upstream refineDLC has no smoothing module). The actual Savitzky-Golay implementation lives in `step_smoothing` in `postprocess_refine.py`.
