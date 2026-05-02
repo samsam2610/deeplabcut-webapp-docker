@@ -142,3 +142,33 @@ def test_h5_variants_rejects_disallowed_path(flask_test_client, monkeypatch):
     monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: False)
     resp = client.get("/dlc/viewer/h5-variants?video=/etc/x.mp4")
     assert resp.status_code == 403
+
+
+def test_h5_variants_returns_404_when_parent_missing(flask_test_client, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: True)
+    resp = client.get("/dlc/viewer/h5-variants?video=/nonexistent/path/to/video.mp4")
+    assert resp.status_code == 404
+
+
+def test_h5_variants_handles_non_dict_sidecar(flask_test_client, tmp_path, monkeypatch):
+    """A run.json that's a JSON list (or anything non-dict) must not 500."""
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: True)
+
+    video = tmp_path / "vid.mp4"
+    video.write_bytes(b"")
+    run_dir = tmp_path / "postproc" / "20260502-130000_filterpredictions"
+    run_dir.mkdir(parents=True)
+    (run_dir / f"{video.stem}DLC_resnet_filtered.h5").write_bytes(b"")
+    (run_dir / "run.json").write_text("[\"not a dict\"]")
+
+    resp = client.get(f"/dlc/viewer/h5-variants?video={video}")
+    assert resp.status_code == 200
+    entry = next(v for v in resp.get_json()["variants"] if "filtered" in v["path"])
+    assert entry["status"] is None
+    assert entry["disabled"] is False

@@ -539,9 +539,12 @@ def _read_run_status(run_dir: Path) -> str | None:
     if not sidecar.is_file():
         return None
     try:
-        return _json.loads(sidecar.read_text()).get("status")
+        data = _json.loads(sidecar.read_text())
     except (OSError, _json.JSONDecodeError):
         return None
+    if not isinstance(data, dict):
+        return None
+    return data.get("status")
 
 
 def _h5_variants_for_video(video: Path) -> list[dict]:
@@ -618,6 +621,8 @@ def viewer_h5_variants():
         return jsonify({"error": "video parameter required."}), 400
 
     p = Path(video_arg)
+    if not p.parent.is_dir():
+        return jsonify({"error": f"Video parent dir not found: {p.parent}"}), 404
     if not _viewer_sec_check(p.parent):
         return jsonify({"error": "Access denied."}), 403
 
