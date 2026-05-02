@@ -224,51 +224,54 @@ import { state } from './state.js';
       n = Math.max(0, Math.min(n, Math.max(_vaFrameCount - 1, 0)));
       _vaCurrentFrame = n;
       vaFrameSpinner.classList.remove("hidden");
+
+      const newUrl = _vaFrameUrl(n);
+
+      // Preload the image off-DOM in parallel with all visible-layer pose
+      // fetches so the visible image NEVER lands on screen before its markers.
+      const imgReady = new Promise((resolve, reject) => {
+        const im = new Image();
+        im.onload  = () => resolve(im);
+        im.onerror = (e) => reject(e || new Error("image preload failed"));
+        im.src = newUrl;
+      });
+
+      const posesReady = _vaOverlayEnabled
+        ? Promise.all(
+            _vaLayers
+              .filter(l => l.visible && !l.errored)
+              .map(l => _vaFetchPosesForFrame(l, n).catch(() => null))
+          )
+        : Promise.resolve();
+
       try {
-        const resp = await fetch(_vaFrameUrl(n));
-        if (!resp.ok) {
-          const err = await resp.json().catch(() => ({}));
-          throw new Error(err.error || `HTTP ${resp.status}`);
-        }
-        const blob    = await resp.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        await new Promise((resolve, reject) => {
-          vaFrameImg.onload  = resolve;
-          vaFrameImg.onerror = reject;
-          const prev = vaFrameImg.src;
-          vaFrameImg.src = blobUrl;
-          if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
-        });
+        const [preloadedImg] = await Promise.all([imgReady, posesReady]);
+
+        // Atomic swap: image + markers go to screen together.
+        const prev = vaFrameImg.src;
+        vaFrameImg.src = preloadedImg.src;
+        if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+
         _vaFitViewer();
         _vaUpdateDisplay();
         _vaPrefetchFrames([n + 1, n + 2]);
         if (_vaCurationFrameHook) _vaCurationFrameHook(n);
         if (_vaMetadataFrameHook) _vaMetadataFrameHook(n);
-        // Wait for the browser's next paint so the new video frame is composited
-        // before the overlay markers are drawn on top of it.  Without this rAF,
-        // the canvas draw runs in the same compositor tick as the old frame,
-        // producing a one-frame lag where markers appear on the wrong image.
-        await new Promise(resolve => requestAnimationFrame(resolve));
-        // When paused, eagerly fetch poses for ALL visible layers before drawing.
-        if (_vaOverlayEnabled && !_vaPlayTimer) {
-          await Promise.all(
-            _vaLayers
-              .filter(l => l.visible && !l.errored)
-              .map(l => _vaFetchPosesForFrame(l, n))
-          );
-          // Sync primary cache into legacy _vaCurrentPoses for hit-testing.
-          const primary = _vaPrimary();
-          if (primary) {
-            const c = primary.posesCache.get(n);
-            if (c) { _vaCurrentPoses = c.poses; _vaNBodyparts = c.n_bodyparts; }
-          }
+
+        // Sync primary cache into legacy _vaCurrentPoses for hit-testing.
+        const primary = _vaPrimary();
+        if (primary) {
+          const c = primary.posesCache.get(n);
+          if (c) { _vaCurrentPoses = c.poses; _vaNBodyparts = c.n_bodyparts; }
         }
+
         _vaUpdateOverlay(n);
-        // Barrier: wait for the browser to paint before resolving so the play
-        // loop never advances mid-render.
+
+        // Paint barrier — guarantees image + canvas have landed before the
+        // play loop schedules the next tick.
         await new Promise(requestAnimationFrame);
       } catch (err) {
-        vaStatus.textContent = `Failed to load frame: ${err.message}`;
+        vaStatus.textContent = `Failed to load frame: ${err && err.message ? err.message : err}`;
         vaStatus.className   = "fe-extract-status err";
       } finally {
         _vaFrameBusy = false;
