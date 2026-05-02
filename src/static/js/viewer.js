@@ -384,42 +384,73 @@ import { state } from './state.js';
       _vaBrowsePath = path;
       vaBrowseBreadcrumb.value = path;
       vaBrowseList.innerHTML = '<p class="explorer-empty">Loading…</p>';
+
+      // Try the new dir-with-h5 endpoint; fall back to /fs/ls on failure.
+      let data;
       try {
-        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(path)}`);
-        const data = await res.json();
-        if (data.error) { vaBrowseList.innerHTML = `<p class="explorer-empty">${data.error}</p>`; return; }
-
-        const entries = data.entries || [];
-        const dirs    = entries.filter(e => e.type === "dir");
-        const videos  = entries.filter(e => e.type === "file" && _VA_VIDEO_EXTS.has(e.name.slice(e.name.lastIndexOf(".")).toLowerCase()));
-
-        if (!dirs.length && !videos.length) {
-          vaBrowseList.innerHTML = '<p class="explorer-empty">No folders or videos found here.</p>';
+        const res = await fetch(`/dlc/viewer/dir-with-h5?path=${encodeURIComponent(path)}`);
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        data = await res.json();
+        if (data.error) throw new Error(data.error);
+      } catch (newRouteErr) {
+        // Fallback: legacy /fs/ls. Treat every video as has_h5=false (we can't tell).
+        try {
+          const res2 = await fetch(`/fs/ls?path=${encodeURIComponent(path)}`);
+          const d2   = await res2.json();
+          if (d2.error) { vaBrowseList.innerHTML = `<p class="explorer-empty">${d2.error}</p>`; return; }
+          const entries = d2.entries || [];
+          data = {
+            path,
+            dirs:   entries.filter(e => e.type === "dir").map(e => ({name: e.name})),
+            videos: entries
+              .filter(e => e.type === "file" && _VA_VIDEO_EXTS.has(e.name.slice(e.name.lastIndexOf(".")).toLowerCase()))
+              .map(e => ({name: e.name, has_h5: false, h5_count: 0})),
+          };
+        } catch (fbErr) {
+          vaBrowseList.innerHTML = `<p class="explorer-empty">Error: ${fbErr.message}</p>`;
           return;
         }
-        vaBrowseList.innerHTML = "";
-
-        dirs.forEach(d => {
-          const row = document.createElement("div");
-          row.className = "fe-video-item";
-          row.style.cursor = "pointer";
-          row.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.name}/</span>`;
-          row.addEventListener("click", () => _vaRefreshBrowse(path + "/" + d.name));
-          vaBrowseList.appendChild(row);
-        });
-
-        videos.forEach(v => {
-          const fullPath = path + "/" + v.name;
-          const row = document.createElement("div");
-          row.className = "fe-video-item";
-          row.style.cursor = "pointer";
-          row.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><rect x="2" y="2" width="20" height="20" rx="3"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">${v.name}</span>`;
-          row.addEventListener("click", () => _vaOpenBrowseVideo(fullPath, v.name));
-          vaBrowseList.appendChild(row);
-        });
-      } catch (err) {
-        vaBrowseList.innerHTML = `<p class="explorer-empty">Error: ${err.message}</p>`;
       }
+
+      const dirs = data.dirs || [];
+      const videos = data.videos || [];
+      const hideNoH5 = !!state.vaBrowseHideNoH5;
+      const visibleVideos = hideNoH5 ? videos.filter(v => v.has_h5) : videos;
+
+      if (!dirs.length && !visibleVideos.length) {
+        vaBrowseList.innerHTML = hideNoH5
+          ? '<p class="explorer-empty">No videos with analyzed h5 here. Untick "Hide videos without h5" to show all.</p>'
+          : '<p class="explorer-empty">No folders or videos found here.</p>';
+        return;
+      }
+
+      vaBrowseList.innerHTML = "";
+
+      dirs.forEach(d => {
+        const row = document.createElement("div");
+        row.className = "fe-video-item";
+        row.style.cursor = "pointer";
+        row.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>`;
+        row.querySelector("span").textContent = d.name + "/";
+        row.addEventListener("click", () => _vaRefreshBrowse(path + "/" + d.name));
+        vaBrowseList.appendChild(row);
+      });
+
+      visibleVideos.forEach(v => {
+        const fullPath = path + "/" + v.name;
+        const row = document.createElement("div");
+        row.className = "fe-video-item";
+        row.style.cursor = "pointer";
+        row.dataset.hasH5 = v.has_h5 ? "true" : "false";
+        const iconOpacity = v.has_h5 ? "1" : "0.45";
+        const badge = v.has_h5
+          ? `<span style="font-size:.68rem;color:var(--text-dim);margin-left:auto;padding:.05rem .35rem;background:var(--surface);border:1px solid var(--border);border-radius:8px">${v.h5_count} h5</span>`
+          : `<span style="font-size:.68rem;color:var(--text-dim);margin-left:auto;font-style:italic">no h5</span>`;
+        row.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;opacity:${iconOpacity}"><rect x="2" y="2" width="20" height="20" rx="3"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;opacity:${iconOpacity === "1" ? "1" : "0.7"}"></span>${badge}`;
+        row.querySelector("span").textContent = v.name;
+        row.addEventListener("click", () => _vaOpenBrowseVideo(fullPath, v.name));
+        vaBrowseList.appendChild(row);
+      });
     }
 
     // ── Tab switching ──────────────────────────────────────────
@@ -446,6 +477,14 @@ import { state } from './state.js';
       const parent = _vaBrowsePath.split("/").slice(0, -1).join("/") || "/";
       if (parent !== _vaBrowsePath) _vaRefreshBrowse(parent);
     });
+
+    const vaBrowseHideNoH5 = document.getElementById("va-browse-hide-no-h5");
+    vaBrowseHideNoH5?.addEventListener("change", () => {
+      state.vaBrowseHideNoH5 = !!vaBrowseHideNoH5.checked;
+      if (_vaBrowsePath) _vaRefreshBrowse(_vaBrowsePath);
+    });
+    // On startup, sync the checkbox to state (state.vaBrowseHideNoH5 defaults true).
+    if (vaBrowseHideNoH5) vaBrowseHideNoH5.checked = !!state.vaBrowseHideNoH5;
 
     // ── Editable address bar ───────────────────────────────────
     async function _vaNavigateTo(raw) {
