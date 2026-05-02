@@ -83,3 +83,61 @@ def test_viewer_js_dropped_legacy_globals():
         "the legacy scalar `_vaThreshold` declaration should be removed; "
         "use _vaGlobalThreshold + _vaLayerThreshold(layer) instead"
     )
+
+
+NEW_FLOW_IDS = {
+    "va-browse-hide-no-h5",
+    "va-overlay-add-compare-empty-hint",
+    "va-play-step",
+}
+
+
+def test_new_flow_ids_present_and_unique():
+    seen_global: dict[str, int] = {}
+    for f in PARTIALS.glob("*.html"):
+        for m in re.finditer(r'id="([^"]+)"', f.read_text()):
+            seen_global[m.group(1)] = seen_global.get(m.group(1), 0) + 1
+    for nid in NEW_FLOW_IDS:
+        assert seen_global.get(nid, 0) == 1, (
+            f"id {nid!r} appears {seen_global.get(nid, 0)} times across partials"
+        )
+
+
+def test_viewer_js_uses_dir_with_h5_route():
+    js = VIEWER_JS.read_text()
+    assert "/dlc/viewer/dir-with-h5" in js, (
+        "viewer.js must consume /dir-with-h5 instead of /fs/ls for the Browse list"
+    )
+
+
+def test_viewer_js_pick_best_primary_helper_present():
+    js = VIEWER_JS.read_text()
+    assert "_vaPickBestPrimary" in js, (
+        "auto-latest selection helper _vaPickBestPrimary must be defined"
+    )
+
+
+def test_viewer_js_primary_swap_clears_layers():
+    """Regression: primary swap must reset _vaLayers, not just push a new primary."""
+    js = VIEWER_JS.read_text()
+    # The new _vaApplyPrimaryFromSelect contains "_vaLayers.length = 0".
+    assert "_vaLayers.length = 0" in js, (
+        "_vaApplyPrimaryFromSelect must explicitly empty _vaLayers before "
+        "pushing the new primary"
+    )
+
+
+def test_viewer_js_paint_barrier_present():
+    """Regression: _vaLoadFrame must await an rAF barrier so the play loop
+    never advances mid-render."""
+    js = VIEWER_JS.read_text()
+    assert "new Promise(requestAnimationFrame)" in js, (
+        "_vaLoadFrame must await `new Promise(requestAnimationFrame)` before "
+        "the prefetch step"
+    )
+
+
+def test_viewer_js_play_step_helper_present():
+    js = VIEWER_JS.read_text()
+    assert "_vaPlayStep" in js, "_vaPlayStep helper must exist"
+    assert "va-play-step" in js, "viewer.js must read the va-play-step input"
