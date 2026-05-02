@@ -90,3 +90,28 @@ def step_outlier_removal(df: pd.DataFrame, *, z_threshold: float = 3.0) -> pd.Da
             mask = mask & finite
             out.loc[mask, col] = float("nan")
     return out
+
+
+def step_interpolation(
+    df: pd.DataFrame,
+    *,
+    method: str = "linear",
+    limit: int | None = None,
+) -> pd.DataFrame:
+    """Interpolate NaN gaps in x and y per bodypart."""
+    if method not in {"linear", "spline", "polynomial", "nearest", "cubic"}:
+        raise ValueError(f"unsupported interpolation method: {method!r}")
+    if limit is not None and limit < 1:
+        raise ValueError(f"limit must be >= 1 or None, got {limit}")
+
+    out = df.copy()
+    scorer = out.columns.levels[0][0]
+    bodyparts = out.columns.get_level_values("bodyparts").unique()
+    interp_kwargs = {"method": method}
+    if limit is not None:
+        interp_kwargs["limit"] = limit
+    for bp in bodyparts:
+        for axis in ("x", "y"):
+            col = (scorer, bp, axis)
+            out[col] = out[col].interpolate(**interp_kwargs)
+    return out
