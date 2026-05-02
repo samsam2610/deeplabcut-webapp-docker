@@ -161,19 +161,11 @@ def run():
         if not _path_is_allowed(p):
             return jsonify({"error": f"path not allowed: {p}"}), 400
 
-    # Resolve config_path from the active DLC project (redis-backed). DLC's
-    # filterpredictions library code requires a real config.yaml to read
-    # bodyparts; passing an empty path triggers an UnboundLocalError deep in
-    # DLC. refineDLC tools don't need config but the active project is the
-    # source of truth either way.
+    # config_path is accepted for backward compat but not required. The
+    # deeplabcut/filterpredictions wrapper is now a self-contained scipy
+    # medfilt implementation (mirrors DLC's algorithm) and does not need a
+    # project config. refineDLC tools don't need a config either.
     config_path = ""
-    if tool == "deeplabcut":
-        project_data = _active_project_data()
-        if not project_data:
-            return jsonify({"error": "No active DLC project."}), 400
-        config_path = project_data.get("config_path", "")
-        if not config_path or not Path(config_path).is_file():
-            return jsonify({"error": "No config.yaml in active project."}), 400
 
     # Dispatch by name; do NOT `from dlc.tasks import …` because tasks.py
     # imports `deeplabcut` at module top, which is not installed in the Flask
