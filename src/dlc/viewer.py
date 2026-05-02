@@ -66,6 +66,9 @@ _VIEWER_H5_CACHE_MAX = 12
 _viewer_h5_cache: _collections.OrderedDict = _collections.OrderedDict()
 _viewer_h5_lock = _threading.Lock()
 
+# ── Browse-list video extensions (used by /dlc/viewer/dir-with-h5) ───────────
+_VIEWER_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".mpg", ".mpeg"}
+
 # ── Per-session VideoCapture cache (separate from dlc/videos.py) ─────────────
 _VIEWER_VCAP_MAX = 10
 _viewer_vcap_cache: _collections.OrderedDict = _collections.OrderedDict()
@@ -632,6 +635,133 @@ def viewer_h5_variants():
         "video":    str(p),
         "variants": _h5_variants_for_video(p),
     })
+
+
+def _viewer_dir_mtime(d: Path) -> float:
+    """Composite mtime that captures any change affecting the dir's listing.
+
+    Captures: dir itself (new/deleted videos), postproc/ root (new run dirs),
+    and each postproc/<ts>_*/ run dir (sidecar updates).
+    """
+    candidates = [d.stat().st_mtime]
+    pp = d / "postproc"
+    if pp.is_dir():
+        try:
+            candidates.append(pp.stat().st_mtime)
+        except OSError:
+            pass
+        try:
+            for child in pp.iterdir():
+                if child.is_dir():
+                    try:
+                        candidates.append(child.stat().st_mtime)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return max(candidates)
+
+
+def _build_dir_with_h5(d: Path, mtime: float) -> dict:
+    """Walk a single directory and annotate videos with h5 counts.
+
+    Pure-filesystem; no Redis, no Flask. Caller is responsible for caching.
+    """
+    parent = str(d.parent) if d.parent != d else None
+    dirs: list[dict] = []
+    videos: list[dict] = []
+    h5_stems_by_video: dict[str, list[str]] = {}
+
+    def _record_h5(h5_path: Path):
+        # Companion convention: <video_stem>DLC_<scorer>...{_filtered|_refined}?.h5
+        # The h5 stem starts with the video stem. First match wins.
+        for vstem in list(h5_stems_by_video.keys()):
+            if h5_path.stem.startswith(vstem):
+                h5_stems_by_video[vstem].append(str(h5_path))
+                return
+
+    # Pass 1: dirs + videos in <d>.
+    for entry in sorted(d.iterdir()):
+        if entry.is_dir():
+            if entry.name == "postproc":
+                continue
+            dirs.append({"name": entry.name})
+        elif entry.is_file() and entry.suffix.lower() in _VIEWER_VIDEO_EXTS:
+            h5_stems_by_video[entry.stem] = []
+            videos.append({"name": entry.name, "stem": entry.stem})
+
+    # Pass 2: companion h5 in <d> (excludes _filtered/_refined).
+    for entry in d.iterdir():
+        if entry.is_file() and entry.suffix.lower() == ".h5":
+            n = entry.name.lower()
+            if "_filtered" in n or "_refined" in n:
+                continue
+            _record_h5(entry)
+
+    # Pass 3: postproc/<ts>_<tag>/<vstem>...h5
+    pp = d / "postproc"
+    if pp.is_dir():
+        for run_dir in pp.iterdir():
+            if not run_dir.is_dir():
+                continue
+            for h5 in run_dir.glob("*.h5"):
+                _record_h5(h5)
+
+    for v in videos:
+        h5s = h5_stems_by_video.get(v["stem"], [])
+        v["has_h5"]   = bool(h5s)
+        v["h5_count"] = len(h5s)
+        v.pop("stem", None)
+
+    return {
+        "path":   str(d),
+        "parent": parent,
+        "dirs":   dirs,
+        "videos": videos,
+        "mtime":  mtime,
+    }
+
+
+@bp.route("/dlc/viewer/dir-with-h5")
+def viewer_dir_with_h5():
+    """Browse-list helper: every video in <dir> annotated with h5 count.
+
+    Query: ?path=<abs-dir>
+    Cached in Redis at viewer:dir_h5:<abs-dir> with composite-mtime invalidation.
+    """
+    raw = request.args.get("path", "").strip()
+    if not raw:
+        return jsonify({"error": "path required"}), 400
+    d = Path(raw)
+    if not d.is_dir():
+        return jsonify({"error": f"not a dir: {raw}"}), 404
+    if not _viewer_sec_check(d):
+        return jsonify({"error": "Access denied."}), 403
+
+    cur_mtime = _viewer_dir_mtime(d)
+    redis_key = f"viewer:dir_h5:{d}"
+    try:
+        redis = _ctx.redis_client()
+    except Exception:
+        redis = None
+
+    if redis is not None:
+        try:
+            raw_cached = redis.get(redis_key)
+            if raw_cached:
+                cached = _json.loads(raw_cached)
+                if cached.get("mtime") == cur_mtime:
+                    return jsonify(cached)
+        except Exception:
+            pass  # fall through and rebuild
+
+    payload = _build_dir_with_h5(d, cur_mtime)
+    if redis is not None:
+        try:
+            redis.setex(redis_key, 86400, _json.dumps(payload))
+        except Exception:
+            pass  # cache write best-effort
+    return jsonify(payload)
 
 
 @bp.route("/dlc/viewer/h5-info")
