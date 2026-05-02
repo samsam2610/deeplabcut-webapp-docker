@@ -78,6 +78,60 @@ import { state } from './state.js';
       if (_vaPrefetchCtrl) { _vaPrefetchCtrl.abort(); _vaPrefetchCtrl = null; }
     }
 
+    // ── Kinematic overlay LAYER state ───────────────────────────────────
+    // Element 0 = primary (editable). Elements 1+ = comparison layers (read-only).
+    // Each layer:
+    //   { id, path, label, type, shape, visible, threshold, posesCache,
+    //     bodyparts, errored }
+    // `_vaH5Path`, `_vaThreshold`, `_vaPoseCache` are kept as shims pointing at
+    // _vaPrimary() until every consumer is migrated (Task 5+).
+    const _vaLayers = [];
+    let   _vaGlobalThreshold    = 0.60;
+    let   _vaPerLayerThresholds = false;
+
+    function _vaPrimary()     { return _vaLayers[0] || null; }
+    function _vaCompare()     { return _vaLayers.slice(1); }
+    function _vaIsEditable()  { return _vaLayers.length === 1; }
+    function _vaLayerThreshold(layer) {
+      return _vaPerLayerThresholds && layer.threshold != null
+        ? layer.threshold
+        : _vaGlobalThreshold;
+    }
+
+    const _SHAPE_ORDER = ["circle-filled", "circle-open", "square", "triangle"];
+    function _vaAssignShapes() {
+      _vaLayers.forEach((l, i) => {
+        l.shape = _SHAPE_ORDER[Math.min(i, _SHAPE_ORDER.length - 1)];
+      });
+    }
+
+    let _vaLayerIdCounter = 0;
+    function _vaMakeLayer({path, label, type}) {
+      return {
+        id:         "layer_" + (_vaLayerIdCounter++),
+        path,
+        label,
+        type:       type || "raw",
+        shape:      "circle-filled",
+        visible:    true,
+        threshold:  null,            // null → use _vaGlobalThreshold
+        posesCache: new Map(),
+        bodyparts:  [],
+        editsCache: null,
+        errored:    false,
+      };
+    }
+
+    // Replace the entire layer set with [primary], clear caches, reassign shapes.
+    function _vaSetPrimaryLayer(layer) {
+      _vaLayers.length = 0;
+      if (layer) _vaLayers.push(layer);
+      _vaAssignShapes();
+      // Compatibility shims for code paths not yet migrated.
+      _vaH5Path = layer ? layer.path : null;
+      _vaClearPoseCache();
+    }
+
     // ── Viewer sizing (same break-out-of-card approach as frame labeler) ──
     function _vaFitViewer() {
       if (!vaFrameImg.naturalWidth) return;
@@ -890,6 +944,29 @@ import { state } from './state.js';
       }
     }
 
+    async function _vaLoadLayerInfo(layer) {
+      // Replaces _vaLoadH5Info; populates layer.bodyparts in place.
+      try {
+        const r    = await fetch(`/dlc/viewer/h5-info?h5=${encodeURIComponent(layer.path)}`);
+        const data = await r.json();
+        if (!r.ok || data.error) { layer.errored = true; return; }
+        layer.bodyparts = data.bodyparts || [];
+        if (layer === _vaPrimary()) {
+          // Keep the legacy globals in sync for any code path not yet migrated.
+          _vaAllBodyParts = layer.bodyparts.slice();
+          _vaNBodyparts   = _vaAllBodyParts.length;
+        }
+      } catch (e) { layer.errored = true; }
+    }
+
+    async function _vaLoadEditCacheForPrimary() {
+      const layer = _vaPrimary();
+      if (!layer) return;
+      // Reuse the existing _vaLoadEditCacheFromServer path so the marker-edit
+      // banner / edits map keep working unchanged.
+      await _vaLoadEditCacheFromServer(layer.path);
+    }
+
     // Select a bodypart: set active chip, update canvas cursor.
     function _vaSelectBp(bp) {
       _vaSelectedBp = bp;
@@ -960,13 +1037,18 @@ import { state } from './state.js';
         const res  = await fetch(`/dlc/viewer/h5-find?dir=${encodeURIComponent(dir)}&stem=${encodeURIComponent(stem)}`);
         const data = await res.json();
         if (data.error) { _vaOverlayStatus(data.error.includes("No .h5") ? "No .h5 found — browse to select one." : data.error); return; }
-        _vaH5Path = data.h5_path;
+        const layer = _vaMakeLayer({
+          path:  data.h5_path,
+          label: `Raw — ${data.h5_path.split("/").pop()}`,
+          type:  "raw",
+        });
+        _vaSetPrimaryLayer(layer);
         vaOverlayH5Path.value = _vaH5Path;
-        _vaClearPoseCache();
         _vaOverlayStatus("h5 auto-detected");
         await _vaLoadH5Info(_vaH5Path);
+        await _vaLoadLayerInfo(layer);
         // Load any pending edits from the server-side JSON cache
-        await _vaLoadEditCacheFromServer(_vaH5Path);
+        await _vaLoadEditCacheForPrimary();
       } catch (e) {
         _vaOverlayStatus("Auto-detect failed: " + e.message);
       }
@@ -991,7 +1073,7 @@ import { state } from './state.js';
     });
 
     vaOverlayH5Clear?.addEventListener("click", () => {
-      _vaH5Path = null;
+      _vaSetPrimaryLayer(null);
       vaOverlayH5Path.value = "";
       _vaAllBodyParts = [];
       _vaHiddenParts.clear();
@@ -1067,13 +1149,19 @@ import { state } from './state.js';
               _vaH5BrowseDir(path + "/" + e.name);
             } else {
               const full = path + "/" + e.name;
-              _vaH5Path = full;
+              const layer = _vaMakeLayer({
+                path:  full,
+                label: `Custom — ${full.split("/").pop()}`,
+                type:  "raw",
+              });
+              _vaSetPrimaryLayer(layer);
               vaOverlayH5Path.value = full;
-              _vaClearPoseCache();
+              _vaPoseCache.clear();
               vaOverlayH5Browser.classList.add("hidden");
               _vaOverlayStatus("h5 selected");
               await _vaLoadH5Info(full);
-              await _vaLoadEditCacheFromServer(full);
+              await _vaLoadLayerInfo(layer);
+              await _vaLoadEditCacheForPrimary();
               if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
             }
           });
