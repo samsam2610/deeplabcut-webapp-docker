@@ -65,6 +65,14 @@ Savitzky-Golay or other production-quality implementation. When that
 happens, the file mapping above should be updated to reflect "locally
 authored, not vendored".
 
+#### When T7 replaces this stub
+
+When Task T7 replaces the stub's internals (likely with
+`scipy.signal.savgol_filter`), keep the public function name
+`smooth_coordinates` and any existing parameter names stable. New parameters
+are fine — add them with sensible defaults. This protects callers in
+`postprocess_refine.py` from churn.
+
 ## Why vendored (not pip-installed)
 
 refineDLC's repo pins `numpy>=1.23`, `pandas>=1.5`, `matplotlib>=3.6` and

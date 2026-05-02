@@ -14,15 +14,27 @@ def test_vendored_modules_import():
 
 
 def test_vendored_modules_expose_callables():
-    """Each vendored module must expose at least one public callable."""
+    """Each vendored module must expose its named processing function(s).
+
+    Asserting on specific names (rather than "any public callable") guards
+    against silent renames or removals during a future re-vendor — and avoids
+    the tautology that a re-exported `pd`/`np` would satisfy a generic check.
+    """
     from dlc._refinedlc import filtering, outliers, interpolation, smoothing
 
-    for mod in (filtering, outliers, interpolation, smoothing):
-        callables = [
-            name for name in dir(mod)
-            if not name.startswith("_") and callable(getattr(mod, name))
-        ]
-        assert callables, f"{mod.__name__} exposes no public callables"
+    expected = {
+        filtering: ("likelihood_filter",),
+        outliers: ("detect_outliers", "position_filter"),
+        interpolation: ("interpolate_data",),
+        smoothing: ("smooth_coordinates",),
+    }
+
+    for mod, names in expected.items():
+        for name in names:
+            assert hasattr(mod, name), f"{mod.__name__} missing {name}"
+            assert callable(getattr(mod, name)), (
+                f"{mod.__name__}.{name} is not callable"
+            )
 
 
 def test_vendored_package_reexports():
