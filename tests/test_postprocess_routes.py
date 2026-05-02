@@ -5,10 +5,15 @@ import json
 import os
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+# Stub heavy optional dependencies so dlc.tasks is importable on host without
+# DeepLabCut installed. Routes import dlc.tasks lazily in /run.
+sys.modules.setdefault("deeplabcut", MagicMock())
 
 from dlc import postprocess as pp  # noqa: E402
 
@@ -138,3 +143,72 @@ def test_scan_rejects_disallowed_path(flask_test_client, tmp_path, monkeypatch):
     resp = client.post("/dlc/postprocess/scan",
                        json={"path": "/etc", "mode": "folder"})
     assert resp.status_code == 400
+
+
+def test_run_dispatches_celery_task(flask_test_client, tmp_path, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    src = tmp_path / "videoDLC_resnet50_shuffle1.h5"
+    src.write_bytes(b"")
+    monkeypatch.setattr(pp, "_path_is_allowed", lambda p: True)
+
+    captured = {}
+    class FakeAsyncResult:
+        id = "fake-task-id"
+    def fake_apply_async(kwargs=None):
+        captured["kwargs"] = kwargs
+        return FakeAsyncResult()
+
+    monkeypatch.setattr(
+        "dlc.tasks.dlc_postprocess_run.apply_async",
+        fake_apply_async,
+    )
+
+    resp = client.post("/dlc/postprocess/run", json={
+        "tool": "deeplabcut",
+        "action": "filterpredictions",
+        "params": {"filtertype": "median", "windowlength": 5, "save_as_csv": False},
+        "inputs": [str(src)],
+        "config_path": "/tmp/config.yaml",
+    })
+    assert resp.status_code == 200
+    assert resp.get_json() == {"task_id": "fake-task-id"}
+    assert captured["kwargs"]["tool"] == "deeplabcut"
+
+
+def test_run_validates_tool(flask_test_client, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    monkeypatch.setattr(pp, "_path_is_allowed", lambda p: True)
+    resp = client.post("/dlc/postprocess/run", json={
+        "tool": "nope", "action": "x", "params": {},
+        "inputs": ["/tmp/x.h5"], "config_path": "/tmp/c.yaml",
+    })
+    assert resp.status_code == 400
+
+
+def test_status_returns_celery_state(flask_test_client, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    class FakeAR:
+        state = "PROGRESS"
+        info = {"current": 1, "total": 3, "file": "a.h5", "step": "filter"}
+    monkeypatch.setattr("dlc.postprocess._async_result", lambda tid: FakeAR())
+    resp = client.get("/dlc/postprocess/status/abc")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["state"] == "PROGRESS"
+    assert data["progress"]["current"] == 1
+
+
+def test_cancel_revokes(flask_test_client, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    revoked = {}
+    monkeypatch.setattr(
+        "dlc.postprocess._revoke",
+        lambda tid: revoked.setdefault("id", tid),
+    )
+    resp = client.post("/dlc/postprocess/cancel/abc")
+    assert resp.status_code == 200
+    assert revoked["id"] == "abc"
