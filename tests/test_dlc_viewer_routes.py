@@ -172,3 +172,112 @@ def test_h5_variants_handles_non_dict_sidecar(flask_test_client, tmp_path, monke
     entry = next(v for v in resp.get_json()["variants"] if "filtered" in v["path"])
     assert entry["status"] is None
     assert entry["disabled"] is False
+
+
+def test_dir_with_h5_returns_videos_with_h5_counts(flask_test_client, tmp_path, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: True)
+
+    # Two videos: one with companion + one postproc filtered, one without h5.
+    v1 = tmp_path / "vidA.avi"; v1.write_bytes(b"")
+    v2 = tmp_path / "vidB.mp4"; v2.write_bytes(b"")
+    _seed_companion_h5(tmp_path, v1.stem)
+    _seed_postproc_run(tmp_path, "20260502-120000", "filterpredictions", v1.stem)
+
+    resp = client.get(f"/dlc/viewer/dir-with-h5?path={tmp_path}")
+    assert resp.status_code == 200, resp.get_json()
+    data = resp.get_json()
+    assert data["path"] == str(tmp_path)
+    by_name = {v["name"]: v for v in data["videos"]}
+    assert by_name["vidA.avi"]["has_h5"] is True
+    assert by_name["vidA.avi"]["h5_count"] == 2  # companion + postproc filtered
+    assert by_name["vidB.mp4"]["has_h5"] is False
+    assert by_name["vidB.mp4"]["h5_count"] == 0
+
+
+def test_dir_with_h5_cache_hit_avoids_rebuild(flask_test_client, tmp_path, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: True)
+    v = tmp_path / "vid.avi"; v.write_bytes(b"")
+    _seed_companion_h5(tmp_path, v.stem)
+
+    calls = {"n": 0}
+    real_build = vw._build_dir_with_h5
+    def spy(d, mtime):
+        calls["n"] += 1
+        return real_build(d, mtime)
+    monkeypatch.setattr(vw, "_build_dir_with_h5", spy)
+
+    r1 = client.get(f"/dlc/viewer/dir-with-h5?path={tmp_path}")
+    r2 = client.get(f"/dlc/viewer/dir-with-h5?path={tmp_path}")
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert calls["n"] == 1, "second request must hit Redis cache"
+
+
+def test_dir_with_h5_invalidates_on_dir_mtime_change(flask_test_client, tmp_path, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: True)
+    v = tmp_path / "vid.avi"; v.write_bytes(b"")
+    _seed_companion_h5(tmp_path, v.stem)
+
+    calls = {"n": 0}
+    real_build = vw._build_dir_with_h5
+    def spy(d, mtime):
+        calls["n"] += 1
+        return real_build(d, mtime)
+    monkeypatch.setattr(vw, "_build_dir_with_h5", spy)
+
+    client.get(f"/dlc/viewer/dir-with-h5?path={tmp_path}")
+    # Touch a new file to bump dir mtime.
+    import time as _time
+    _time.sleep(1.1)  # mtime granularity = 1s on some FS
+    (tmp_path / "newfile.txt").write_text("x")
+    client.get(f"/dlc/viewer/dir-with-h5?path={tmp_path}")
+    assert calls["n"] == 2, "dir mtime change must invalidate cache"
+
+
+def test_dir_with_h5_invalidates_on_postproc_run(flask_test_client, tmp_path, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: True)
+    v = tmp_path / "vid.avi"; v.write_bytes(b"")
+    _seed_companion_h5(tmp_path, v.stem)
+
+    calls = {"n": 0}
+    real_build = vw._build_dir_with_h5
+    def spy(d, mtime):
+        calls["n"] += 1
+        return real_build(d, mtime)
+    monkeypatch.setattr(vw, "_build_dir_with_h5", spy)
+
+    client.get(f"/dlc/viewer/dir-with-h5?path={tmp_path}")
+    import time as _time
+    _time.sleep(1.1)
+    _seed_postproc_run(tmp_path, "20260502-130000", "filterpredictions", v.stem)
+    client.get(f"/dlc/viewer/dir-with-h5?path={tmp_path}")
+    assert calls["n"] == 2, "new postproc/<ts>_*/ must invalidate cache"
+
+
+def test_dir_with_h5_404_on_missing_path(flask_test_client, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: True)
+    resp = client.get("/dlc/viewer/dir-with-h5?path=/nonexistent/dir")
+    assert resp.status_code == 404
+
+
+def test_dir_with_h5_403_on_disallowed_path(flask_test_client, tmp_path, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: False)
+    resp = client.get(f"/dlc/viewer/dir-with-h5?path={tmp_path}")
+    assert resp.status_code == 403
