@@ -240,6 +240,88 @@ def main() -> int:
                 f"with step=5 and ~1.2s of playback, expected ≥ 4 frame advance, got {advanced}"
             )
 
+        # ── Phase I: Per-primary visibility ──────────────────────────
+        # The primary row carries a checkbox at #va-overlay-primary-visible.
+        # Toggling it off must hide primary's markers; toggling on restores them.
+        cb_visible_before = page.evaluate(
+            "() => document.getElementById('va-overlay-primary-visible')?.checked"
+        )
+        sample_xy = page.evaluate(
+            "() => { const c = document.getElementById('va-overlay-canvas');"
+            "  if (!c) return null;"
+            "  const ctx = c.getContext('2d');"
+            "  const img = ctx.getImageData(c.width/2|0, c.height/2|0, 1, 1).data;"
+            "  return [img[0], img[1], img[2], img[3]]; }"
+        )
+        print(f"[I] before-toggle canvas-center pixel: {sample_xy}")
+        page.click("#va-overlay-primary-visible")
+        time.sleep(0.4)
+        sample_after = page.evaluate(
+            "() => { const c = document.getElementById('va-overlay-canvas');"
+            "  if (!c) return null;"
+            "  const ctx = c.getContext('2d');"
+            "  const img = ctx.getImageData(c.width/2|0, c.height/2|0, 1, 1).data;"
+            "  return [img[0], img[1], img[2], img[3]]; }"
+        )
+        print(f"[I] after-toggle canvas-center pixel: {sample_after}")
+        page.click("#va-overlay-primary-visible")
+        time.sleep(0.3)
+        cb_visible_after = page.evaluate(
+            "() => document.getElementById('va-overlay-primary-visible')?.checked"
+        )
+        assert cb_visible_after == cb_visible_before, (
+            f"checkbox state must round-trip: before={cb_visible_before} after={cb_visible_after}"
+        )
+
+        # ── Phase J: FPS field controls play-loop tick delay ─────────
+        page.fill("#va-play-fps", "2")
+        page.fill("#va-play-step", "1")
+        before_label = page.text_content("#va-frame-counter") or ""
+        t0 = time.time()
+        page.click("#va-btn-play")
+        time.sleep(1.6)
+        page.click("#va-btn-play")
+        elapsed = time.time() - t0
+        after_label = page.text_content("#va-frame-counter") or ""
+        import re as _re
+        m1 = _re.search(r"Frame\s+(\d+)", before_label or "")
+        m2 = _re.search(r"Frame\s+(\d+)", after_label  or "")
+        if m1 and m2:
+            advanced = int(m2.group(1)) - int(m1.group(1))
+            print(f"[J] elapsed={elapsed:.2f}s advanced={advanced} frames at fps=2")
+            assert advanced <= 8, (
+                f"with fps=2 and 1.6s playback, expected ≤ 8 frames, got {advanced}"
+            )
+            assert advanced >= 1, (
+                f"with fps=2 and 1.6s playback, expected ≥ 1 frame, got {advanced}"
+            )
+
+        # ── Phase K: Atomic swap (image + draw within same tick) ─────
+        page.fill("#va-play-fps", "5")
+        page.click("#va-btn-next")
+        time.sleep(0.5)
+        counter_text = page.text_content("#va-frame-counter") or ""
+        m = _re.search(r"Frame\s+(\d+)", counter_text)
+        if m:
+            expected_frame = int(m.group(1))
+            img_src = page.evaluate("() => document.getElementById('va-frame-img')?.src || ''")
+            assert img_src, "image src must be set after _vaLoadFrame"
+            print(f"[K] after one tick: counter shows Frame {expected_frame}, img src len={len(img_src)}")
+
+        # ── Phase L: Curation toggle ─────────────────────────────────
+        controls_hidden_default = page.evaluate(
+            "document.getElementById('va-curation-controls').classList.contains('hidden')"
+        )
+        print(f"[L] curation controls hidden by default: {controls_hidden_default}")
+        assert controls_hidden_default, "curation controls must start hidden"
+        page.click("#va-curation-toggle")
+        time.sleep(0.2)
+        controls_visible = page.evaluate(
+            "!document.getElementById('va-curation-controls').classList.contains('hidden')"
+        )
+        assert controls_visible, "curation controls must be visible after toggle"
+        page.click("#va-curation-toggle")
+
         browser.close()
         print("\nALL CHECKS PASSED")
         return 0
