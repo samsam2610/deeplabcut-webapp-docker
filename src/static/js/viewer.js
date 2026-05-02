@@ -56,11 +56,9 @@ import { state } from './state.js';
 
     // ── Kinematic overlay state ────────────────────────────────────────────
     let _vaOverlayEnabled   = false;
-    let _vaH5Path           = null;       // absolute path to loaded .h5 file
     let _vaAllBodyParts     = [];         // all body parts from h5-info
     let _vaSelectedBp       = null;       // currently active/selected bodypart
     const _vaHiddenParts    = new Set();  // client-side per-bodypart visibility toggle
-    let _vaThreshold        = 0.60;
     let _vaMarkerSize       = 6;
     // absolute path to the currently loaded original video (for annotated frames + companion CSV)
     let _vaCurrentVideoPath = null;
@@ -69,12 +67,12 @@ import { state } from './state.js';
     let _vaMetadataFrameHook = null;
 
     // ── Pose cache (prefetch window) ───────────────────────────────────────
-    const _POSE_WINDOW  = 30;
-    const _vaPoseCache  = new Map();  // frameNumber → {key, poses, n_bodyparts}
+    const _POSE_WINDOW    = 30;
     let   _vaPrefetchCtrl = null;     // AbortController for in-flight batch prefetch
 
     function _vaClearPoseCache() {
-      _vaPoseCache.clear();
+      // Clear per-layer caches. Legacy single-cache fully removed in T6.
+      _vaLayers.forEach(l => l.posesCache.clear());
       if (_vaPrefetchCtrl) { _vaPrefetchCtrl.abort(); _vaPrefetchCtrl = null; }
     }
 
@@ -83,8 +81,6 @@ import { state } from './state.js';
     // Each layer:
     //   { id, path, label, type, shape, visible, threshold, posesCache,
     //     bodyparts, errored }
-    // `_vaH5Path`, `_vaThreshold`, `_vaPoseCache` are kept as shims pointing at
-    // _vaPrimary() until every consumer is migrated (Task 5+).
     const _vaLayers = [];
     let   _vaGlobalThreshold    = 0.60;
     let   _vaPerLayerThresholds = false;
@@ -127,8 +123,6 @@ import { state } from './state.js';
       _vaLayers.length = 0;
       if (layer) _vaLayers.push(layer);
       _vaAssignShapes();
-      // Compatibility shims for code paths not yet migrated.
-      _vaH5Path = layer ? layer.path : null;
       _vaClearPoseCache();
     }
 
@@ -255,6 +249,20 @@ import { state } from './state.js';
         // the canvas draw runs in the same compositor tick as the old frame,
         // producing a one-frame lag where markers appear on the wrong image.
         await new Promise(resolve => requestAnimationFrame(resolve));
+        // When paused, eagerly fetch poses for ALL visible layers before drawing.
+        if (_vaOverlayEnabled && !_vaPlayTimer) {
+          await Promise.all(
+            _vaLayers
+              .filter(l => l.visible && !l.errored)
+              .map(l => _vaFetchPosesForFrame(l, n))
+          );
+          // Sync primary cache into legacy _vaCurrentPoses for hit-testing.
+          const primary = _vaPrimary();
+          if (primary) {
+            const c = primary.posesCache.get(n);
+            if (c) { _vaCurrentPoses = c.poses; _vaNBodyparts = c.n_bodyparts; }
+          }
+        }
         _vaUpdateOverlay(n);
       } catch (err) {
         vaStatus.textContent = `Failed to load frame: ${err.message}`;
@@ -270,17 +278,57 @@ import { state } from './state.js';
       if (!vaOverlayCtx || !_vaOverlayEnabled) return;
       _vaSyncCanvas();
       vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
-      if (!_vaH5Path) return;
-      const key    = _vaPoseCacheKey();
-      const cached = _vaPoseCache.get(n);
-      if (cached && cached.key === key) {
-        _vaCurrentPoses = cached.poses;
-        _vaNBodyparts   = cached.n_bodyparts;
-        _vaDrawPoseMarkers();
-        _vaUpdateBpChipStatus();
+      const primary = _vaPrimary();
+      if (!primary) return;
+      // Sync primary's cache into the legacy _vaCurrentPoses (consumed by
+      // hit-testing, hover labels, bp-chip status, and the edit overlays).
+      const pKey    = _vaPoseCacheKey(primary);
+      const pCached = primary.posesCache.get(n);
+      let primaryReady = false;
+      if (pCached && pCached.key === pKey) {
+        _vaCurrentPoses = pCached.poses;
+        _vaNBodyparts   = pCached.n_bodyparts;
+        primaryReady    = true;
       }
+      _vaDrawCurrentFrame();
+      if (primaryReady) _vaUpdateBpChipStatus();
       // Only hit the server when paused
-      if (!_vaPlayTimer && (!cached || cached.key !== key)) _vaFetchPoses(n);
+      if (!_vaPlayTimer && (!pCached || pCached.key !== pKey)) _vaFetchPoses(n);
+    }
+
+    // Multi-layer draw orchestration: clears canvas, then for each visible/non-errored
+    // layer renders its cached poses with the appropriate shape primitive. The primary
+    // layer goes through _vaDrawPoseMarkers so its edits/select/hover overlays appear.
+    function _vaDrawCurrentFrame() {
+      if (!vaOverlayCtx || !_vaOverlayEnabled) return;
+      _vaSyncCanvas();
+      vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
+      const natW = vaFrameImg.naturalWidth  || 1;
+      const natH = vaFrameImg.naturalHeight || 1;
+      const sx   = vaOverlayCanvas.width  / natW;
+      const sy   = vaOverlayCanvas.height / natH;
+      const r    = Math.max(1, Math.round(_vaMarkerSize * Math.min(sx, sy)));
+      const visibleLayers = _vaLayers.filter(l => l.visible && !l.errored);
+      // Draw comparison layers underneath the primary (primary draws last so its
+      // selection/edit rings sit on top).
+      for (const layer of visibleLayers) {
+        if (layer === _vaPrimary()) continue;
+        const cached = layer.posesCache.get(_vaCurrentFrame);
+        if (!cached) continue;
+        const drawFn = _SHAPE_FN[layer.shape] || _drawCircleFilled;
+        const total  = cached.n_bodyparts || layer.bodyparts.length || 1;
+        for (const pose of cached.poses) {
+          if (_vaHiddenParts.has(pose.bp)) continue;
+          const cx = Math.round(pose.x * sx);
+          const cy = Math.round(pose.y * sy);
+          const color = _vaPaletteColor(pose.color_idx, total);
+          drawFn(vaOverlayCtx, cx, cy, r, color);
+        }
+      }
+      // Primary layer: handles edits/selection/hover via existing _vaDrawPoseMarkers.
+      if (_vaPrimary() && _vaPrimary().visible && !_vaPrimary().errored) {
+        _vaDrawPoseMarkers();
+      }
     }
 
     async function _vaOpenVideo(name) {
@@ -451,6 +499,35 @@ import { state } from './state.js';
     function _vaPaletteColor(idx, total) {
       return _vaHsvToRgb(idx / Math.max(total, 1), 0.9, 0.95);
     }
+
+    // ── Shape-aware draw primitives for multi-layer overlay rendering ──
+    function _drawCircleFilled(ctx, x, y, r, color) {
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
+    }
+    function _drawCircleOpen(ctx, x, y, r, color) {
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke();
+    }
+    function _drawSquare(ctx, x, y, r, color) {
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.strokeRect(x - r, y - r, 2 * r, 2 * r);
+    }
+    function _drawTriangle(ctx, x, y, r, color) {
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x,        y - r);
+      ctx.lineTo(x + r,    y + r);
+      ctx.lineTo(x - r,    y + r);
+      ctx.closePath();
+      ctx.stroke();
+    }
+    const _SHAPE_FN = {
+      "circle-filled": _drawCircleFilled,
+      "circle-open":   _drawCircleOpen,
+      "square":        _drawSquare,
+      "triangle":      _drawTriangle,
+    };
 
     function _vaSyncCanvas() {
       if (!vaOverlayCanvas) return;
@@ -623,24 +700,26 @@ import { state } from './state.js';
 
     // Flush a single marker edit to the server (fire-and-forget)
     async function _vaFlushMarkerEdit(frame, bp, x, y) {
-      if (!_vaH5Path) return;
+      const layer = _vaPrimary();
+      if (!layer) return;
       try {
         await fetch("/dlc/viewer/marker-edit", {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ h5: _vaH5Path, frame, bp, x, y }),
+          body:    JSON.stringify({ h5: layer.path, frame, bp, x, y }),
         });
       } catch (_) { /* non-critical; edit lives in local state */ }
     }
 
     // Delete a marker (set to NaN) in the server cache (fire-and-forget)
     async function _vaFlushMarkerDelete(frame, bp) {
-      if (!_vaH5Path) return;
+      const layer = _vaPrimary();
+      if (!layer) return;
       try {
         await fetch("/dlc/viewer/marker-edit", {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ h5: _vaH5Path, frame, bp, x: null, y: null }),
+          body:    JSON.stringify({ h5: layer.path, frame, bp, x: null, y: null }),
         });
       } catch (_) {}
     }
@@ -754,7 +833,7 @@ import { state } from './state.js';
       // Right-click → delete (NaN) the currently selected marker
       vaOverlayCanvas.addEventListener("contextmenu", e => {
         e.preventDefault();
-        if (!_vaOverlayEnabled || !_vaSelectedBp || !_vaH5Path) return;
+        if (!_vaOverlayEnabled || !_vaSelectedBp || !_vaPrimary()) return;
         if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
         _vaLocalEdits.get(_vaCurrentFrame)[_vaSelectedBp] = { x: null, y: null };
         _vaSyncCanvas();
@@ -769,14 +848,15 @@ import { state } from './state.js';
     // Save Adjustments button
     if (vaSaveAdjBtn) {
       vaSaveAdjBtn.addEventListener("click", async () => {
-        if (!_vaH5Path) return;
+        const layer = _vaPrimary();
+        if (!layer) return;
         vaSaveAdjBtn.disabled = true;
         vaSaveAdjBtn.textContent = "Saving…";
         try {
           const res  = await fetch("/dlc/viewer/save-marker-edits", {
             method:  "POST",
             headers: { "Content-Type": "application/json" },
-            body:    JSON.stringify({ h5: _vaH5Path }),
+            body:    JSON.stringify({ h5: layer.path }),
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -801,7 +881,8 @@ import { state } from './state.js';
     // Discard Adjustments button
     if (vaDiscardAdjBtn) {
       vaDiscardAdjBtn.addEventListener("click", async () => {
-        if (!_vaH5Path) return;
+        const layer = _vaPrimary();
+        if (!layer) return;
         _vaLocalEdits.clear();
         _vaClearPoseCache();
         _vaUpdateEditBanner();
@@ -818,7 +899,7 @@ import { state } from './state.js';
           });
         } catch (_) {}
         // Reload current frame poses from H5
-        if (_vaOverlayEnabled && _vaH5Path) {
+        if (_vaOverlayEnabled) {
           _vaSyncCanvas();
           if (vaOverlayCtx) vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
           _vaFetchPoses(_vaCurrentFrame);
@@ -830,7 +911,7 @@ import { state } from './state.js';
     const vaClearFrameBtn = document.getElementById("va-clear-frame-btn");
     if (vaClearFrameBtn) {
       vaClearFrameBtn.addEventListener("dblclick", async () => {
-        if (!_vaOverlayEnabled || !_vaH5Path || !_vaCurrentPoses.length) return;
+        if (!_vaOverlayEnabled || !_vaPrimary() || !_vaCurrentPoses.length) return;
         const frameMap = {};
         for (const pose of _vaCurrentPoses) {
           frameMap[pose.bp] = { x: null, y: null };
@@ -844,66 +925,106 @@ import { state } from './state.js';
       });
     }
 
-    // Pose cache key encodes everything that affects pose data
-    function _vaPoseCacheKey() {
-      return `${_vaH5Path}:${_vaThreshold.toFixed(2)}`;
+    // Pose cache key (per layer) — encodes everything that affects pose data.
+    function _vaPoseCacheKey(layer) {
+      return `${layer.path}:${_vaLayerThreshold(layer).toFixed(2)}`;
     }
 
-    // Fetch poses for frameNumber from cache or server; draw overlay; start background prefetch.
+    // Fetch poses for one (layer, frame) pair into layer.posesCache.
+    // Returns the cache entry {key, poses, n_bodyparts} or null on error.
+    async function _vaFetchPosesForFrame(layer, frame) {
+      const key    = _vaPoseCacheKey(layer);
+      const cached = layer.posesCache.get(frame);
+      if (cached && cached.key === key) return cached;
+      const params = new URLSearchParams({
+        h5:        layer.path,
+        threshold: _vaLayerThreshold(layer).toFixed(2),
+      });
+      try {
+        const r    = await fetch(`/dlc/viewer/frame-poses/${frame}?${params}`);
+        const data = await r.json();
+        if (!r.ok || data.error) { layer.errored = true; return null; }
+        const entry = { key, poses: data.poses || [], n_bodyparts: data.n_bodyparts || 1 };
+        layer.posesCache.set(frame, entry);
+        return entry;
+      } catch (e) { layer.errored = true; return null; }
+    }
+
+    // Fetch poses for the primary layer (drives current-frame state used by hit-testing).
     // Only called when paused — never during playback.
     async function _vaFetchPoses(frameNumber) {
-      if (!_vaH5Path || !_vaOverlayEnabled) return;
-      const key    = _vaPoseCacheKey();
-      const cached = _vaPoseCache.get(frameNumber);
-      if (cached && cached.key === key) {
-        _vaCurrentPoses = cached.poses;
-        _vaNBodyparts   = cached.n_bodyparts;
+      const primary = _vaPrimary();
+      if (!primary || !_vaOverlayEnabled) return;
+      const entry = await _vaFetchPosesForFrame(primary, frameNumber);
+      if (entry) {
+        _vaCurrentPoses = entry.poses;
+        _vaNBodyparts   = entry.n_bodyparts;
       } else {
-        const p = new URLSearchParams({ h5: _vaH5Path, threshold: _vaThreshold.toFixed(2) });
-        try {
-          const res  = await fetch(`/dlc/viewer/frame-poses/${frameNumber}?${p}`);
-          const data = await res.json();
-          _vaCurrentPoses = data.poses || [];
-          _vaNBodyparts   = data.n_bodyparts || 1;
-          _vaPoseCache.set(frameNumber, { key, poses: _vaCurrentPoses, n_bodyparts: _vaNBodyparts });
-        } catch (_) { _vaCurrentPoses = []; }
+        _vaCurrentPoses = [];
       }
+      // Also kick off comparison-layer fetches for the same frame so V/H markers appear.
+      await Promise.all(
+        _vaCompare()
+          .filter(l => l.visible && !l.errored)
+          .map(l => _vaFetchPosesForFrame(l, frameNumber))
+      );
       _vaHoverBp = null;
       _vaDrawHoverLabel();
       _vaUpdateBpChipStatus();
-      if (!_vaPrefetchCtrl) _vaFetchPosesWindow(frameNumber);
+      if (!_vaPrefetchCtrl) _vaPrefetchPoseWindow(frameNumber);
     }
 
-    // Prefetch the next _POSE_WINDOW frames in the background (runs only when paused).
-    async function _vaFetchPosesWindow(fromFrame) {
-      if (!_vaH5Path) return;
-      const key = _vaPoseCacheKey();
-      let missing = 0;
-      for (let i = fromFrame; i < fromFrame + _POSE_WINDOW && i < _vaFrameCount; i++) {
-        const c = _vaPoseCache.get(i);
-        if (!c || c.key !== key) missing++;
-      }
-      if (missing === 0) return;
+    // Prefetch the next _POSE_WINDOW frames in the background, per visible layer.
+    async function _vaPrefetchPoseWindow(fromFrame) {
+      if (!_vaPrimary()) return;
       if (_vaPrefetchCtrl) return;
       _vaPrefetchCtrl = new AbortController();
       const ctrl = _vaPrefetchCtrl;
-      const p    = new URLSearchParams({
-        h5: _vaH5Path, start: fromFrame, count: _POSE_WINDOW, threshold: _vaThreshold.toFixed(2),
-      });
       try {
-        const res  = await fetch(`/dlc/viewer/frame-poses-batch?${p}`, { signal: ctrl.signal });
-        if (!res.ok) return;
-        const data = await res.json();
-        for (const [fnStr, fd] of Object.entries(data.frames || {})) {
-          const fn = parseInt(fnStr, 10);
-          _vaPoseCache.set(fn, { key, poses: fd.poses || [], n_bodyparts: fd.n_bodyparts || 1 });
-        }
-      } catch (e) {
-        if (e.name !== "AbortError") console.warn("pose prefetch failed:", e);
+        await Promise.all(
+          _vaLayers
+            .filter(l => l.visible && !l.errored)
+            .map(layer => _vaPrefetchOne(layer, fromFrame, ctrl.signal))
+        );
       } finally {
         if (_vaPrefetchCtrl === ctrl) _vaPrefetchCtrl = null;
       }
     }
+
+    async function _vaPrefetchOne(layer, fromFrame, signal) {
+      const key = _vaPoseCacheKey(layer);
+      // Skip if the next _POSE_WINDOW frames for this layer are already cached.
+      let allCached = true;
+      for (let i = fromFrame; i < fromFrame + _POSE_WINDOW && i < _vaFrameCount; i++) {
+        const c = layer.posesCache.get(i);
+        if (!c || c.key !== key) { allCached = false; break; }
+      }
+      if (allCached) return;
+      const params = new URLSearchParams({
+        h5:        layer.path,
+        start:     String(fromFrame),
+        count:     String(_POSE_WINDOW),
+        threshold: _vaLayerThreshold(layer).toFixed(2),
+      });
+      try {
+        const r = await fetch(`/dlc/viewer/frame-poses-batch?${params}`, { signal });
+        if (!r.ok) return;
+        const data = await r.json();
+        for (const [fnStr, fd] of Object.entries(data.frames || {})) {
+          const fn = parseInt(fnStr, 10);
+          layer.posesCache.set(fn, {
+            key,
+            poses:       fd.poses || [],
+            n_bodyparts: fd.n_bodyparts || 1,
+          });
+        }
+      } catch (e) {
+        if (e.name !== "AbortError") console.warn("pose prefetch failed:", e);
+      }
+    }
+
+    // Backwards-compat wrapper for callers that still reference the old name.
+    function _vaFetchPosesWindow(fromFrame) { return _vaPrefetchPoseWindow(fromFrame); }
 
     // ── Kinematic overlay controls ────────────────────────────
     const vaOverlayToggle    = document.getElementById("va-overlay-toggle");
@@ -1102,7 +1223,93 @@ import { state } from './state.js';
       document.getElementById("va-overlay-h5-path").value = path;
       await _vaLoadLayerInfo(layer);
       await _vaLoadEditCacheForPrimary();
+      _vaRenderCompareRows();
       if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
+    }
+
+    // ── Comparison-row UI ──────────────────────────────────────────
+    function _shapeGlyph(shape) {
+      switch (shape) {
+        case "circle-filled": return "●";
+        case "circle-open":   return "○";
+        case "square":        return "□";
+        case "triangle":      return "△";
+        default:              return "?";
+      }
+    }
+
+    function _vaRenderCompareRows() {
+      const list = document.getElementById("va-overlay-compare-list");
+      if (!list) return;
+      list.innerHTML = "";
+      _vaCompare().forEach((layer) => {
+        const row = document.createElement("div");
+        row.id = `va-layer-row-${layer.id}`;
+        row.style.cssText = "display:flex;align-items:center;gap:.35rem;font-size:.74rem;padding:.15rem .25rem;background:var(--surface);border:1px solid var(--border);border-radius:5px";
+        // visibility checkbox
+        const vis = document.createElement("input");
+        vis.type = "checkbox";
+        vis.checked = layer.visible;
+        vis.style.cssText = "accent-color:var(--accent);width:12px;height:12px;flex-shrink:0";
+        vis.addEventListener("change", () => {
+          layer.visible = vis.checked;
+          _vaDrawCurrentFrame();
+        });
+        row.appendChild(vis);
+        // shape badge
+        const badge = document.createElement("span");
+        badge.textContent = _shapeGlyph(layer.shape);
+        badge.style.cssText = "font-family:var(--mono);width:1.1rem;text-align:center;flex-shrink:0";
+        row.appendChild(badge);
+        // label
+        const lbl = document.createElement("span");
+        lbl.textContent = layer.label;
+        lbl.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+        row.appendChild(lbl);
+        // per-layer threshold (rendered conditionally in T8); placeholder slot:
+        const thrSlot = document.createElement("span");
+        thrSlot.dataset.role = "threshold";
+        row.appendChild(thrSlot);
+        // remove button
+        const rm = document.createElement("button");
+        rm.className = "btn-sm";
+        rm.style.cssText = "padding:.05rem .35rem;font-size:.7rem;flex-shrink:0";
+        rm.textContent = "×";
+        rm.title = "Remove this comparison layer";
+        rm.addEventListener("click", () => _vaRemoveCompare(layer.id));
+        row.appendChild(rm);
+        list.appendChild(row);
+      });
+      _vaUpdateEditDisabledBanner();
+    }
+
+    async function _vaAddCompare(path, label, type) {
+      if (_vaLayers.some(l => l.path === path)) return;
+      const layer = _vaMakeLayer({ path, label, type });
+      _vaLayers.push(layer);
+      _vaAssignShapes();
+      await _vaLoadLayerInfo(layer);
+      // Pre-fetch poses for the current frame so the new layer paints immediately.
+      if (_vaOverlayEnabled) await _vaFetchPosesForFrame(layer, _vaCurrentFrame);
+      _vaRenderCompareRows();
+      _vaRefreshAddComparisonOptions(_vaLastVariants);
+      _vaDrawCurrentFrame();
+    }
+
+    function _vaRemoveCompare(id) {
+      const idx = _vaLayers.findIndex(l => l.id === id);
+      if (idx < 1) return;  // never remove primary
+      _vaLayers.splice(idx, 1);
+      _vaAssignShapes();
+      _vaRenderCompareRows();
+      _vaRefreshAddComparisonOptions(_vaLastVariants);
+      _vaDrawCurrentFrame();
+    }
+
+    function _vaUpdateEditDisabledBanner() {
+      const banner = document.getElementById("va-overlay-edit-disabled-banner");
+      if (!banner) return;
+      banner.classList.toggle("hidden", _vaIsEditable());
     }
 
     vaOverlayToggle?.addEventListener("change", () => {
@@ -1115,12 +1322,21 @@ import { state } from './state.js';
         return;
       }
       if (_vaAllBodyParts.length && vaBpListWrap) vaBpListWrap.classList.remove("hidden");
-      if (!_vaH5Path && _vaCurrentVideoPath) _vaDiscoverVariants(_vaCurrentVideoPath);
-      if (_vaH5Path && !_vaPlayTimer) _vaFetchPoses(_vaCurrentFrame);
+      if (!_vaPrimary() && _vaCurrentVideoPath) _vaDiscoverVariants(_vaCurrentVideoPath);
+      if (_vaPrimary() && !_vaPlayTimer) _vaFetchPoses(_vaCurrentFrame);
     });
 
     const vaOverlayPrimarySelect = document.getElementById("va-overlay-primary-select");
     vaOverlayPrimarySelect?.addEventListener("change", _vaApplyPrimaryFromSelect);
+
+    const vaOverlayAddCompare = document.getElementById("va-overlay-add-compare");
+    vaOverlayAddCompare?.addEventListener("change", async (e) => {
+      const path = e.target.value;
+      if (!path) return;
+      const opt  = e.target.options[e.target.selectedIndex];
+      await _vaAddCompare(path, opt.dataset.label, opt.dataset.type);
+      e.target.value = "";  // reset to placeholder
+    });
 
     vaOverlayH5Clear?.addEventListener("click", () => {
       _vaSetPrimaryLayer(null);
@@ -1139,12 +1355,12 @@ import { state } from './state.js';
 
     // Threshold slider
     vaOverlayThreshold?.addEventListener("input", () => {
-      _vaThreshold = parseFloat(vaOverlayThreshold.value);
-      vaOverlayThreshVal.textContent = _vaThreshold.toFixed(2);
+      _vaGlobalThreshold = parseFloat(vaOverlayThreshold.value);
+      vaOverlayThreshVal.textContent = _vaGlobalThreshold.toFixed(2);
     });
     vaOverlayThreshold?.addEventListener("change", () => {
       _vaClearPoseCache();
-      if (_vaOverlayEnabled && _vaH5Path) _vaLoadFrame(_vaCurrentFrame);
+      if (_vaOverlayEnabled && _vaPrimary()) _vaLoadFrame(_vaCurrentFrame);
     });
 
     // Marker size slider — redraw canvas immediately, no frame reload needed
@@ -1206,7 +1422,7 @@ import { state } from './state.js';
               });
               _vaSetPrimaryLayer(layer);
               vaOverlayH5Path.value = full;
-              _vaPoseCache.clear();
+              _vaClearPoseCache();
               vaOverlayH5Browser.classList.add("hidden");
               _vaOverlayStatus("h5 selected");
               await _vaLoadH5Info(full);
@@ -1318,7 +1534,7 @@ import { state } from './state.js';
 
       if (_vaCurrentFrame >= _vaFrameCount - 1) {
         _vaStopPlayback();
-        if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(_vaCurrentFrame);
+        if (_vaOverlayEnabled && _vaPrimary()) _vaFetchPoses(_vaCurrentFrame);
         return;
       }
 
@@ -1338,13 +1554,13 @@ import { state } from './state.js';
       if (_vaPlayTimer) {
         _vaStopPlayback();
         // Just paused: fetch and display poses for current frame
-        if (_vaOverlayEnabled && _vaH5Path) _vaFetchPoses(_vaCurrentFrame);
+        if (_vaOverlayEnabled && _vaPrimary()) _vaFetchPoses(_vaCurrentFrame);
       } else {
         vaPlayIcon.classList.add("hidden");
         vaPauseIcon.classList.remove("hidden");
         _vaPlayTimer = true;   // sentinel: truthy = playing
         // Pre-warm pose cache before playback so the first N frames render with markers
-        if (_vaOverlayEnabled && _vaH5Path) _vaFetchPosesWindow(_vaCurrentFrame);
+        if (_vaOverlayEnabled && _vaPrimary()) _vaPrefetchPoseWindow(_vaCurrentFrame);
         _vaPlayLoop();
       }
     });
@@ -1389,7 +1605,7 @@ import { state } from './state.js';
       if (e.target.tagName === "INPUT" && e.target !== vaSkipN) return;
       if (e.target.tagName === "TEXTAREA") return;
 
-      const overlayActive = _vaOverlayEnabled && _vaH5Path && _vaCurrentPoses.length > 0;
+      const overlayActive = _vaOverlayEnabled && _vaPrimary() && _vaCurrentPoses.length > 0;
 
       // ── Spacebar: visibility toggle when overlay+bp selected, else play/pause ──
       if (e.key === " ") {
