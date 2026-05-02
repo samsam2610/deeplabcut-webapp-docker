@@ -155,14 +155,14 @@ def test_run_dispatches_celery_task(flask_test_client, tmp_path, monkeypatch):
     captured = {}
     class FakeAsyncResult:
         id = "fake-task-id"
-    def fake_apply_async(kwargs=None):
-        captured["kwargs"] = kwargs
-        return FakeAsyncResult()
 
-    monkeypatch.setattr(
-        "dlc.tasks.dlc_postprocess_run.apply_async",
-        fake_apply_async,
-    )
+    class FakeCelery:
+        def send_task(self, name, kwargs=None, **_extra):
+            captured["name"] = name
+            captured["kwargs"] = kwargs
+            return FakeAsyncResult()
+
+    monkeypatch.setattr(pp._ctx, "celery", lambda: FakeCelery())
 
     resp = client.post("/dlc/postprocess/run", json={
         "tool": "deeplabcut",
@@ -174,6 +174,7 @@ def test_run_dispatches_celery_task(flask_test_client, tmp_path, monkeypatch):
     assert resp.status_code == 200
     assert resp.get_json() == {"task_id": "fake-task-id"}
     assert captured["kwargs"]["tool"] == "deeplabcut"
+    assert captured["name"] == "tasks.dlc_postprocess_run"
 
 
 def test_run_validates_tool(flask_test_client, monkeypatch):
