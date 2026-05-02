@@ -264,6 +264,9 @@ import { state } from './state.js';
           }
         }
         _vaUpdateOverlay(n);
+        // Barrier: wait for the browser to paint before resolving so the play
+        // loop never advances mid-render.
+        await new Promise(requestAnimationFrame);
       } catch (err) {
         vaStatus.textContent = `Failed to load frame: ${err.message}`;
         vaStatus.className   = "fe-extract-status err";
@@ -1215,6 +1218,11 @@ import { state } from './state.js';
       return (variants || []).find(v => !v.disabled) || null;
     }
 
+    function _vaPlayStep() {
+      const v = parseInt(document.getElementById("va-play-step")?.value || "1", 10);
+      return Math.max(1, Math.min(100, isNaN(v) ? 1 : v));
+    }
+
     async function _vaDiscoverVariants(videoPath) {
       // Fetch every analyzable h5 near `videoPath` and populate the Primary <select>.
       // Default the primary to the first 'raw' entry, or the first variant otherwise.
@@ -1676,14 +1684,15 @@ import { state } from './state.js';
       // Guard: stop if externally cancelled between ticks
       if (!_vaPlayTimer) return;
 
-      if (_vaCurrentFrame >= _vaFrameCount - 1) {
+      const next = _vaCurrentFrame + _vaPlayStep();
+      if (next >= _vaFrameCount) {
         _vaStopPlayback();
         if (_vaOverlayEnabled && _vaPrimary()) _vaFetchPoses(_vaCurrentFrame);
         return;
       }
 
       const t0 = performance.now();
-      await _vaLoadFrame(_vaCurrentFrame + 1);
+      await _vaLoadFrame(next);
       // If play was stopped while we were awaiting the frame, exit cleanly
       if (!_vaPlayTimer) return;
 
