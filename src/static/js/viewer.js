@@ -659,6 +659,11 @@ import { state } from './state.js';
 
     function _vaUpdateEditBanner() {
       if (!vaMarkerEditBanner) return;
+      // Force-hide while comparison layers are active — editing is disabled.
+      if (!_vaIsEditable()) {
+        vaMarkerEditBanner.classList.add("hidden");
+        return;
+      }
       const n = _vaEditCount();
       if (n === 0) {
         vaMarkerEditBanner.classList.add("hidden");
@@ -700,6 +705,7 @@ import { state } from './state.js';
 
     // Flush a single marker edit to the server (fire-and-forget)
     async function _vaFlushMarkerEdit(frame, bp, x, y) {
+      if (!_vaIsEditable()) return;     // edit disabled while compare layers active
       const layer = _vaPrimary();
       if (!layer) return;
       try {
@@ -713,6 +719,7 @@ import { state } from './state.js';
 
     // Delete a marker (set to NaN) in the server cache (fire-and-forget)
     async function _vaFlushMarkerDelete(frame, bp) {
+      if (!_vaIsEditable()) return;     // edit disabled while compare layers active
       const layer = _vaPrimary();
       if (!layer) return;
       try {
@@ -753,6 +760,7 @@ import { state } from './state.js';
           _vaSelectBp(hit);
           return;
         }
+        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
         if (!_vaSelectedBp) return;
         const { x, y } = _vaCanvasToVideo(cx, cy);
         if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
@@ -767,6 +775,7 @@ import { state } from './state.js';
 
       // Mousedown on a marker → begin drag; otherwise ignored
       vaOverlayCanvas.addEventListener("mousedown", e => {
+        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
         if (!_vaOverlayEnabled || !_vaCurrentPoses.length || e.button !== 0) return;
         const rect = vaOverlayCanvas.getBoundingClientRect();
         const hit  = _vaHitTestWithEdits(e.clientX - rect.left, e.clientY - rect.top);
@@ -784,6 +793,7 @@ import { state } from './state.js';
         const cy   = e.clientY - rect.top;
 
         if (_vaDragging && _vaDragBp) {
+          if (!_vaIsEditable()) return;     // edit disabled while compare layers active
           const { x, y } = _vaCanvasToVideo(cx, cy);
           if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
           _vaLocalEdits.get(_vaCurrentFrame)[_vaDragBp] = { x, y };
@@ -799,6 +809,7 @@ import { state } from './state.js';
       });
 
       vaOverlayCanvas.addEventListener("mouseup", async e => {
+        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
         if (!_vaDragging || !_vaDragBp) return;
         _vaDragging = false;
         const rect  = vaOverlayCanvas.getBoundingClientRect();
@@ -833,6 +844,7 @@ import { state } from './state.js';
       // Right-click → delete (NaN) the currently selected marker
       vaOverlayCanvas.addEventListener("contextmenu", e => {
         e.preventDefault();
+        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
         if (!_vaOverlayEnabled || !_vaSelectedBp || !_vaPrimary()) return;
         if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
         _vaLocalEdits.get(_vaCurrentFrame)[_vaSelectedBp] = { x: null, y: null };
@@ -848,6 +860,7 @@ import { state } from './state.js';
     // Save Adjustments button
     if (vaSaveAdjBtn) {
       vaSaveAdjBtn.addEventListener("click", async () => {
+        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
         const layer = _vaPrimary();
         if (!layer) return;
         vaSaveAdjBtn.disabled = true;
@@ -881,6 +894,7 @@ import { state } from './state.js';
     // Discard Adjustments button
     if (vaDiscardAdjBtn) {
       vaDiscardAdjBtn.addEventListener("click", async () => {
+        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
         const layer = _vaPrimary();
         if (!layer) return;
         _vaLocalEdits.clear();
@@ -911,6 +925,7 @@ import { state } from './state.js';
     const vaClearFrameBtn = document.getElementById("va-clear-frame-btn");
     if (vaClearFrameBtn) {
       vaClearFrameBtn.addEventListener("dblclick", async () => {
+        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
         if (!_vaOverlayEnabled || !_vaPrimary() || !_vaCurrentPoses.length) return;
         const frameMap = {};
         for (const pose of _vaCurrentPoses) {
@@ -1308,8 +1323,10 @@ import { state } from './state.js';
 
     function _vaUpdateEditDisabledBanner() {
       const banner = document.getElementById("va-overlay-edit-disabled-banner");
-      if (!banner) return;
-      banner.classList.toggle("hidden", _vaIsEditable());
+      if (banner) banner.classList.toggle("hidden", _vaIsEditable());
+      // Re-evaluate the marker-edit banner: when compare layers are active it
+      // must be force-hidden regardless of unsaved-edit count.
+      _vaUpdateEditBanner();
     }
 
     vaOverlayToggle?.addEventListener("change", () => {
