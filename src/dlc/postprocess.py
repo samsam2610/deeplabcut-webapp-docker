@@ -12,6 +12,8 @@ from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
+from . import ctx as _ctx
+
 bp = Blueprint("dlc_postprocess", __name__, url_prefix="/dlc/postprocess")
 
 # Recognised analyzed-prediction filename patterns. Lowercase compare on stem.
@@ -138,11 +140,16 @@ def run():
         if not _path_is_allowed(p):
             return jsonify({"error": f"path not allowed: {p}"}), 400
 
-    from dlc.tasks import dlc_postprocess_run as _task
-    async_result = _task.apply_async(kwargs={
-        "config_path": config_path, "tool": tool, "action": action,
-        "params": params, "inputs": list(inputs),
-    })
+    # Dispatch by name; do NOT `from dlc.tasks import …` because tasks.py
+    # imports `deeplabcut` at module top, which is not installed in the Flask
+    # container. The worker container is what executes the task.
+    async_result = _ctx.celery().send_task(
+        "tasks.dlc_postprocess_run",
+        kwargs={
+            "config_path": config_path, "tool": tool, "action": action,
+            "params": params, "inputs": list(inputs),
+        },
+    )
     return jsonify({"task_id": async_result.id})
 
 
