@@ -80,19 +80,42 @@
           <!-- Controls (hidden until toggled on) -->
           <div id="va-overlay-controls" class="hidden" style="margin-top:.5rem">
 
-            <!-- h5 file row -->
+            <!-- ── Primary layer picker ─────────────────────────────── -->
             <div style="margin-bottom:.45rem">
-              <label style="display:block;font-size:.73rem;color:var(--text-dim);margin-bottom:.25rem">Analysis file (.h5)</label>
+              <label style="display:block;font-size:.73rem;color:var(--text-dim);margin-bottom:.25rem">Primary layer (.h5)</label>
               <div style="display:flex;gap:.35rem;align-items:center">
-                <input type="text" id="va-overlay-h5-path" readonly placeholder="auto-detected or browse…"
-                  style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;padding:.28rem .45rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
-                <button class="btn-sm" id="va-overlay-h5-auto" title="Auto-detect h5 from video folder">Auto</button>
-                <button class="btn-sm" id="va-overlay-h5-browse" title="Browse for h5 file">Browse</button>
+                <select id="va-overlay-primary-select"
+                  style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;padding:.28rem .45rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text)">
+                  <option value="">(no h5 detected — use Browse)</option>
+                </select>
+                <button class="btn-sm" id="va-overlay-h5-browse" title="Browse for any h5">Browse</button>
                 <button class="btn-sm" id="va-overlay-h5-clear" style="opacity:.7" title="Clear">✕</button>
               </div>
-              <!-- h5 file browser -->
+              <input type="text" id="va-overlay-h5-path" readonly
+                style="margin-top:.25rem;width:100%;font-family:var(--mono);font-size:.7rem;padding:.2rem .4rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text-dim)" />
               <div id="va-overlay-h5-browser" class="hidden"
                 style="margin-top:.4rem;max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.3rem .4rem;font-size:.75rem"></div>
+            </div>
+
+            <!-- ── Comparison layers ────────────────────────────────── -->
+            <div id="va-overlay-compare-block" style="margin-bottom:.45rem">
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--text-dim);margin-bottom:.25rem">
+                Comparison layers
+                <select id="va-overlay-add-compare"
+                  style="margin-left:auto;font-size:.72rem;padding:.18rem .35rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text)">
+                  <option value="">+ add comparison…</option>
+                </select>
+              </label>
+              <div id="va-overlay-compare-list" style="display:flex;flex-direction:column;gap:.2rem"></div>
+              <span id="va-overlay-edit-disabled-banner" class="hidden" style="display:inline-block;margin-top:.25rem;font-size:.72rem;color:var(--text-dim);font-style:italic">⚠ Edit disabled while comparing layers — remove comparisons to edit.</span>
+            </div>
+
+            <!-- ── Customize per layer threshold toggle ─────────────── -->
+            <div style="margin-bottom:.45rem">
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--text-dim);cursor:pointer">
+                <input type="checkbox" id="va-overlay-customize-thresholds" style="accent-color:var(--accent);width:13px;height:13px"/>
+                Customize threshold per layer
+              </label>
             </div>
 
             <!-- Likelihood threshold -->
