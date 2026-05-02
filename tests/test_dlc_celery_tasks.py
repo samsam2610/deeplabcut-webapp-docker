@@ -403,3 +403,79 @@ class TestDlcTrainNetworkGpuRouting:
             assert "5090" in result.stdout or "RTX" in result.stdout, \
                 f"Expected RTX 5090 on GPU 0, got: {result.stdout.strip()}"
         vram_cleanup_check()
+
+
+# ── dlc_postprocess_run (Task 11) ─────────────────────────────────────────────
+
+def test_dlc_postprocess_run_dispatches_to_drivers(tmp_path, monkeypatch):
+    """The task must call the right driver for each tool/action and write a sidecar."""
+    from pathlib import Path
+
+    from dlc import tasks as dlc_tasks
+    from dlc import postprocess as pp
+
+    src = tmp_path / "videoDLC_resnet50_shuffle1_50000.h5"
+    src.write_bytes(b"")
+
+    calls = []
+
+    def fake_filter(*, config_path, input_path, output_dir, params):
+        calls.append(("filter", Path(input_path).name))
+        out_path = Path(output_dir) / (Path(input_path).stem + "_filtered.h5")
+        out_path.write_bytes(b"")
+        return {"status": "success", "output": out_path, "error": None}
+
+    monkeypatch.setattr("dlc.postprocess_dlc.run_filterpredictions", fake_filter)
+    monkeypatch.setattr(pp, "_now_stamp", lambda: "20260501-120000")
+
+    result = dlc_tasks.dlc_postprocess_run.apply(kwargs={
+        "config_path": str(tmp_path / "config.yaml"),
+        "tool": "deeplabcut",
+        "action": "filterpredictions",
+        "params": {"filtertype": "median", "windowlength": 5, "save_as_csv": False},
+        "inputs": [str(src)],
+    }).get()
+
+    assert result["status"] == "success"
+    assert calls == [("filter", src.name)]
+    sidecar = tmp_path / "postproc" / "20260501-120000_filterpredictions" / "run.json"
+    assert sidecar.is_file()
+
+
+def test_dlc_postprocess_run_partial_on_per_file_failure(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from dlc import tasks as dlc_tasks
+    from dlc import postprocess as pp
+
+    s1 = tmp_path / "aDLC_resnet50.h5"
+    s2 = tmp_path / "bDLC_resnet50.h5"
+    s1.write_bytes(b"")
+    s2.write_bytes(b"")
+
+    def driver(*, config_path, input_path, output_dir, params):
+        if Path(input_path).name.startswith("a"):
+            return {"status": "success",
+                    "output": Path(output_dir) / "a_filtered.h5",
+                    "error": None}
+        return {"status": "failed", "output": None, "error": "boom"}
+
+    monkeypatch.setattr("dlc.postprocess_dlc.run_filterpredictions", driver)
+
+    counter = {"n": 0}
+    def stamp():
+        counter["n"] += 1
+        return f"20260501-12000{counter['n']}"
+    monkeypatch.setattr(pp, "_now_stamp", stamp)
+
+    result = dlc_tasks.dlc_postprocess_run.apply(kwargs={
+        "config_path": str(tmp_path / "config.yaml"),
+        "tool": "deeplabcut",
+        "action": "filterpredictions",
+        "params": {},
+        "inputs": [str(s1), str(s2)],
+    }).get()
+
+    assert result["status"] == "partial"
+    assert len(result["inputs"]) == 2
+    assert {i["status"] for i in result["inputs"]} == {"success", "failed"}
