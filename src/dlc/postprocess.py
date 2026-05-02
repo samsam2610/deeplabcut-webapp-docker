@@ -176,7 +176,33 @@ def logs(task_id: str):
     return jsonify({"log": info.get("log", "")})
 
 
+def _active_project_root():
+    """Return the active DLC project root, or None.
+
+    No canonical accessor lives in ``dlc.ctx`` for this — the project root is
+    derived per-request from the user's session (uid → redis key
+    ``webapp:dlc_project:<uid>``). Tests monkeypatch this function. Production
+    callers should override or extend this hook.
+    """
+    try:
+        from dlc.ctx import get_active_project_root  # type: ignore
+        return get_active_project_root()
+    except ImportError:
+        return None
+
+
 @bp.route("/recent", methods=["GET"])
 def recent():
-    """Return recent post-process runs for the active project (stub for now)."""
-    return jsonify({"runs": []})
+    root = _active_project_root()
+    if root is None:
+        return jsonify({"runs": []})
+    runs = []
+    for sidecar in Path(root).rglob("postproc/*/run.json"):
+        try:
+            payload = json.loads(sidecar.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        payload["_sidecar"] = str(sidecar)
+        runs.append(payload)
+    runs.sort(key=lambda r: r.get("started_at", ""), reverse=True)
+    return jsonify({"runs": runs[:20]})
