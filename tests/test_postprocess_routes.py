@@ -212,3 +212,26 @@ def test_cancel_revokes(flask_test_client, monkeypatch):
     resp = client.post("/dlc/postprocess/cancel/abc")
     assert resp.status_code == 200
     assert revoked["id"] == "abc"
+
+
+def test_recent_returns_sidecars_under_project(flask_test_client, tmp_path, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    monkeypatch.setattr(pp, "_active_project_root", lambda: tmp_path)
+    monkeypatch.setattr(pp, "_path_is_allowed", lambda p: True)
+
+    run_dir = tmp_path / "videos" / "postproc" / "20260501-120000_filterpredictions"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps({
+        "run_id": "20260501-120000_filterpredictions",
+        "tool": "deeplabcut", "action": "filterpredictions",
+        "status": "success", "started_at": "2026-05-01T12:00:00Z",
+        "finished_at": "2026-05-01T12:00:30Z",
+        "params": {}, "inputs": [],
+    }))
+
+    resp = client.get("/dlc/postprocess/recent")
+    assert resp.status_code == 200
+    runs = resp.get_json()["runs"]
+    assert len(runs) == 1
+    assert runs[0]["run_id"] == "20260501-120000_filterpredictions"
