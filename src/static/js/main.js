@@ -9,6 +9,7 @@ import './training.js';
 import './frame_labeler.js';
 import './analyze.js';
 import './viewer.js';
+import './postprocess.js';
 import './annotator.js';
 import './gpu_monitor.js';
 import './custom_script.js';
