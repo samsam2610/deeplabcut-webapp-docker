@@ -2402,3 +2402,124 @@ def dlc_jitter_prelabel(
         "stem":           stem_name,
         "webapp_link":    link,
     }
+
+
+# ── Post-process run (DLC filterpredictions / refineDLC pipeline) ─────────────
+
+@celery.task(bind=True, name="tasks.dlc_postprocess_run", acks_late=False)
+def dlc_postprocess_run(
+    self,
+    *,
+    config_path: str,
+    tool: str,
+    action: str,
+    params: dict,
+    inputs: list,
+):
+    """Run a post-process action on a list of analyzed .h5/.csv files.
+
+    `tool` ∈ {"deeplabcut", "refineDLC"}.
+    `action`:
+        - tool=deeplabcut: "filterpredictions"
+        - tool=refineDLC : "pipeline" | "likelihood_filter" | "outlier_removal"
+                           | "interpolation" | "smoothing"
+
+    Each input gets its own per-run subfolder under <input.parent>/postproc/.
+    Source files are never modified.
+    """
+    from pathlib import Path
+
+    from dlc import postprocess as pp
+    from dlc import postprocess_dlc as ppd
+    from dlc import postprocess_refine as ppr
+
+    tool_tag = {
+        ("deeplabcut", "filterpredictions"): "filterpredictions",
+        ("refineDLC", "pipeline"):           "refine_pipeline",
+        ("refineDLC", "likelihood_filter"):  "refine_lh",
+        ("refineDLC", "outlier_removal"):    "refine_outliers",
+        ("refineDLC", "interpolation"):      "refine_interp",
+        ("refineDLC", "smoothing"):          "refine_smooth",
+    }.get((tool, action))
+    if tool_tag is None:
+        raise ValueError(f"unsupported tool/action: {tool}/{action}")
+
+    started = _utc_now_iso()
+    total = len(inputs)
+    per_input_results: list = []
+    overall_status = "success"
+    run_dirs: set = set()
+
+    for idx, raw in enumerate(inputs, start=1):
+        src = Path(raw)
+        self.update_state(state="PROGRESS", meta={
+            "current": idx, "total": total, "file": src.name, "step": action,
+        })
+
+        try:
+            run_dir = pp.make_run_subfolder(src.parent, tool_tag)
+            run_dirs.add(run_dir)
+
+            if tool == "deeplabcut":
+                step_result = ppd.run_filterpredictions(
+                    config_path=config_path,
+                    input_path=src,
+                    output_dir=run_dir,
+                    params=dict(params),
+                )
+                output = step_result.get("output")
+                err = step_result.get("error")
+                file_status = step_result["status"]
+            else:  # refineDLC
+                df = ppr.read_predictions(src)
+                if action == "pipeline":
+                    out_df = ppr.run_pipeline(df, params)
+                else:
+                    out_df = ppr.run_single(df, action, params)
+                output = run_dir / (src.stem + "_refined" + src.suffix)
+                ppr.write_predictions(out_df, output)
+                err = None
+                file_status = "success"
+
+            per_input_results.append({
+                "path": str(src), "output": str(output) if output else None,
+                "status": file_status, "error": err,
+            })
+            if file_status != "success":
+                overall_status = "partial"
+
+        except Exception as exc:  # noqa: BLE001
+            overall_status = "partial"
+            per_input_results.append({
+                "path": str(src), "output": None,
+                "status": "failed", "error": f"{type(exc).__name__}: {exc}",
+            })
+
+    if overall_status == "partial" and not any(
+        r["status"] == "success" for r in per_input_results
+    ):
+        overall_status = "failed"
+
+    finished = _utc_now_iso()
+    payload = {
+        "run_id": (sorted(run_dirs)[0].name if run_dirs else f"{tool_tag}-empty"),
+        "started_at": started,
+        "finished_at": finished,
+        "status": overall_status,
+        "tool": tool,
+        "action": action,
+        "params": params,
+        "inputs": per_input_results,
+    }
+    for d in run_dirs:
+        pp.write_sidecar(d, payload)
+
+    self.update_state(state="SUCCESS", meta={
+        "current": total, "total": total, "stage": "Done", "log": "",
+    })
+    return payload
+
+
+def _utc_now_iso():
+    import datetime as _dt
+    return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
