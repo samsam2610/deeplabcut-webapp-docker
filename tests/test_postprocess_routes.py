@@ -162,6 +162,12 @@ def test_run_dispatches_celery_task(flask_test_client, tmp_path, monkeypatch):
             captured["kwargs"] = kwargs
             return FakeAsyncResult()
 
+    # /run resolves config_path from the active DLC project, so we must stub
+    # both the celery dispatch AND the redis-backed project lookup.
+    config_yaml = tmp_path / "config.yaml"
+    config_yaml.write_text("Task: dummy\n")
+    monkeypatch.setattr(pp, "_active_project_data",
+                        lambda: {"config_path": str(config_yaml)})
     monkeypatch.setattr(pp._ctx, "celery", lambda: FakeCelery())
 
     resp = client.post("/dlc/postprocess/run", json={

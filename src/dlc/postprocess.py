@@ -8,13 +8,35 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import uuid
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session as flask_session
 
 from . import ctx as _ctx
 
 bp = Blueprint("dlc_postprocess", __name__, url_prefix="/dlc/postprocess")
+
+
+def _user_id() -> str:
+    if "uid" not in flask_session:
+        flask_session["uid"] = uuid.uuid4().hex
+    return flask_session["uid"]
+
+
+def _dlc_key() -> str:
+    return f"webapp:dlc_project:{_user_id()}"
+
+
+def _active_project_data() -> dict | None:
+    """Read active DLC project metadata from redis, or return None."""
+    raw = _ctx.redis_client().get(_dlc_key())
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
 
 # Recognised analyzed-prediction filename patterns. Lowercase compare on stem.
 _ANALYZED_PATTERNS = ("resnet", "mobilenet", "efficientnet", "dlcrnetms5", "hrnet")
@@ -130,7 +152,6 @@ def run():
     action = body.get("action")
     params = body.get("params") or {}
     inputs = body.get("inputs") or []
-    config_path = body.get("config_path")
 
     if tool not in _VALID_ACTIONS or action not in _VALID_ACTIONS.get(tool, set()):
         return jsonify({"error": "unsupported tool/action"}), 400
@@ -139,6 +160,20 @@ def run():
     for p in inputs:
         if not _path_is_allowed(p):
             return jsonify({"error": f"path not allowed: {p}"}), 400
+
+    # Resolve config_path from the active DLC project (redis-backed). DLC's
+    # filterpredictions library code requires a real config.yaml to read
+    # bodyparts; passing an empty path triggers an UnboundLocalError deep in
+    # DLC. refineDLC tools don't need config but the active project is the
+    # source of truth either way.
+    config_path = ""
+    if tool == "deeplabcut":
+        project_data = _active_project_data()
+        if not project_data:
+            return jsonify({"error": "No active DLC project."}), 400
+        config_path = project_data.get("config_path", "")
+        if not config_path or not Path(config_path).is_file():
+            return jsonify({"error": "No config.yaml in active project."}), 400
 
     # Dispatch by name; do NOT `from dlc.tasks import …` because tasks.py
     # imports `deeplabcut` at module top, which is not installed in the Flask
@@ -184,18 +219,19 @@ def logs(task_id: str):
 
 
 def _active_project_root():
-    """Return the active DLC project root, or None.
+    """Return the active DLC project root path (parent of config.yaml), or None.
 
-    No canonical accessor lives in ``dlc.ctx`` for this — the project root is
-    derived per-request from the user's session (uid → redis key
-    ``webapp:dlc_project:<uid>``). Tests monkeypatch this function. Production
-    callers should override or extend this hook.
+    Reads the per-user redis key ``webapp:dlc_project:<uid>``. Tests monkeypatch
+    this function.
     """
-    try:
-        from dlc.ctx import get_active_project_root  # type: ignore
-        return get_active_project_root()
-    except ImportError:
+    project_data = _active_project_data()
+    if not project_data:
         return None
+    config_path = project_data.get("config_path", "")
+    if not config_path:
+        return None
+    p = Path(config_path)
+    return p.parent if p.is_file() else None
 
 
 @bp.route("/recent", methods=["GET"])

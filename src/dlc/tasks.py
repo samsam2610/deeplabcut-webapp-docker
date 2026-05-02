@@ -2450,6 +2450,12 @@ def dlc_postprocess_run(
     overall_status = "success"
     run_dirs: set = set()
 
+    # Group inputs by parent dir so every file in the same dir lands in ONE
+    # postproc/<timestamp>_<tag>/ subfolder. Without this, sequential
+    # make_run_subfolder calls within the same wall-clock second collide on
+    # the timestamp and every file after the first FileExistsError-fails.
+    parent_run_dirs: dict[Path, Path] = {}
+
     for idx, raw in enumerate(inputs, start=1):
         src = Path(raw)
         self.update_state(state="PROGRESS", meta={
@@ -2457,7 +2463,11 @@ def dlc_postprocess_run(
         })
 
         try:
-            run_dir = pp.make_run_subfolder(src.parent, tool_tag)
+            if src.parent not in parent_run_dirs:
+                parent_run_dirs[src.parent] = pp.make_run_subfolder(
+                    src.parent, tool_tag,
+                )
+            run_dir = parent_run_dirs[src.parent]
             run_dirs.add(run_dir)
 
             if tool == "deeplabcut":
