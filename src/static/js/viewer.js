@@ -1205,6 +1205,16 @@ import { state } from './state.js';
     // Cached on the page for re-populating after add/remove.
     let _vaLastVariants = [];
 
+    function _vaPickBestPrimary(variants) {
+      // Newest variant by ts wins. Raw companion has ts=null and is the
+      // fallback when no dated variants exist.
+      const dated = (variants || []).filter(v => !v.disabled && v.ts);
+      if (dated.length) {
+        return dated.reduce((a, b) => (a.ts > b.ts ? a : b));
+      }
+      return (variants || []).find(v => !v.disabled) || null;
+    }
+
     async function _vaDiscoverVariants(videoPath) {
       // Fetch every analyzable h5 near `videoPath` and populate the Primary <select>.
       // Default the primary to the first 'raw' entry, or the first variant otherwise.
@@ -1238,8 +1248,7 @@ import { state } from './state.js';
       });
 
       // Default selection.
-      const defaultEntry = data.variants.find(v => v.type === "raw" && !v.disabled)
-                        || data.variants.find(v => !v.disabled);
+      const defaultEntry = _vaPickBestPrimary(data.variants);
       if (!defaultEntry) return;
       select.value = defaultEntry.path;
       await _vaApplyPrimaryFromSelect();
@@ -1248,12 +1257,12 @@ import { state } from './state.js';
 
     function _vaRefreshAddComparisonOptions(variants) {
       const addCmp = document.getElementById("va-overlay-add-compare");
+      const hint   = document.getElementById("va-overlay-add-compare-empty-hint");
       if (!addCmp) return;
       addCmp.innerHTML = '<option value="">+ add comparison…</option>';
       const taken = new Set(_vaLayers.map(l => l.path));
-      variants.forEach((v) => {
-        if (v.disabled) return;
-        if (taken.has(v.path)) return;
+      const available = (variants || []).filter(v => !v.disabled && !taken.has(v.path));
+      available.forEach((v) => {
         const opt = document.createElement("option");
         opt.value = v.path;
         opt.textContent = v.label;
@@ -1261,6 +1270,10 @@ import { state } from './state.js';
         opt.dataset.label = v.label;
         addCmp.appendChild(opt);
       });
+      // Show the dropdown only when at least one non-taken option exists;
+      // otherwise show the inline "(no other variants)" hint.
+      addCmp.classList.toggle("hidden", available.length === 0);
+      if (hint) hint.classList.toggle("hidden", available.length > 0);
     }
 
     async function _vaApplyPrimaryFromSelect() {
@@ -1272,13 +1285,16 @@ import { state } from './state.js';
       const label = opt?.dataset.label || path.split("/").pop();
       const type  = opt?.dataset.type  || "raw";
 
+      // Primary swap = fresh slate. Drop every comparison layer.
+      _vaLayers.length = 0;
       const layer = _vaMakeLayer({ path, label, type });
       _vaSetPrimaryLayer(layer);
-      _vaRenderPrimaryThresholdInline();
       document.getElementById("va-overlay-h5-path").value = path;
       await _vaLoadLayerInfo(layer);
       await _vaLoadEditCacheForPrimary();
       _vaRenderCompareRows();
+      _vaRefreshAddComparisonOptions(_vaLastVariants);
+      _vaRenderPrimaryThresholdInline();
       if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
     }
 
