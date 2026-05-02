@@ -1,43 +1,70 @@
-"""Wrapper around deeplabcut.filterpredictions with our output-layout contract.
+"""Filter DLC pose predictions with the same algorithm DLC ships, locally.
 
-Expected directory layout produced by this module:
-    <output_dir>/<input-stem>_filtered.<ext>
+We mirror DeepLabCut's ``filterpredictions`` median-filter branch verbatim
+(scipy.signal.medfilt over coord columns, leaving likelihood untouched) but
+drop DLC's video/config/scorer plumbing so we can run on any analyzed
+.h5/.csv directly without needing the project to be set up around it.
+
+Output layout (caller is responsible for ``output_dir``):
+    <output_dir>/<input-stem>_filtered.h5
     <output_dir>/<input-stem>_filtered.csv  (if save_as_csv)
 
-`output_dir` must be the per-run subfolder built by the caller
-(e.g. `<input-parent>/postproc/20260501-143022_filterpredictions/`).
-
-Note: `params` is consumed by this call (`save_as_csv` is popped out). Pass a
-copy if the caller needs to retain the original dict.
+Note: ``params`` is consumed by this call (``save_as_csv`` is popped out).
+Pass a copy if the caller needs to retain the original dict.
 """
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
-import deeplabcut as dlc
+import pandas as pd
+from scipy import signal
 
 ALLOWED_EXTS = {".h5", ".csv"}
 
 
+def _read_predictions(path: Path) -> pd.DataFrame:
+    suf = path.suffix.lower()
+    if suf == ".h5":
+        return pd.read_hdf(path)
+    if suf == ".csv":
+        df = pd.read_csv(path, header=[0, 1, 2], index_col=0)
+        df.columns.names = ["scorer", "bodyparts", "coords"]
+        return df
+    raise ValueError(f"unsupported input extension: {suf!r}")
+
+
+def _median_filter(df: pd.DataFrame, windowlength: int) -> pd.DataFrame:
+    """Apply scipy.signal.medfilt to every non-likelihood coord column.
+
+    Mirrors deeplabcut.filterpredictions(filtertype='median') exactly.
+    """
+    if windowlength % 2 == 0 or windowlength < 3:
+        raise ValueError(f"windowlength must be odd and >= 3, got {windowlength}")
+
+    out = df.copy()
+    mask = out.columns.get_level_values("coords") != "likelihood"
+    out.loc[:, mask] = df.loc[:, mask].apply(
+        signal.medfilt, args=(windowlength,), axis=0,
+    )
+    return out
+
+
 def run_filterpredictions(
     *,
-    config_path: str | Path,
+    config_path: str | Path = "",  # accepted for backward-compat; unused
     input_path: str | Path,
     output_dir: str | Path,
     params: dict,
 ) -> dict:
-    """Run DLC's filterpredictions on a single analyzed file; relocate output.
+    """Filter a single analyzed file; write results into ``output_dir``.
 
     Returns: {"status": "success" | "failed", "output": <Path>, "error": str | None}.
 
-    The original file is never modified. DLC writes its output next to the
-    input; we move the produced file into `output_dir` and never touch the
-    source.
+    The source file is never modified. The filtered output is written directly
+    into ``output_dir`` (no temp file next to the source, no shutil.move).
     """
     src = Path(input_path)
     out_dir = Path(output_dir)
-    cfg = Path(config_path)
 
     if src.suffix.lower() not in ALLOWED_EXTS:
         raise ValueError(f"unsupported input extension: {src.suffix!r}")
@@ -46,33 +73,40 @@ def run_filterpredictions(
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    save_as_csv = bool(params.pop("save_as_csv", False))
+    save_as_csv  = bool(params.pop("save_as_csv", False))
+    filtertype   = params.pop("filtertype", "median")
+    windowlength = int(params.pop("windowlength", 5))
+    # remaining params are silently ignored for median; future filtertypes can
+    # consume them.
 
     try:
-        dlc.filterpredictions(
-            str(cfg),
-            [str(src)],
-            save_as_csv=save_as_csv,
-            **params,
-        )
+        df = _read_predictions(src)
     except Exception as exc:  # noqa: BLE001
-        return {"status": "failed", "output": None, "error": f"{type(exc).__name__}: {exc}"}
+        return {"status": "failed", "output": None,
+                "error": f"read failed: {type(exc).__name__}: {exc}"}
 
-    base = src.with_suffix("")
-    produced_h5 = base.with_name(base.name + "_filtered.h5")
-    relocated_h5 = out_dir / produced_h5.name
+    try:
+        if filtertype == "median":
+            filtered = _median_filter(df, windowlength)
+        elif filtertype == "arima":
+            return {"status": "failed", "output": None,
+                    "error": "ARIMA filter not yet supported in this app; "
+                             "use median or refineDLC"}
+        else:
+            return {"status": "failed", "output": None,
+                    "error": f"unknown filtertype: {filtertype!r}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "failed", "output": None,
+                "error": f"filter failed: {type(exc).__name__}: {exc}"}
 
-    if not produced_h5.exists():
-        return {
-            "status": "failed",
-            "output": None,
-            "error": f"DLC did not produce expected output {produced_h5}",
-        }
-    shutil.move(str(produced_h5), str(relocated_h5))
+    out_h5 = out_dir / (src.stem + "_filtered.h5")
+    try:
+        filtered.to_hdf(out_h5, key="df_with_missing", mode="w", format="table")
+        if save_as_csv:
+            (out_dir / (src.stem + "_filtered.csv")).write_text("")  # touch
+            filtered.to_csv(out_dir / (src.stem + "_filtered.csv"))
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "failed", "output": None,
+                "error": f"write failed: {type(exc).__name__}: {exc}"}
 
-    if save_as_csv:
-        produced_csv = base.with_name(base.name + "_filtered.csv")
-        if produced_csv.exists():
-            shutil.move(str(produced_csv), str(out_dir / produced_csv.name))
-
-    return {"status": "success", "output": relocated_h5, "error": None}
+    return {"status": "success", "output": out_h5, "error": None}
