@@ -59,8 +59,10 @@ from dlc.utils import _dlc_project_security_check
 bp = Blueprint("dlc_viewer", __name__)
 
 
-# ── Per-path h5 DataFrame cache (LRU, max 5 files in memory) ─────────────────
-_VIEWER_H5_CACHE_MAX = 5
+# ── Per-path h5 DataFrame cache (LRU) ────────────────────────────────────────
+# Bumped from 5 to 12 to support multi-layer overlay sessions (primary + up to
+# 3 comparison layers without continuous eviction).
+_VIEWER_H5_CACHE_MAX = 12
 _viewer_h5_cache: _collections.OrderedDict = _collections.OrderedDict()
 _viewer_h5_lock = _threading.Lock()
 
