@@ -54,3 +54,23 @@ def test_new_ids_are_unique_across_partials():
             seen[m.group(1)] = seen.get(m.group(1), 0) + 1
     for nid in new_ids:
         assert seen.get(nid, 0) == 1, f"id {nid!r} appears {seen.get(nid, 0)} times"
+
+
+def test_postprocess_js_loaded_in_base_or_index():
+    candidates = [
+        ROOT / "src" / "templates" / "base.html",
+        ROOT / "src" / "templates" / "index.html",
+        ROOT / "src" / "static" / "js" / "main.js",
+    ]
+    haystack = "\n".join(p.read_text() for p in candidates if p.is_file())
+    assert "postprocess.js" in haystack
+
+
+def test_postprocess_js_handles_open_and_close():
+    js = (ROOT / "src" / "static" / "js" / "postprocess.js").read_text()
+    assert 'btn-open-postprocess' in js
+    assert 'btn-close-postprocess' in js
+    assert 'postprocess-card' in js
+    assert "pp-tool" in js
+    assert "pp-params-deeplabcut" in js
+    assert "pp-params-refine" in js
