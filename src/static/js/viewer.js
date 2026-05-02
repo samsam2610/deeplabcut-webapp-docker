@@ -1235,11 +1235,47 @@ import { state } from './state.js';
 
       const layer = _vaMakeLayer({ path, label, type });
       _vaSetPrimaryLayer(layer);
+      _vaRenderPrimaryThresholdInline();
       document.getElementById("va-overlay-h5-path").value = path;
       await _vaLoadLayerInfo(layer);
       await _vaLoadEditCacheForPrimary();
       _vaRenderCompareRows();
       if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
+    }
+
+    function _vaRenderPrimaryThresholdInline() {
+      const host = document.getElementById("va-overlay-primary-select");
+      if (!host) return;
+      let slot = document.getElementById("va-overlay-primary-threshold-slot");
+      if (!_vaPerLayerThresholds) {
+        if (slot) slot.remove();
+        return;
+      }
+      if (!slot) {
+        slot = document.createElement("span");
+        slot.id = "va-overlay-primary-threshold-slot";
+        slot.style.cssText = "display:flex;align-items:center;gap:.25rem;margin-left:.4rem";
+        host.parentElement?.appendChild(slot);
+      }
+      slot.innerHTML = "";
+      const layer = _vaPrimary();
+      if (!layer) return;
+      const slider = document.createElement("input");
+      slider.type = "range"; slider.min = "0"; slider.max = "1"; slider.step = "0.05";
+      slider.value = String(layer.threshold ?? _vaGlobalThreshold);
+      slider.style.cssText = "width:60px;accent-color:var(--accent)";
+      const lbl = document.createElement("span");
+      lbl.style.cssText = "font-family:var(--mono);font-size:.7rem;min-width:2.2rem";
+      lbl.textContent = Number(slider.value).toFixed(2);
+      slider.addEventListener("input", () => {
+        layer.threshold = Number(slider.value);
+        lbl.textContent = layer.threshold.toFixed(2);
+        if (_vaOverlayEnabled) {
+          _vaFetchPosesForFrame(layer, _vaCurrentFrame).then(_vaDrawCurrentFrame);
+        }
+      });
+      slot.appendChild(slider);
+      slot.appendChild(lbl);
     }
 
     // ── Comparison-row UI ──────────────────────────────────────────
@@ -1281,9 +1317,28 @@ import { state } from './state.js';
         lbl.textContent = layer.label;
         lbl.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
         row.appendChild(lbl);
-        // per-layer threshold (rendered conditionally in T8); placeholder slot:
+        // per-layer threshold (rendered conditionally when Customize is on)
         const thrSlot = document.createElement("span");
         thrSlot.dataset.role = "threshold";
+        thrSlot.style.cssText = "display:flex;align-items:center;gap:.25rem;flex-shrink:0";
+        if (_vaPerLayerThresholds) {
+          const slider = document.createElement("input");
+          slider.type = "range"; slider.min = "0"; slider.max = "1"; slider.step = "0.05";
+          slider.value = String(layer.threshold ?? _vaGlobalThreshold);
+          slider.style.cssText = "width:60px;accent-color:var(--accent)";
+          const lbl = document.createElement("span");
+          lbl.style.cssText = "font-family:var(--mono);font-size:.7rem;min-width:2.2rem";
+          lbl.textContent = Number(slider.value).toFixed(2);
+          slider.addEventListener("input", () => {
+            layer.threshold = Number(slider.value);
+            lbl.textContent = layer.threshold.toFixed(2);
+            if (_vaOverlayEnabled) {
+              _vaFetchPosesForFrame(layer, _vaCurrentFrame).then(_vaDrawCurrentFrame);
+            }
+          });
+          thrSlot.appendChild(slider);
+          thrSlot.appendChild(lbl);
+        }
         row.appendChild(thrSlot);
         // remove button
         const rm = document.createElement("button");
@@ -1372,12 +1427,29 @@ import { state } from './state.js';
 
     // Threshold slider
     vaOverlayThreshold?.addEventListener("input", () => {
-      _vaGlobalThreshold = parseFloat(vaOverlayThreshold.value);
+      _vaGlobalThreshold = Number(vaOverlayThreshold.value);
       vaOverlayThreshVal.textContent = _vaGlobalThreshold.toFixed(2);
+      // Stale per-layer cache entries are auto-skipped by _vaFetchPosesForFrame
+      // (key mismatch on threshold), so we just trigger a re-fetch of the
+      // current frame.
+      if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
     });
-    vaOverlayThreshold?.addEventListener("change", () => {
-      _vaClearPoseCache();
-      if (_vaOverlayEnabled && _vaPrimary()) _vaLoadFrame(_vaCurrentFrame);
+
+    // Customize per-layer thresholds toggle
+    const vaCustomizeThr = document.getElementById("va-overlay-customize-thresholds");
+    vaCustomizeThr?.addEventListener("change", () => {
+      _vaPerLayerThresholds = vaCustomizeThr.checked;
+      if (!_vaPerLayerThresholds) {
+        // Forget per-layer overrides; revert to global.
+        _vaLayers.forEach(l => l.threshold = null);
+      } else {
+        // Seed each layer's override with the current global so toggling on
+        // produces no immediate visual change.
+        _vaLayers.forEach(l => l.threshold = _vaGlobalThreshold);
+      }
+      _vaRenderCompareRows();
+      _vaRenderPrimaryThresholdInline();
+      if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
     });
 
     // Marker size slider — redraw canvas immediately, no frame reload needed
