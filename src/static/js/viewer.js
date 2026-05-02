@@ -94,7 +94,7 @@ import { state } from './state.js';
         : _vaGlobalThreshold;
     }
 
-    const _SHAPE_ORDER = ["circle-filled", "circle-open", "square", "triangle"];
+    const _SHAPE_ORDER = ["circle-filled", "diamond", "square", "triangle"];
     function _vaAssignShapes() {
       _vaLayers.forEach((l, i) => {
         l.shape = _SHAPE_ORDER[Math.min(i, _SHAPE_ORDER.length - 1)];
@@ -547,9 +547,15 @@ import { state } from './state.js';
       ctx.fillStyle = color;
       ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
     }
-    function _drawCircleOpen(ctx, x, y, r, color) {
-      ctx.strokeStyle = color; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke();
+    function _drawDiamond(ctx, x, y, r, color) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(x,     y - r);
+      ctx.lineTo(x + r, y    );
+      ctx.lineTo(x,     y + r);
+      ctx.lineTo(x - r, y    );
+      ctx.closePath();
+      ctx.fill();
     }
     function _drawSquare(ctx, x, y, r, color) {
       ctx.strokeStyle = color; ctx.lineWidth = 2;
@@ -566,7 +572,7 @@ import { state } from './state.js';
     }
     const _SHAPE_FN = {
       "circle-filled": _drawCircleFilled,
-      "circle-open":   _drawCircleOpen,
+      "diamond":       _drawDiamond,
       "square":        _drawSquare,
       "triangle":      _drawTriangle,
     };
@@ -1345,7 +1351,7 @@ import { state } from './state.js';
     function _shapeGlyph(shape) {
       switch (shape) {
         case "circle-filled": return "●";
-        case "circle-open":   return "○";
+        case "diamond":       return "◆";
         case "square":        return "□";
         case "triangle":      return "△";
         default:              return "?";
