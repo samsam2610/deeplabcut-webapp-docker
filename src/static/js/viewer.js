@@ -1229,6 +1229,15 @@ import { state } from './state.js';
       return Math.max(1, Math.min(100, isNaN(v) ? 1 : v));
     }
 
+    function _vaPlaybackFps() {
+      const v = parseInt(document.getElementById("va-play-fps")?.value || "5", 10);
+      return Math.max(1, Math.min(120, isNaN(v) ? 5 : v));
+    }
+
+    function _vaPlayDelayMs() {
+      return Math.round(1000 / _vaPlaybackFps());
+    }
+
     async function _vaDiscoverVariants(videoPath) {
       // Fetch every analyzable h5 near `videoPath` and populate the Primary <select>.
       // Default the primary to the first 'raw' entry, or the first variant otherwise.
@@ -1731,7 +1740,7 @@ import { state } from './state.js';
       // Pace the next tick: subtract actual render time from the target interval.
       // Clamped to 0 so a slow frame never makes us "owe" future ticks.
       const elapsed = performance.now() - t0;
-      const delay   = Math.max(0, Math.round(1000 / _vaFps) - elapsed);
+      const delay   = Math.max(0, _vaPlayDelayMs() - elapsed);
       _vaPlayTimeoutId = setTimeout(_vaPlayLoop, delay);
     }
 
