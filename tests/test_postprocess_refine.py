@@ -78,3 +78,22 @@ def test_likelihood_filter_rejects_invalid_threshold():
         ppr.step_likelihood_filter(df, threshold=1.5)
     with pytest.raises(ValueError):
         ppr.step_likelihood_filter(df, threshold=-0.1)
+
+
+def test_outlier_removal_flags_zscore_outliers():
+    df = _make_dlc_dataframe(bodyparts=("nose",), n_frames=10)
+    scorer = df.columns.levels[0][0]
+    df.loc[:, (scorer, "nose", "x")] = [50, 51, 49, 50, 50, 5000, 50, 51, 49, 50]
+    df.loc[:, (scorer, "nose", "y")] = 50.0
+    df.loc[:, (scorer, "nose", "likelihood")] = 0.99
+
+    out = ppr.step_outlier_removal(df, z_threshold=3.0)
+
+    assert pd.isna(out.loc[5, (scorer, "nose", "x")])
+    assert out.loc[0, (scorer, "nose", "x")] == 50
+
+
+def test_outlier_removal_rejects_negative_threshold():
+    df = _make_dlc_dataframe()
+    with pytest.raises(ValueError):
+        ppr.step_outlier_removal(df, z_threshold=-1.0)
