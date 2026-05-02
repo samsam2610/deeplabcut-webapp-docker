@@ -57,3 +57,24 @@ def test_read_write_csv_roundtrip(tmp_path):
     ppr.write_predictions(df, path)
     df2 = ppr.read_predictions(path)
     pd.testing.assert_frame_equal(df, df2)
+
+
+def test_likelihood_filter_drops_low_confidence_points():
+    df = _make_dlc_dataframe(bodyparts=("nose",), n_frames=5)
+    scorer = df.columns.levels[0][0]
+    df.loc[:, (scorer, "nose", "likelihood")] = [0.9, 0.9, 0.1, 0.9, 0.1]
+
+    out = ppr.step_likelihood_filter(df, threshold=0.5)
+
+    nose_x = out[(scorer, "nose", "x")]
+    assert nose_x.isna().tolist() == [False, False, True, False, True]
+    nose_y = out[(scorer, "nose", "y")]
+    assert nose_y.isna().tolist() == [False, False, True, False, True]
+
+
+def test_likelihood_filter_rejects_invalid_threshold():
+    df = _make_dlc_dataframe()
+    with pytest.raises(ValueError):
+        ppr.step_likelihood_filter(df, threshold=1.5)
+    with pytest.raises(ValueError):
+        ppr.step_likelihood_filter(df, threshold=-0.1)

@@ -38,3 +38,22 @@ def write_predictions(df: pd.DataFrame, path: str | Path) -> None:
         df.to_csv(p)
     else:
         raise ValueError(f"Unsupported predictions extension: {suf!r}")
+
+
+def step_likelihood_filter(df: pd.DataFrame, *, threshold: float = 0.6) -> pd.DataFrame:
+    """Drop (set NaN) x/y values where likelihood < threshold.
+
+    Likelihood column itself is left unchanged so downstream steps can re-filter.
+    """
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError(f"threshold must be in [0, 1], got {threshold}")
+
+    out = df.copy()
+    scorer = out.columns.levels[0][0]
+    bodyparts = out.columns.get_level_values("bodyparts").unique()
+    for bp in bodyparts:
+        lh = out[(scorer, bp, "likelihood")]
+        mask = lh < threshold
+        out.loc[mask, (scorer, bp, "x")] = float("nan")
+        out.loc[mask, (scorer, bp, "y")] = float("nan")
+    return out
