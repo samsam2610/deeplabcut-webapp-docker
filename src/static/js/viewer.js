@@ -1266,6 +1266,7 @@ import { state } from './state.js';
       if (!defaultEntry) return;
       select.value = defaultEntry.path;
       await _vaApplyPrimaryFromSelect();
+      _vaSyncPrimaryRow();
       _vaRefreshAddComparisonOptions(data.variants);
     }
 
@@ -1310,6 +1311,7 @@ import { state } from './state.js';
       _vaRefreshAddComparisonOptions(_vaLastVariants);
       _vaRenderPrimaryThresholdInline();
       if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
+      _vaSyncPrimaryRow();
     }
 
     function _vaRenderPrimaryThresholdInline() {
@@ -1478,6 +1480,30 @@ import { state } from './state.js';
       await _vaAddCompare(path, opt.dataset.label, opt.dataset.type);
       e.target.value = "";  // reset to placeholder
     });
+
+    const vaOverlayPrimaryVisible = document.getElementById("va-overlay-primary-visible");
+    const vaOverlayPrimaryShape   = document.getElementById("va-overlay-primary-shape");
+    const vaOverlayPrimaryLabel   = document.getElementById("va-overlay-primary-label");
+
+    vaOverlayPrimaryVisible?.addEventListener("change", () => {
+      const layer = _vaPrimary();
+      if (!layer) return;
+      layer.visible = !!vaOverlayPrimaryVisible.checked;
+      _vaDrawCurrentFrame();
+    });
+
+    function _vaSyncPrimaryRow() {
+      const layer = _vaPrimary();
+      if (!layer) {
+        if (vaOverlayPrimaryShape) vaOverlayPrimaryShape.textContent = "—";
+        if (vaOverlayPrimaryLabel) vaOverlayPrimaryLabel.textContent = "(no primary)";
+        if (vaOverlayPrimaryVisible) vaOverlayPrimaryVisible.checked = false;
+        return;
+      }
+      if (vaOverlayPrimaryShape) vaOverlayPrimaryShape.textContent = _shapeGlyph(layer.shape);
+      if (vaOverlayPrimaryLabel) vaOverlayPrimaryLabel.textContent = layer.label || "";
+      if (vaOverlayPrimaryVisible) vaOverlayPrimaryVisible.checked = !!layer.visible;
+    }
 
     vaOverlayH5Clear?.addEventListener("click", () => {
       _vaSetPrimaryLayer(null);
