@@ -182,3 +182,31 @@ def test_h5_variants_against_om2_ratbox(flask_test_client):
         for f in filtered_entries:
             assert "/postproc/" in f["path"]
             assert f["disabled"] is False
+
+
+@pytest.mark.skipif(not _OM2_HOST.is_dir(),
+                    reason="OM-2 RatBox folder not on this host")
+def test_dir_with_h5_against_om2_ratbox(flask_test_client):
+    """Run /dlc/viewer/dir-with-h5 against the OM-2 RatBox folder; expect at
+    least one .avi to have has_h5: true."""
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    # Translate host path to container path (route runs in flask).
+    container_dir = str(_OM2_HOST).replace(
+        "/home/sam/synology/Parra-Lab-Data",
+        "/user-data/Parra-Data/Cloud",
+    )
+    resp = client.get(f"/dlc/viewer/dir-with-h5?path={container_dir}")
+    if resp.status_code in (403, 404):
+        pytest.skip(
+            f"Path not visible to host pytest "
+            f"({resp.status_code}); test requires the container path to "
+            f"resolve from the test environment."
+        )
+    assert resp.status_code == 200, resp.get_json()
+    data = resp.get_json()
+    assert data["videos"], "expected at least one video"
+    with_h5 = [v for v in data["videos"] if v["has_h5"]]
+    assert with_h5, f"expected at least one .avi with has_h5=True, got {data['videos'][:3]}"
+    for v in with_h5:
+        assert v["h5_count"] >= 1
