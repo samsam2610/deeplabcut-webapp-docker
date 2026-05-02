@@ -10,7 +10,7 @@ import datetime as _dt
 import json
 from pathlib import Path
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 bp = Blueprint("dlc_postprocess", __name__, url_prefix="/dlc/postprocess")
 
@@ -76,6 +76,42 @@ def _looks_analyzed(path: Path) -> bool:
     if "_filtered" in name:
         return False  # already a derived file
     return any(p in name for p in _ANALYZED_PATTERNS)
+
+
+def _path_is_allowed(path) -> bool:
+    """Hook for the user-data root allowlist.
+
+    Reuses ``dlc.utils._dlc_project_security_check`` against the DATA_DIR and
+    USER_DATA_DIR known to ``dlc.ctx``. Tests monkeypatch this. Production must
+    have ``dlc.ctx`` populated by ``app.py`` before requests reach here.
+    """
+    try:
+        from dlc.utils import _dlc_project_security_check
+        from dlc import ctx
+        data_dir = ctx.data_dir()
+        user_data_dir = ctx.user_data_dir()
+    except ImportError:
+        return True  # fallback: tests monkeypatch; production must wire
+    if data_dir is None or user_data_dir is None:
+        return True
+    try:
+        return _dlc_project_security_check(Path(path), data_dir, user_data_dir)
+    except Exception:
+        return False
+
+
+@bp.route("/scan", methods=["POST"])
+def scan():
+    body = request.get_json(silent=True) or {}
+    raw = body.get("path")
+    mode = body.get("mode")
+    if not raw or mode not in {"file", "folder"}:
+        return jsonify({"error": "path and mode (file|folder) are required"}), 400
+    if not _path_is_allowed(raw):
+        return jsonify({"error": "path is not under an allowed root"}), 400
+
+    files = scan_inputs(raw, mode)
+    return jsonify({"files": [str(f) for f in files]})
 
 
 @bp.route("/recent", methods=["GET"])

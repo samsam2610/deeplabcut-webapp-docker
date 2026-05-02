@@ -92,3 +92,49 @@ def test_scan_inputs_folder_excludes_filtered(tmp_path):
 def test_scan_inputs_unknown_mode_raises(tmp_path):
     with pytest.raises(ValueError):
         pp.scan_inputs(tmp_path, "weird")
+
+
+def _auth(client):
+    with client.session_transaction() as sess:
+        sess["authenticated"] = True
+
+
+def test_scan_file_mode_returns_single_path(flask_test_client, tmp_path, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    src = tmp_path / "videoDLC_resnet50_shuffle1.h5"
+    src.write_bytes(b"")
+    monkeypatch.setattr(pp, "_path_is_allowed", lambda p: True)
+
+    resp = client.post("/dlc/postprocess/scan",
+                       json={"path": str(src), "mode": "file"})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["files"] == [str(src)]
+
+
+def test_scan_folder_mode_skips_postproc_subtree(flask_test_client, tmp_path, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    a = tmp_path / "videoADLC_resnet50.h5"
+    b = tmp_path / "postproc" / "20260101-000000_x" / "videoBDLC_resnet50.h5"
+    a.write_bytes(b"")
+    b.parent.mkdir(parents=True)
+    b.write_bytes(b"")
+    monkeypatch.setattr(pp, "_path_is_allowed", lambda p: True)
+
+    resp = client.post("/dlc/postprocess/scan",
+                       json={"path": str(tmp_path), "mode": "folder"})
+    assert resp.status_code == 200
+    files = resp.get_json()["files"]
+    assert str(a) in files
+    assert str(b) not in files
+
+
+def test_scan_rejects_disallowed_path(flask_test_client, tmp_path, monkeypatch):
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    monkeypatch.setattr(pp, "_path_is_allowed", lambda p: False)
+    resp = client.post("/dlc/postprocess/scan",
+                       json={"path": "/etc", "mode": "folder"})
+    assert resp.status_code == 400
