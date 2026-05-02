@@ -128,3 +128,24 @@ def test_interpolation_respects_limit():
     assert not pd.isna(xs.iloc[2])
     assert pd.isna(xs.iloc[3])
     assert pd.isna(xs.iloc[4])
+
+
+def test_smoothing_reduces_high_frequency_noise():
+    df = _make_dlc_dataframe(bodyparts=("nose",), n_frames=21)
+    scorer = df.columns.levels[0][0]
+    sign = np.array([1 if i % 2 == 0 else -1 for i in range(21)], dtype=float)
+    df.loc[:, (scorer, "nose", "x")] = 50.0 + sign
+    df.loc[:, (scorer, "nose", "y")] = 50.0
+
+    out = ppr.step_smoothing(df, window=5, polyorder=2)
+
+    xs = out[(scorer, "nose", "x")].to_numpy()
+    assert xs[5:16].std() < 0.5
+
+
+def test_smoothing_rejects_invalid_window():
+    df = _make_dlc_dataframe()
+    with pytest.raises(ValueError):
+        ppr.step_smoothing(df, window=4, polyorder=2)  # even window
+    with pytest.raises(ValueError):
+        ppr.step_smoothing(df, window=3, polyorder=3)  # polyorder >= window

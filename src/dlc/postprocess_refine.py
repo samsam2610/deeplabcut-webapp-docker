@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.signal import savgol_filter as _savgol_filter
 
 
 def read_predictions(path: str | Path) -> pd.DataFrame:
@@ -114,4 +115,39 @@ def step_interpolation(
         for axis in ("x", "y"):
             col = (scorer, bp, axis)
             out[col] = out[col].interpolate(**interp_kwargs)
+    return out
+
+
+def step_smoothing(
+    df: pd.DataFrame,
+    *,
+    window: int = 5,
+    polyorder: int = 2,
+) -> pd.DataFrame:
+    """Savitzky-Golay smoothing applied to x and y per bodypart.
+
+    NaN gaps are preserved (savgol can't handle NaN; we mask, smooth, restore).
+    """
+    if window % 2 == 0 or window < 3:
+        raise ValueError(f"window must be odd and >= 3, got {window}")
+    if polyorder >= window:
+        raise ValueError(f"polyorder ({polyorder}) must be < window ({window})")
+
+    out = df.copy()
+    scorer = out.columns.levels[0][0]
+    bodyparts = out.columns.get_level_values("bodyparts").unique()
+    for bp in bodyparts:
+        for axis in ("x", "y"):
+            col = (scorer, bp, axis)
+            series = out[col]
+            finite = series.notna()
+            if finite.sum() < window:
+                continue
+            values = series.to_numpy(dtype=float, copy=True)
+            smoothed = values.copy()
+            mask = finite.to_numpy()
+            smoothed[mask] = _savgol_filter(
+                values[mask], window_length=window, polyorder=polyorder, mode="interp"
+            )
+            out[col] = smoothed
     return out
