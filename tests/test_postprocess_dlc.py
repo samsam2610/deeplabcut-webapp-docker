@@ -70,6 +70,37 @@ def test_run_filterpredictions_invokes_dlc_and_relocates_output(tmp_path):
     assert src.stat().st_size > 0
 
 
+@pytest.mark.skipif(not _tables_available(), reason="needs pytables")
+def test_run_filterpredictions_works_when_output_dir_exists(tmp_path):
+    """Regression: the celery task pre-creates output_dir via make_run_subfolder."""
+    config = tmp_path / "config.yaml"
+    config.write_text("Task: dummy\n")
+    src = tmp_path / "video1DLC_resnet50_shuffle1_50000.h5"
+    _make_h5(src)
+
+    out_dir = tmp_path / "postproc" / "20260501-120000_filterpredictions"
+    out_dir.mkdir(parents=True)  # pre-created, mimicking production
+
+    def fake_filterpredictions(cfg, videos, **kwargs):
+        for v in videos:
+            v = Path(v)
+            base = v.with_suffix("")
+            target = base.with_name(base.name + "_filtered.h5")
+            target.write_bytes(b"fake-h5-bytes")
+
+    with patch("dlc.postprocess_dlc.dlc.filterpredictions",
+               side_effect=fake_filterpredictions):
+        result = ppd.run_filterpredictions(
+            config_path=config,
+            input_path=src,
+            output_dir=out_dir,
+            params={"filtertype": "median", "windowlength": 5, "save_as_csv": False},
+        )
+
+    assert result["status"] == "success"
+    assert (out_dir / "video1DLC_resnet50_shuffle1_50000_filtered.h5").exists()
+
+
 def test_run_filterpredictions_validates_extension(tmp_path):
     config = tmp_path / "config.yaml"
     config.write_text("Task: dummy\n")

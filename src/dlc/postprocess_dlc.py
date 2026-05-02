@@ -44,7 +44,7 @@ def run_filterpredictions(
     if not src.is_file():
         raise FileNotFoundError(src)
 
-    out_dir.mkdir(parents=True, exist_ok=False)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     save_as_csv = bool(params.pop("save_as_csv", False))
 
