@@ -97,3 +97,34 @@ def test_outlier_removal_rejects_negative_threshold():
     df = _make_dlc_dataframe()
     with pytest.raises(ValueError):
         ppr.step_outlier_removal(df, z_threshold=-1.0)
+
+
+def test_interpolation_fills_nan_gaps():
+    df = _make_dlc_dataframe(bodyparts=("nose",), n_frames=5)
+    scorer = df.columns.levels[0][0]
+    df.loc[:, (scorer, "nose", "x")] = [0.0, float("nan"), float("nan"), 30.0, 40.0]
+    df.loc[:, (scorer, "nose", "y")] = 0.0
+
+    out = ppr.step_interpolation(df, method="linear", limit=3)
+
+    xs = out[(scorer, "nose", "x")].tolist()
+    assert xs[0] == 0.0
+    assert xs[3] == 30.0
+    assert xs[4] == 40.0
+    assert xs[1] == pytest.approx(10.0)
+    assert xs[2] == pytest.approx(20.0)
+
+
+def test_interpolation_respects_limit():
+    df = _make_dlc_dataframe(bodyparts=("nose",), n_frames=6)
+    scorer = df.columns.levels[0][0]
+    df.loc[:, (scorer, "nose", "x")] = [0.0] + [float("nan")] * 4 + [50.0]
+    df.loc[:, (scorer, "nose", "y")] = 0.0
+
+    out = ppr.step_interpolation(df, method="linear", limit=2)
+
+    xs = out[(scorer, "nose", "x")]
+    assert not pd.isna(xs.iloc[1])
+    assert not pd.isna(xs.iloc[2])
+    assert pd.isna(xs.iloc[3])
+    assert pd.isna(xs.iloc[4])
