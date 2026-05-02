@@ -114,6 +114,68 @@ def scan():
     return jsonify({"files": [str(f) for f in files]})
 
 
+_VALID_ACTIONS = {
+    "deeplabcut": {"filterpredictions"},
+    "refineDLC": {"pipeline", "likelihood_filter", "outlier_removal",
+                  "interpolation", "smoothing"},
+}
+
+
+@bp.route("/run", methods=["POST"])
+def run():
+    body = request.get_json(silent=True) or {}
+    tool = body.get("tool")
+    action = body.get("action")
+    params = body.get("params") or {}
+    inputs = body.get("inputs") or []
+    config_path = body.get("config_path")
+
+    if tool not in _VALID_ACTIONS or action not in _VALID_ACTIONS.get(tool, set()):
+        return jsonify({"error": "unsupported tool/action"}), 400
+    if not isinstance(inputs, list) or not inputs:
+        return jsonify({"error": "inputs must be a non-empty list"}), 400
+    for p in inputs:
+        if not _path_is_allowed(p):
+            return jsonify({"error": f"path not allowed: {p}"}), 400
+
+    from dlc.tasks import dlc_postprocess_run as _task
+    async_result = _task.apply_async(kwargs={
+        "config_path": config_path, "tool": tool, "action": action,
+        "params": params, "inputs": list(inputs),
+    })
+    return jsonify({"task_id": async_result.id})
+
+
+def _async_result(task_id: str):
+    from celery_app import celery
+    return celery.AsyncResult(task_id)
+
+
+def _revoke(task_id: str) -> None:
+    from celery_app import celery
+    celery.control.revoke(task_id, terminate=True)
+
+
+@bp.route("/status/<task_id>", methods=["GET"])
+def status(task_id: str):
+    ar = _async_result(task_id)
+    info = ar.info if isinstance(ar.info, dict) else {}
+    return jsonify({"state": ar.state, "progress": info})
+
+
+@bp.route("/cancel/<task_id>", methods=["POST"])
+def cancel(task_id: str):
+    _revoke(task_id)
+    return jsonify({"task_id": task_id, "cancelled": True})
+
+
+@bp.route("/logs/<task_id>", methods=["GET"])
+def logs(task_id: str):
+    ar = _async_result(task_id)
+    info = ar.info if isinstance(ar.info, dict) else {}
+    return jsonify({"log": info.get("log", "")})
+
+
 @bp.route("/recent", methods=["GET"])
 def recent():
     """Return recent post-process runs for the active project (stub for now)."""
