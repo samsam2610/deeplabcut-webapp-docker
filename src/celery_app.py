@@ -144,11 +144,36 @@ def _kill_stale_gpu_processes(sender, **kwargs):
 
 
 @worker_process_init.connect
-def _kill_orphans_on_child_init(sender=None, **kwargs):
-    """Clean up orphan DLC subprocess PIDs on each prefork-child startup.
-    This catches the case where the previous child was SIGKILLed by Celery's
-    hard task_time_limit, leaving the spawned training/analyze subprocess
-    orphaned and still holding the GPU."""
+def _prefork_child_init(sender=None, **kwargs):
+    """Per-child initialisation for prefork pool workers.
+
+    1. Allow the worker child to spawn its own subprocesses.
+       Celery's prefork (billiard) marks each worker child as a daemon
+       process so the OS reaps it on master exit. But Python's
+       multiprocessing.Process.start() asserts that daemon processes
+       cannot have children — which breaks every dlc_*_subprocess spawn
+       in tasks.py (train / analyze / machine-label / labeled-video all
+       call mp.get_context('spawn').Process(daemon=False).start() and
+       hit the assertion). Flip the flag back to non-daemon: in Docker
+       the container's PID-1 init handles orphan reaping, so we don't
+       need Python's daemon semantic for cleanup. The _config attr is
+       private but stable across Python 3.x and is the documented
+       Celery+multiprocessing workaround.
+
+    2. Clean up orphan DLC subprocess PIDs left over from a previous
+       child. This catches the case where the previous worker child
+       was SIGKILLed by Celery's hard task_time_limit, leaving the
+       spawned training/analyze subprocess orphaned and still holding
+       the GPU.
+    """
+    # 1. Un-daemonise the worker child so mp.Process.start() will work
+    import multiprocessing as _mp
+    try:
+        _mp.current_process()._config["daemon"] = False
+    except (AttributeError, KeyError):
+        pass  # private API — degrade gracefully if Python ever changes it
+
+    # 2. Orphan cleanup
     import redis as _redis_mod
     _r = _redis_mod.Redis.from_url(
         os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/0"),
