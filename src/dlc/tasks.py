@@ -424,7 +424,7 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
     acks_late=False overrides the global setting so that killing the worker
     does NOT re-queue the task on restart.
     """
-    import multiprocessing as _mp
+    import billiard as _mp  # billiard, not stdlib mp: avoids AuthenticationString pickle error inside Celery prefork child
     import threading as _threading
     import tempfile
     import signal as _signal
@@ -1035,7 +1035,7 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
     process so it can be killed cleanly without taking down the Celery worker.
     params keys: shuffle, trainingsetindex, gputouse, save_as_csv, create_labeled, snapshot_index
     """
-    import multiprocessing as _mp
+    import billiard as _mp  # billiard, not stdlib mp: avoids AuthenticationString pickle error inside Celery prefork child
     import threading as _threading
     import tempfile
     import signal as _signal
@@ -1348,7 +1348,7 @@ def _dlc_clv_subprocess(config_path: str, video_path: str, params: dict, log_pat
 @celery.task(bind=True, name="tasks.dlc_create_labeled_video", acks_late=False)
 def dlc_create_labeled_video(self, config_path: str, video_path: str, params: dict = None):
     """Run deeplabcut.create_labeled_video on an already-analyzed video."""
-    import multiprocessing as _mp
+    import billiard as _mp  # billiard, not stdlib mp: avoids AuthenticationString pickle error inside Celery prefork child
     import tempfile
 
     if params is None:
@@ -1854,7 +1854,7 @@ def dlc_machine_label_frames(
     as CollectedData_<scorer>.csv for manual review and correction.
     params keys: shuffle, trainingsetindex, gputouse, save_as_csv, snapshot_index
     """
-    import multiprocessing as _mp
+    import billiard as _mp  # billiard, not stdlib mp: avoids AuthenticationString pickle error inside Celery prefork child
     import threading as _threading
     import tempfile
     import redis as _redis_mod
