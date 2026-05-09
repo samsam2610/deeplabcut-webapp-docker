@@ -21,6 +21,17 @@ celery.conf.update(
     task_acks_late=True,               # re-deliver on crash
     task_time_limit=7200,              # hard kill after 2 h
     task_soft_time_limit=6900,         # soft warning at 1 h 55 min
+    # Redis broker visibility_timeout: how long a delivered-but-unacked message
+    # waits before the broker re-queues it on the assumption that the consumer
+    # died. Default is 3600s (1 h) — far too short for DLC training runs that
+    # routinely take 3-6 h. When the timeout expires mid-training, the broker
+    # silently re-publishes the message; the moment the original task finishes,
+    # the worker picks up the duplicate and kicks off a SECOND training run
+    # from epoch 1 on the same GPU. Set well above any expected task runtime.
+    # (Per-task acks_late=False on dlc_train_network is not enough on its own —
+    # if a missed-heartbeat or connection blip drops the early ack, the broker
+    # still re-publishes once the visibility window closes.)
+    broker_transport_options={"visibility_timeout": 86400},  # 24 h
 )
 
 
