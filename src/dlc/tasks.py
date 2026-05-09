@@ -408,7 +408,13 @@ def _dlc_train_subprocess(config_path: str, kwargs: dict, log_path: str) -> None
             _cuda_cleanup_with_timeout(timeout=10)
 
 
-@celery.task(bind=True, name="tasks.dlc_train_network", acks_late=False)
+@celery.task(
+    bind=True,
+    name="tasks.dlc_train_network",
+    acks_late=False,
+    time_limit=43200,        # 12 h hard kill — covers worst-case large-dataset runs
+    soft_time_limit=39600,   # 11 h soft warning — defense in depth
+)
 def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: dict = None):
     """
     Run deeplabcut.train_network() in a child process so it can be killed
@@ -663,6 +669,29 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         }
 
     except Exception:
+        # Kill the training subprocess immediately so it doesn't keep
+        # holding the GPU after the parent task is interrupted (e.g. by
+        # Celery's SoftTimeLimitExceeded or any other unhandled exception).
+        # Mirrors the user-stop sequence from _emit_loop: SIGTERM, brief
+        # wait for clean CUDA shutdown, then SIGKILL if still alive.
+        try:
+            import signal as _sig
+            if proc.is_alive():
+                try:
+                    os.killpg(proc.pid, _sig.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    pass
+                for _ in range(24):
+                    if not proc.is_alive():
+                        break
+                    time.sleep(0.5)
+                if proc.is_alive():
+                    try:
+                        os.killpg(proc.pid, _sig.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        pass
+        except Exception:
+            pass
         # Purge all Redis state so no stale "running" record remains
         _redis.delete(pid_key, stop_key)
         _redis.zrem("dlc_train_jobs", task_id)

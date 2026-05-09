@@ -4,7 +4,7 @@ Import `celery` from here rather than from tasks.py to avoid circular imports.
 """
 import os
 from celery import Celery
-from celery.signals import worker_ready
+from celery.signals import worker_ready, worker_process_init
 
 celery = Celery(
     "tasks",
@@ -35,6 +35,27 @@ celery.conf.update(
 )
 
 
+def _kill_orphaned_dlc_subprocesses(redis_client) -> None:
+    """Kill any DLC subprocess PIDs left over from a previous worker (child) crash.
+    Called from worker_ready (main process startup, container start) AND from
+    worker_process_init (each prefork child start, including replacement after
+    a hard-time-limit kill). Idempotent: safe to call multiple times."""
+    import signal as _sig
+    prefixes = ("dlc_train_pid:*", "dlc_analyze_pid:*", "dlc_ml_pid:*")
+    for pattern in prefixes:
+        for key in redis_client.scan_iter(pattern):
+            try:
+                pid = int(redis_client.get(key) or 0)
+                if pid:
+                    try:
+                        os.killpg(pid, _sig.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        pass
+            except (ValueError, TypeError):
+                pass
+            redis_client.delete(key)
+
+
 # ── Worker startup: kill stale GPU processes from a previous crash ─
 @worker_ready.connect
 def _kill_stale_gpu_processes(sender, **kwargs):
@@ -46,7 +67,6 @@ def _kill_stale_gpu_processes(sender, **kwargs):
          GPU 0 = RTX 5090 (ONLY GPU used by DLC tasks; GPU 1 is NEVER touched).
       3. Start the Reaper background thread.
     """
-    import signal as _sig
     import threading as _threading
     import redis as _redis_mod
 
@@ -56,19 +76,7 @@ def _kill_stale_gpu_processes(sender, **kwargs):
     )
 
     # ── 1. Kill orphaned subprocesses ─────────────────────────────────────────
-    prefixes = ("dlc_train_pid:*", "dlc_analyze_pid:*", "dlc_ml_pid:*")
-    for pattern in prefixes:
-        for key in _r.scan_iter(pattern):
-            try:
-                pid = int(_r.get(key) or 0)
-                if pid:
-                    try:
-                        os.killpg(pid, _sig.SIGKILL)
-                    except (ProcessLookupError, OSError):
-                        pass
-            except (ValueError, TypeError):
-                pass
-            _r.delete(key)
+    _kill_orphaned_dlc_subprocesses(_r)
 
     # ── 2. Re-initialise GPU pool ─────────────────────────────────────────────
     # Hard constraint: GPU 0 = RTX 5090 for ALL DLC tasks.
@@ -133,3 +141,17 @@ def _kill_stale_gpu_processes(sender, **kwargs):
                 pass  # never let the reaper die on a transient error
 
     _threading.Thread(target=_reaper_loop, daemon=True, name="dlc-reaper").start()
+
+
+@worker_process_init.connect
+def _kill_orphans_on_child_init(sender=None, **kwargs):
+    """Clean up orphan DLC subprocess PIDs on each prefork-child startup.
+    This catches the case where the previous child was SIGKILLed by Celery's
+    hard task_time_limit, leaving the spawned training/analyze subprocess
+    orphaned and still holding the GPU."""
+    import redis as _redis_mod
+    _r = _redis_mod.Redis.from_url(
+        os.environ.get("CELERY_RESULT_BACKEND", "redis://redis:6379/0"),
+        decode_responses=True,
+    )
+    _kill_orphaned_dlc_subprocesses(_r)
