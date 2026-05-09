@@ -3813,6 +3813,49 @@
         saveStatus.className   = "config-save-status";
       }, 3000);
     });
+
+    // ── Repair YAML ─────────────────────────────────────────────
+    // Fixes common config corruption (e.g. video paths broken across two
+    // lines in video_sets that make YAML scanner choke). Backs up the
+    // original on disk, applies the repair, refreshes the editor, and
+    // reports the result.
+    const repairBtn = document.getElementById("repair-dlc-config-btn");
+    if (repairBtn) {
+      repairBtn.addEventListener("click", async () => {
+        repairBtn.disabled     = true;
+        saveStatus.textContent = "Scanning…";
+        saveStatus.className   = "config-save-status";
+        try {
+          const res  = await fetch("/dlc/project/config/repair", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) {
+            saveStatus.textContent = data.error || `Repair failed (HTTP ${res.status})`;
+            saveStatus.className   = "config-save-status err";
+          } else if (data.repaired) {
+            // Write the fresh content back into the editor so the user sees the fix.
+            editor.value = data.content || editor.value;
+            const bak = data.backup_path ? ` Backup: ${data.backup_path.split("/").pop()}` : "";
+            const parseNote = data.parse_ok ? "" : ` (still doesn't parse: ${data.parse_error || "?"})`;
+            saveStatus.textContent = `Fixed ${data.n_fixes} issue${data.n_fixes !== 1 ? "s" : ""}.${bak}${parseNote}`;
+            saveStatus.className   = data.parse_ok ? "config-save-status ok" : "config-save-status err";
+          } else if (!data.parse_ok) {
+            saveStatus.textContent = `Nothing matched the known patterns; YAML still doesn't parse: ${data.parse_error || "?"}`;
+            saveStatus.className   = "config-save-status err";
+          } else {
+            saveStatus.textContent = "Nothing to fix — config already parses cleanly.";
+            saveStatus.className   = "config-save-status ok";
+          }
+        } catch (err) {
+          saveStatus.textContent = `Network error: ${err.message}`;
+          saveStatus.className   = "config-save-status err";
+        }
+        repairBtn.disabled = false;
+        setTimeout(() => {
+          saveStatus.textContent = "";
+          saveStatus.className   = "config-save-status";
+        }, 8000);
+      });
+    }
   })();
 
   // ── Create Training Dataset ──────────────────────────────────

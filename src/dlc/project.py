@@ -189,6 +189,91 @@ def save_dlc_project_config():
     return jsonify({"status": "saved"})
 
 
+# ── Common-typo repair for DLC config.yaml ────────────────────────
+# Pattern catches the most common DLC config corruption: a video path
+# that got soft-wrapped across two lines under `video_sets:`. The artifact
+# looks like:
+#
+#   video_sets:
+#     /user-data/.../RatBox<SP>
+#         Videos/.../foo.avi:
+#       crop: 0, 1376, 0, 900
+#
+# The path key is split across two lines (a literal newline mid-path).
+# YAML's scanner reads the continuation as a child mapping and dies with
+# "mapping values are not allowed here" — every DLC operation that loads
+# the config (train, analyze, machine-label) then fails.
+#
+# Fix: rejoin the path onto one line. Matches a line under video_sets
+# (≥2-space indent, starts with `/`, ends with whitespace + newline)
+# followed by a deeper-indented line that ends in `:` (so we don't
+# accidentally swallow a `crop:` value line).
+_BROKEN_PATH_RE = _re_compile_path_break = __import__("re").compile(
+    r"^(  /\S[^\n]*?) +\n {4,}(\S[^\n]*?:\s*)$",
+    __import__("re").MULTILINE,
+)
+
+
+def _repair_dlc_config_text(text: str) -> tuple[str, int]:
+    """Apply known config.yaml repairs in-place. Returns (new_text, n_fixes)."""
+    new_text, n = _BROKEN_PATH_RE.subn(r"\1 \2", text)
+    return new_text, n
+
+
+@bp.route("/dlc/project/config/repair", methods=["POST"])
+def repair_dlc_project_config():
+    """Detect and fix common DLC config.yaml corruption (multi-line video paths).
+
+    Workflow:
+      1. Read the active project's config.yaml from disk.
+      2. Apply known repairs (currently: rejoin video paths broken across lines).
+      3. If anything changed, back up the original to config.yaml.bak.<ts>
+         and write the repaired content.
+      4. Try to parse the (possibly repaired) YAML and report the result.
+
+    Response:
+      { repaired: bool, n_fixes: int, parse_ok: bool, parse_error?: str,
+        backup_path?: str, content: <new file text> }
+    """
+    raw = _ctx.redis_client().get(_dlc_key())
+    if not raw:
+        return jsonify({"error": "No active DLC project."}), 400
+    project_data = json.loads(raw)
+    config_path  = Path(project_data.get("config_path", "") or "")
+    if not config_path.is_file():
+        return jsonify({"error": "config.yaml not found in project."}), 404
+
+    original = config_path.read_text()
+    repaired, n_fixes = _repair_dlc_config_text(original)
+
+    backup_path = None
+    if n_fixes > 0:
+        from datetime import datetime as _dt
+        backup_path = config_path.with_suffix(
+            f".yaml.bak.{_dt.now().strftime('%Y%m%d-%H%M%S')}"
+        )
+        backup_path.write_text(original)
+        config_path.write_text(repaired)
+
+    # Probe the (possibly repaired) file with a strict YAML parse so the
+    # caller knows whether the file is now loadable.
+    try:
+        import yaml as _yaml
+        _yaml.safe_load(repaired)
+        parse_ok, parse_error = True, None
+    except Exception as e:
+        parse_ok, parse_error = False, str(e)[:600]
+
+    return jsonify({
+        "repaired":    n_fixes > 0,
+        "n_fixes":     n_fixes,
+        "parse_ok":    parse_ok,
+        "parse_error": parse_error,
+        "backup_path": str(backup_path) if backup_path else None,
+        "content":     repaired,
+    })
+
+
 @bp.route("/dlc/project/upload", methods=["POST"])
 def dlc_project_upload():
     """
