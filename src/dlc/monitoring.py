@@ -240,11 +240,18 @@ def dlc_training_jobs():
         job = _ctx.redis_client().hgetall(redis_key)
         if not job:
             return None
-        if job.get("status") == "running":
-            celery_state = AsyncResult(jid, app=_ctx.celery()).state
-            if celery_state not in _LIVE_CELERY_STATES:
-                _ctx.redis_client().hset(redis_key, "status", "dead")
-                job["status"] = "dead"
+        celery_state = AsyncResult(jid, app=_ctx.celery()).state
+        if job.get("status") == "running" and celery_state not in _LIVE_CELERY_STATES:
+            _ctx.redis_client().hset(redis_key, "status", "dead")
+            job["status"] = "dead"
+        elif (
+            job.get("status") in ("dead", "stopped")
+            and celery_state in _LIVE_CELERY_STATES
+        ):
+            # Reaper false-positive: Celery still considers the task running.
+            # Trust the live Celery state and flip the Redis flag back.
+            _ctx.redis_client().hset(redis_key, "status", "running")
+            job["status"] = "running"
         return job
 
     jobs = []
