@@ -406,6 +406,14 @@ def _dlc_train_subprocess(config_path: str, kwargs: dict, log_path: str) -> None
             # a stuck cuda.synchronize() cannot prevent the process from exiting
             # (parent will escalate to SIGKILL after ~10 s regardless).
             _cuda_cleanup_with_timeout(timeout=10)
+            # Restore stdio BEFORE the `with open` block closes _f.
+            # billiard's spawn cleanup writes a final exit message to
+            # sys.stderr after the target returns; if sys.stderr still
+            # points at the closed log file, ValueError raises and the
+            # subprocess exits with code 1 — the parent then treats a
+            # successful run as failure (proc.exitcode != 0).
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
 
 
 @celery.task(
@@ -1026,6 +1034,14 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
             # reclaims the CUDA context immediately rather than lazily.
             # Wrapped in a timed thread so a stuck synchronize() can't hang.
             _cuda_cleanup_with_timeout(timeout=10)
+            # Restore stdio BEFORE the `with open` block closes _f.
+            # billiard's spawn cleanup writes a final exit message to
+            # sys.stderr after the target returns; if sys.stderr still
+            # points at the closed log file, ValueError raises and the
+            # subprocess exits with code 1 — the parent then treats a
+            # successful run as failure (proc.exitcode != 0).
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
 
 
 @celery.task(bind=True, name="tasks.dlc_analyze", acks_late=False)
@@ -1343,6 +1359,15 @@ def _dlc_clv_subprocess(config_path: str, video_path: str, params: dict, log_pat
             import traceback as _tb
             _f.write("\n__CLV_ERROR__\n")
             _f.write(_tb.format_exc())
+        finally:
+            # Restore stdio BEFORE the `with open` block closes _f.
+            # billiard's spawn cleanup writes a final exit message to
+            # sys.stderr after the target returns; if sys.stderr still
+            # points at the closed log file, ValueError raises and the
+            # subprocess exits with code 1 — the parent then treats a
+            # successful run as failure (proc.exitcode != 0).
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
 
 
 @celery.task(bind=True, name="tasks.dlc_create_labeled_video", acks_late=False)
@@ -1843,6 +1868,14 @@ def _dlc_machine_label_subprocess(
             _f.write(_tb.format_exc())
         finally:
             _cuda_cleanup_with_timeout(timeout=10)
+            # Restore stdio BEFORE the `with open` block closes _f.
+            # billiard's spawn cleanup writes a final exit message to
+            # sys.stderr after the target returns; if sys.stderr still
+            # points at the closed log file, ValueError raises and the
+            # subprocess exits with code 1 — the parent then treats a
+            # successful run as failure (proc.exitcode != 0).
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
 
 
 @celery.task(bind=True, name="tasks.dlc_machine_label_frames", acks_late=False)
