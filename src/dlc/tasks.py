@@ -95,6 +95,61 @@ def _sanitize_dlc_config_yaml(config_path: str | Path) -> None:
         cfg_path.write_text("".join(out), encoding="utf-8")
 
 
+def _sanitize_pytorch_config_yaml(path: str | Path) -> bool:
+    """Fix DLC PyTorch backend's duplicate `snapshots:` key in pytorch_config.yaml.
+
+    Observed bug: DLC's PyTorch config writer emits BOTH an empty `snapshots:`
+    line and a populated `snapshots:` block consecutively under `runner:`,
+    e.g.
+
+        runner:
+          ...
+          snapshots:                       <- empty (None)
+          snapshots:                       <- populated
+            max_snapshots: 5
+            save_epochs: 25
+            save_optimizer_state: false
+
+    PyYAML's safe_load silently keeps the LAST value for duplicate keys, so
+    most callers don't notice. But DLC reads pytorch_config.yaml back with
+    ruamel.yaml in strict mode, which raises DuplicateKeyError — training
+    fails before it can load the model.
+
+    Backs up the original to <path>.bak.dup-snapshots on first repair, then
+    rewrites with the empty placeholder removed. Idempotent; returns True
+    iff a change was made.
+    """
+    p = Path(path)
+    if not p.is_file():
+        return False
+    text = p.read_text(encoding="utf-8")
+    # Empty `snapshots:` line followed (at SAME indent) by a populated
+    # `snapshots:` block. We only delete the empty one.
+    pat = re.compile(
+        r'^(\s+)snapshots:[ \t]*\n(\1snapshots:[ \t]*\n(?:\1[ \t]+[^\n]+\n)+)',
+        re.MULTILINE,
+    )
+    new_text, n = pat.subn(r'\2', text)
+    if n == 0:
+        return False
+    bak = Path(str(p) + ".bak.dup-snapshots")
+    if not bak.exists():
+        bak.write_text(text, encoding="utf-8")
+    p.write_text(new_text, encoding="utf-8")
+    return True
+
+
+def _sanitize_all_pytorch_configs(project_path: str | Path) -> int:
+    """Run _sanitize_pytorch_config_yaml on every pytorch_config.yaml under
+    the project's dlc-models-pytorch tree. Cheap (a handful of files) and
+    idempotent. Returns the number of files repaired."""
+    n = 0
+    for p in Path(project_path).glob("dlc-models-pytorch/**/pytorch_config.yaml"):
+        if _sanitize_pytorch_config_yaml(p):
+            n += 1
+    return n
+
+
 # ── DLC Create Training Dataset ───────────────────────────────────
 @celery.task(bind=True, name="tasks.dlc_create_training_dataset")
 def dlc_create_training_dataset(self, config_path: str, num_shuffles: int = 1, freeze_split: bool = True):
@@ -505,6 +560,23 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
                 f"  {_td_dir}\n\n"
                 "Please run 'Create Training Dataset' before training the network."
             )
+
+        # Repair DLC PyTorch backend's duplicate `snapshots:` key in
+        # pytorch_config.yaml before DLC reads it back with ruamel.yaml
+        # (which raises DuplicateKeyError on the duplicate). Cheap pass over
+        # all pytorch_config.yaml files in the project; idempotent.
+        if engine == "pytorch":
+            try:
+                _n_repaired = _sanitize_all_pytorch_configs(_project_dir)
+                if _n_repaired:
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={"progress": 8,
+                              "stage": f"Repaired {_n_repaired} pytorch_config.yaml file(s)",
+                              "log": ""},
+                    )
+            except Exception:
+                pass  # never let a sanitizer crash block training
 
         kwargs = {k: v for k, v in params.items() if v is not None}
 
@@ -1111,6 +1183,14 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
             raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
         if not os.path.exists(target_path):
             raise FileNotFoundError(f"Target not found: {target_path}")
+
+        # Repair DLC PyTorch backend's duplicate `snapshots:` key in
+        # pytorch_config.yaml — analyze_videos reads it back with ruamel.yaml
+        # and would otherwise fail with DuplicateKeyError.
+        try:
+            _sanitize_all_pytorch_configs(Path(config_path).parent)
+        except Exception:
+            pass
 
         init_log = (
             f"config_path  : {config_path}\n"
@@ -1920,6 +2000,14 @@ def dlc_machine_label_frames(
             raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
         if not os.path.isdir(labeled_data_path):
             raise FileNotFoundError(f"Frames folder not found: {labeled_data_path}")
+
+        # Repair DLC PyTorch backend's duplicate `snapshots:` key in
+        # pytorch_config.yaml — DLC reads it back with ruamel.yaml during
+        # ML inference and would otherwise fail with DuplicateKeyError.
+        try:
+            _sanitize_all_pytorch_configs(Path(config_path).parent)
+        except Exception:
+            pass
 
         init_log = (
             f"config_path:       {config_path}\n"
