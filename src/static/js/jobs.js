@@ -18,6 +18,16 @@ const State = {
 
 const POLL_MS = 3000;
 
+function _escapeHtml(s) {
+  if (s == null) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // ─── Rail rendering ──────────────────────────────────────────────────────
 function _statusGlyph(status) {
   return ({
@@ -66,16 +76,16 @@ function _renderRail(jobs) {
     const status = j.status || "";
     const isSel = id === State.selectedTaskId ? "selected" : "";
     return `
-      <div class="jobs-row ${isSel}" data-task-id="${id}" data-status="${status}">
+      <div class="jobs-row ${isSel}" data-task-id="${_escapeHtml(id)}" data-status="${_escapeHtml(status)}">
         <div class="jobs-row-top">
-          <span class="jobs-row-op">${op}</span>
-          <span class="jobs-row-id">${id.slice(0, 8)}</span>
-          <span class="jobs-row-status" style="color:${_statusColor(status)}">${_statusGlyph(status)} ${status}</span>
+          <span class="jobs-row-op">${_escapeHtml(op)}</span>
+          <span class="jobs-row-id">${_escapeHtml(id.slice(0, 8))}</span>
+          <span class="jobs-row-status" style="color:${_statusColor(status)}">${_statusGlyph(status)} ${_escapeHtml(status)}</span>
         </div>
         <div class="jobs-row-meta">
-          <span>${j.project || ""}</span>
-          <span>GPU${j.gpu_id || "?"}</span>
-          <span>${_formatRuntime(j.started_at)}</span>
+          <span>${_escapeHtml(j.project || "")}</span>
+          <span>GPU${_escapeHtml(j.gpu_id || "?")}</span>
+          <span>${_escapeHtml(_formatRuntime(j.started_at))}</span>
         </div>
       </div>`;
   }).join("");
@@ -89,8 +99,17 @@ async function _fetchJobs() {
     const res = await fetch("/dlc/training/jobs");
     if (!res.ok) return;
     const data = await res.json();
+    const isFirstFetch = State.jobs.length === 0;
     State.jobs = data.jobs || [];
     _renderRail(State.jobs);
+    // Auto-select the most-recent running job on first load (only — don't
+    // hijack the user's selection on subsequent polls).
+    if (isFirstFetch && !State.selectedTaskId) {
+      const firstRunning = State.jobs.find(j => j.status === "running");
+      if (firstRunning && firstRunning.task_id) {
+        _onRowClick(firstRunning.task_id);
+      }
+    }
   } catch (err) {
     console.error("[jobs] _fetchJobs failed:", err);
   }
@@ -125,13 +144,13 @@ function _renderDetailHeader(job) {
     : "?";
   return `
     <div class="jobs-detail-header">
-      <h3>${(job.operation || "train")} ${job.task_id || ""}</h3>
+      <h3>${_escapeHtml(job.operation || "train")} ${_escapeHtml(job.task_id || "")}</h3>
       <div class="jobs-detail-meta">
-        <span>project: ${job.project || "?"}</span>
-        <span>engine: ${job.engine || "?"}</span>
-        <span>GPU${job.gpu_id || "?"}</span>
-        <span>started: ${startedTxt}</span>
-        <span>status: ${status}</span>
+        <span>project: ${_escapeHtml(job.project || "?")}</span>
+        <span>engine: ${_escapeHtml(job.engine || "?")}</span>
+        <span>GPU${_escapeHtml(job.gpu_id || "?")}</span>
+        <span>started: ${_escapeHtml(startedTxt)}</span>
+        <span>status: ${_escapeHtml(status)}</span>
       </div>
       ${showStop ? `<button class="jobs-stop-btn" data-action="stop">Stop</button>` : ""}
     </div>
@@ -165,8 +184,29 @@ function _openStream(taskId, terminalEl) {
     terminalEl.textContent += ev.data + "\n";
     if (wasBottom) terminalEl.scrollTop = terminalEl.scrollHeight;
   });
+  let retryArmed = true;
   es.addEventListener("error", () => {
-    _setStatusPill("disconnected (server unreachable)", "error");
+    if (retryArmed) {
+      retryArmed = false;
+      _setStatusPill("reconnecting…", "paused");
+      // Browsers auto-reconnect EventSource by default; give it 2s. If a
+      // second 'error' fires within that window OR no 'message' arrives,
+      // close and surface Reconnect.
+      setTimeout(() => {
+        if (es.readyState === EventSource.CLOSED || es.readyState === EventSource.CONNECTING) {
+          _setStatusPill("disconnected (server unreachable)", "error");
+          es.close();
+          _showReconnectButton();
+        } else {
+          retryArmed = true;  // back to live; re-arm
+          _setStatusPill("live · streaming", "live");
+        }
+      }, 2000);
+    } else {
+      _setStatusPill("disconnected (server unreachable)", "error");
+      es.close();
+      _showReconnectButton();
+    }
   });
   State.eventSource = es;
   _setStatusPill("live · streaming", "live");
