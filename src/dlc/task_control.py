@@ -20,7 +20,7 @@ import os
 import signal
 import time
 
-from flask import Blueprint, Response, jsonify, stream_with_context
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from . import ctx as _ctx
 
@@ -238,3 +238,21 @@ def task_log_stream(task_id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@bp.route("/dlc/task/<task_id>/log-tail")
+def task_log_tail(task_id: str):
+    """Return the last N log lines for a task — backfill for the /jobs page.
+
+    Read-only, idempotent, no session state. Used by jobs.js to populate the
+    terminal pane before opening the SSE stream.
+    """
+    try:
+        n = int(request.args.get("n", 2000))
+    except (TypeError, ValueError):
+        n = 2000
+    n = max(1, min(n, 10000))
+    r = _ctx.redis_client()
+    log_key = f"dlc_task:{task_id}:log"
+    lines = r.lrange(log_key, -n, -1)
+    return jsonify({"lines": lines, "total": r.llen(log_key)})
