@@ -196,6 +196,21 @@ def fake_redis():
             lst = self._lists.get(name, [])
             return lst.pop(0) if lst else None
 
+        def lrange(self, name, start, end):
+            """Mirror Redis LRANGE semantics: end is INCLUSIVE; -1 means last."""
+            lst = self._lists.get(name, [])
+            n = len(lst)
+            if not lst:
+                return []
+            # Normalise negative indices
+            s = start if start >= 0 else max(0, n + start)
+            e = end if end >= 0 else n + end
+            # Redis end is inclusive; clamp e to n-1
+            e = min(e, n - 1)
+            if s > e:
+                return []
+            return list(lst[s:e + 1])
+
         # ─────────────────────────────────────────────────────────────
         def setex(self, key, seconds, value):
             self._store[key] = value
