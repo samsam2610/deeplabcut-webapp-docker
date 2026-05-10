@@ -56,3 +56,41 @@ def test_log_tail_unknown_task_returns_empty_list(flask_test_client):
     data = res.get_json()
     assert data["lines"] == []
     assert data["total"] == 0
+
+
+# ── /dlc/training/jobs reconciliation ────────────────────────────────────────
+
+def test_jobs_endpoint_force_running_when_celery_live(flask_test_client):
+    """If Redis says 'dead' but Celery state is live, the response must show 'running'."""
+    client, app_module, redis, _, _ = flask_test_client
+    _auth(client)
+    redis.zadd("dlc_train_jobs", {"tL": 12345.0})
+    redis.hset("dlc_train_job:tL", mapping={
+        "task_id": "tL", "status": "dead", "engine": "pytorch",
+        "project": "TestProj", "gpu_id": "0", "started_at": "12345.0",
+    })
+    fake_async = type("FA", (), {"state": "PROGRESS"})
+    with patch("dlc.monitoring.AsyncResult", return_value=fake_async):
+        res = client.get("/dlc/training/jobs")
+    assert res.status_code == 200
+    jobs = res.get_json()["jobs"]
+    target = next((j for j in jobs if j.get("task_id") == "tL"), None)
+    assert target is not None, jobs
+    assert target["status"] == "running"
+
+
+def test_jobs_endpoint_running_when_celery_terminal_marks_dead(flask_test_client):
+    """The pre-existing direction is preserved: running → dead when Celery is gone."""
+    client, _, redis, _, _ = flask_test_client
+    _auth(client)
+    redis.zadd("dlc_train_jobs", {"tD": 99999.0})
+    redis.hset("dlc_train_job:tD", mapping={
+        "task_id": "tD", "status": "running", "engine": "pytorch",
+        "project": "TestProj", "gpu_id": "0", "started_at": "99999.0",
+    })
+    fake_async = type("FA", (), {"state": "SUCCESS"})  # not in _LIVE_CELERY_STATES
+    with patch("dlc.monitoring.AsyncResult", return_value=fake_async):
+        res = client.get("/dlc/training/jobs")
+    target = next((j for j in res.get_json()["jobs"] if j.get("task_id") == "tD"), None)
+    assert target is not None
+    assert target["status"] == "dead"
