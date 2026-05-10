@@ -31,3 +31,13 @@ def test_jobs_page_redirects_to_login_when_unauth(flask_test_client):
     client, _, _, _, _ = flask_test_client
     res = client.get("/jobs")
     assert res.status_code in (302, 401)
+
+
+def test_nav_button_appears_on_base_template(flask_test_client):
+    client, _, _, _, _ = flask_test_client
+    _auth(client)
+    res = client.get("/")
+    assert res.status_code == 200
+    body = res.get_data(as_text=True)
+    assert 'href="/jobs"' in body
+    assert ">Jobs<" in body  # visible label text
