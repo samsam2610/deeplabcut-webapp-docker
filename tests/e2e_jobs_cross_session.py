@@ -138,3 +138,80 @@ def test_stop_works_from_session_that_did_not_start_it(live_redis):
             br.close()
     finally:
         cleanup_test_job(live_redis, "tCROSS-3")
+
+
+def test_visibility_pause_resume(live_redis):
+    seed_test_job(live_redis, "tVIS", project="visibility-test")
+    live_redis.rpush("dlc_task:tVIS:log", "initial line")
+    try:
+        with sync_playwright() as p:
+            br, _, page = _new_authenticated_context(p, BASE_URL, APP_TOKEN)
+            page.goto(f"{BASE_URL}/jobs")
+            page.wait_for_selector('[data-task-id="tVIS"]', timeout=10000)
+            page.click('[data-task-id="tVIS"]')
+            page.wait_for_function(
+                "() => document.getElementById('jobs-status-pill').textContent.includes('live')",
+                timeout=5000,
+            )
+            # Simulate tab hide → pill flips to paused
+            page.evaluate(
+                "Object.defineProperty(document, 'hidden', {value: true, configurable: true});"
+                " document.dispatchEvent(new Event('visibilitychange'));"
+            )
+            page.wait_for_function(
+                "() => document.getElementById('jobs-status-pill').textContent.includes('paused')",
+                timeout=2000,
+            )
+            # New log line lands while hidden
+            live_redis.rpush("dlc_task:tVIS:log", "lined while hidden")
+            # Show again → pill back to live, terminal contains the new line
+            page.evaluate(
+                "Object.defineProperty(document, 'hidden', {value: false, configurable: true});"
+                " document.dispatchEvent(new Event('visibilitychange'));"
+            )
+            page.wait_for_function(
+                "() => document.getElementById('jobs-status-pill').textContent.includes('live')",
+                timeout=5000,
+            )
+            page.wait_for_function(
+                "() => document.getElementById('jobs-terminal').textContent.includes('lined while hidden')",
+                timeout=5000,
+            )
+            br.close()
+    finally:
+        cleanup_test_job(live_redis, "tVIS")
+        live_redis.delete("dlc_task:tVIS:log")
+
+
+def test_idle_timeout_shows_reconnect(live_redis):
+    seed_test_job(live_redis, "tIDLE", project="idle-test")
+    try:
+        with sync_playwright() as p:
+            br, _, page = _new_authenticated_context(p, BASE_URL, APP_TOKEN)
+            # Force a 500ms idle timeout via the test seam
+            page.goto(f"{BASE_URL}/jobs?_test_idle_ms=500")
+            page.wait_for_selector('[data-task-id="tIDLE"]', timeout=10000)
+            page.click('[data-task-id="tIDLE"]')
+            # Hide and wait > 500 ms
+            page.evaluate(
+                "Object.defineProperty(document, 'hidden', {value: true, configurable: true});"
+                " document.dispatchEvent(new Event('visibilitychange'));"
+            )
+            page.wait_for_timeout(900)  # comfortably past the 500ms timeout
+            # Reconnect button must appear
+            page.wait_for_selector(".jobs-reconnect-btn", timeout=2000)
+            # Pill should say 'closed'
+            assert "closed" in page.text_content("#jobs-status-pill")
+            # Click reconnect → button removed, pill back to 'live'
+            page.evaluate(
+                "Object.defineProperty(document, 'hidden', {value: false, configurable: true});"
+                " document.dispatchEvent(new Event('visibilitychange'));"
+            )
+            page.click(".jobs-reconnect-btn")
+            page.wait_for_function(
+                "() => !document.querySelector('.jobs-reconnect-btn')",
+                timeout=2000,
+            )
+            br.close()
+    finally:
+        cleanup_test_job(live_redis, "tIDLE")
