@@ -128,12 +128,11 @@ def test_stop_works_from_session_that_did_not_start_it(live_redis):
             # Auto-confirm the dialog
             page.on("dialog", lambda d: d.accept())
             page.click('button[data-action="stop"]')
-            # Status flips to 'stopped' on the next list poll cycle
+            # Path B (no live PID) removes the job from the listing zset
+            # entirely. The row disappears from the rail on the next list
+            # poll — that's the user-visible confirmation that stop worked.
             page.wait_for_function(
-                """() => {
-                    const row = document.querySelector('[data-task-id="tCROSS-3"]');
-                    return row && row.dataset.status === 'stopped';
-                }""",
+                """() => !document.querySelector('[data-task-id="tCROSS-3"]')""",
                 timeout=10000,
             )
             br.close()
