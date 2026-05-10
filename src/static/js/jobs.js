@@ -182,6 +182,28 @@ async function _showJob(taskId) {
   const terminal = detail.querySelector("#jobs-terminal");
   await _backfillLog(taskId, terminal);
   _openStream(taskId, terminal);
+
+  const stopBtn = detail.querySelector('button[data-action="stop"]');
+  if (stopBtn) {
+    stopBtn.addEventListener("click", async () => {
+      const ok = window.confirm(`Stop ${job.operation || "task"} ${taskId}?\n\nThis cannot be undone.`);
+      if (!ok) return;
+      stopBtn.disabled = true;
+      try {
+        const res = await fetch(`/dlc/task/${taskId}/terminate`, { method: "POST" });
+        if (!res.ok) {
+          const errText = await res.text();
+          alert(`Stop failed: ${errText}`);
+          stopBtn.disabled = false;
+          return;
+        }
+        // Status flip surfaces on the next list poll (within ~3s).
+      } catch (err) {
+        alert(`Stop failed: ${err.message}`);
+        stopBtn.disabled = false;
+      }
+    });
+  }
 }
 
 // ─── Row click ──────────────────────────────────────────────────────────
