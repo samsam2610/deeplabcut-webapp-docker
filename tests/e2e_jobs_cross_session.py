@@ -36,6 +36,23 @@ def live_redis():
     yield r
 
 
+@pytest.fixture(autouse=True)
+def _settle_between_tests(live_redis):
+    """Settle between Playwright tests to let prior SSE workers detect their
+    closed connections. Without this, the 4 sync gunicorn workers can stay
+    busy in stale SSE generators long enough to time out the next test's
+    Page.goto. Pre-emptively delete known seeded log keys so any still-running
+    generator notices the empty key on its next poll and exits."""
+    import time as _time
+    # Pre-clean SSE log keys for known seeded task ids (idempotent if absent)
+    for tid in ("tCROSS-1", "tCROSS-2", "tCROSS-3", "tVIS", "tIDLE"):
+        live_redis.delete(f"dlc_task:{tid}:log")
+    yield
+    # Brief post-test settle — gives sync gunicorn workers ~1s of poll
+    # window to detect the closed EventSource and free the slot.
+    _time.sleep(3.0)
+
+
 def seed_test_job(r, task_id: str, *, op: str = "train",
                   status: str = "running", project: str = "test-project",
                   gpu_id: str = "0") -> None:
