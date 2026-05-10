@@ -94,3 +94,62 @@ def test_jobs_endpoint_running_when_celery_terminal_marks_dead(flask_test_client
     target = next((j for j in res.get_json()["jobs"] if j.get("task_id") == "tD"), None)
     assert target is not None
     assert target["status"] == "dead"
+
+
+# ── Cross-session correctness pins ───────────────────────────────────────────
+
+def test_jobs_endpoint_no_uid_in_payload(flask_test_client):
+    """The wire format must not leak any session/uid identifiers."""
+    client, _, redis, _, _ = flask_test_client
+    _auth(client)
+    redis.zadd("dlc_train_jobs", {"tA": 1.0})
+    redis.hset("dlc_train_job:tA", mapping={
+        "task_id": "tA", "status": "running", "engine": "pytorch",
+        "project": "P", "gpu_id": "0", "started_at": "1.0",
+    })
+    fake_async = type("FA", (), {"state": "PROGRESS"})
+    with patch("dlc.monitoring.AsyncResult", return_value=fake_async):
+        res = client.get("/dlc/training/jobs")
+    body = res.get_data(as_text=True)
+    for forbidden in ("uid", '"user"', '"session"', "webapp:"):
+        assert forbidden not in body, f"{forbidden!r} leaked into response: {body[:300]}"
+
+
+def test_jobs_endpoint_lists_jobs_across_sessions(flask_test_client):
+    """A task seeded in 'session A's redis must appear when 'session B' fetches the list.
+
+    Sessions are simulated by clearing Flask cookies between requests; the underlying
+    Redis state is shared (which is the whole point of the design)."""
+    client, _, redis, _, _ = flask_test_client
+    _auth(client)
+    redis.zadd("dlc_train_jobs", {"tCross": 1.0})
+    redis.hset("dlc_train_job:tCross", mapping={
+        "task_id": "tCross", "status": "running", "engine": "pytorch",
+        "project": "Pcross", "gpu_id": "0", "started_at": "1.0",
+    })
+    fake_async = type("FA", (), {"state": "PROGRESS"})
+
+    # Simulate 'session B' by clearing all cookies on the test client.
+    client.delete_cookie("session")
+    _auth(client)  # re-auth as a fresh session
+    with patch("dlc.monitoring.AsyncResult", return_value=fake_async):
+        res = client.get("/dlc/training/jobs")
+    assert res.status_code == 200
+    ids = [j.get("task_id") for j in res.get_json()["jobs"]]
+    assert "tCross" in ids
+
+
+def test_terminate_endpoint_works_without_session_state(flask_test_client):
+    """POST /dlc/task/<id>/terminate must not 500 on a missing PID — should return 404
+    or 200 with a plain 'task not found' / 'stopped' body."""
+    client, _, redis, _, _ = flask_test_client
+    _auth(client)
+    # Seed a finished job (no PID key) — drives the "Path B" cleanup
+    redis.zadd("dlc_train_jobs", {"tNoPid": 1.0})
+    redis.hset("dlc_train_job:tNoPid", mapping={
+        "task_id": "tNoPid", "status": "running", "engine": "pytorch",
+        "project": "P", "gpu_id": "0", "started_at": "1.0",
+    })
+    res = client.post("/dlc/task/tNoPid/terminate")
+    assert res.status_code in (200, 404), res.get_data(as_text=True)
+    assert res.get_json() is not None  # JSON body, not HTML traceback

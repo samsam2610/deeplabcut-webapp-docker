@@ -138,6 +138,14 @@ def fake_redis():
         def hget(self, name, key):
             return self._hstore.get(name, {}).get(key)
 
+        def exists(self, *keys):
+            count = 0
+            for k in keys:
+                if (k in self._store or k in self._hstore or k in self._zsets
+                        or k in self._sets or k in self._lists):
+                    count += 1
+            return count
+
         def expire(self, key, seconds):
             pass
 
