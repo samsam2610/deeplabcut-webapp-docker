@@ -71,3 +71,71 @@ def _new_authenticated_context(p, base_url: str, token: str):
     # Authenticate once; cookie persists in this context only.
     page.goto(f"{base_url}/?token={token}", wait_until="domcontentloaded")
     return browser, ctx, page
+
+
+def test_job_visible_from_session_that_did_not_start_it(live_redis):
+    seed_test_job(live_redis, "tCROSS-1", project="cross-test-1")
+    try:
+        with sync_playwright() as p:
+            # Session A — the "originating" session. Authenticates but never visits /jobs.
+            br_a, ctx_a, page_a = _new_authenticated_context(p, BASE_URL, APP_TOKEN)
+            # Session B — completely separate context. Visits /jobs.
+            br_b, ctx_b, page_b = _new_authenticated_context(p, BASE_URL, APP_TOKEN)
+            page_b.goto(f"{BASE_URL}/jobs")
+            page_b.wait_for_selector('[data-task-id="tCROSS-1"]', timeout=10000)
+            br_a.close(); br_b.close()
+    finally:
+        cleanup_test_job(live_redis, "tCROSS-1")
+
+
+def test_log_visible_from_session_that_did_not_start_it(live_redis):
+    seed_test_job(live_redis, "tCROSS-2", project="cross-test-2")
+    live_redis.rpush("dlc_task:tCROSS-2:log", "Epoch 1/3 ...", "Epoch 2/3 ...", "Epoch 3/3 ...")
+    try:
+        with sync_playwright() as p:
+            br, _, page = _new_authenticated_context(p, BASE_URL, APP_TOKEN)
+            page.goto(f"{BASE_URL}/jobs")
+            page.wait_for_selector('[data-task-id="tCROSS-2"]', timeout=10000)
+            page.click('[data-task-id="tCROSS-2"]')
+            page.wait_for_function(
+                """() => {
+                    const t = document.querySelector('#jobs-terminal');
+                    return t && t.textContent.includes('Epoch 3/3');
+                }""",
+                timeout=10000,
+            )
+            term_text = page.text_content("#jobs-terminal")
+            assert "Epoch 1/3" in term_text
+            assert "Epoch 2/3" in term_text
+            assert "Epoch 3/3" in term_text
+            br.close()
+    finally:
+        cleanup_test_job(live_redis, "tCROSS-2")
+        live_redis.delete("dlc_task:tCROSS-2:log")
+
+
+def test_stop_works_from_session_that_did_not_start_it(live_redis):
+    """Note: terminate on a job with no PID enters Path B (direct cleanup) —
+    so it's safe to run against a seeded test job, no real subprocess involved."""
+    seed_test_job(live_redis, "tCROSS-3", project="cross-test-3")
+    try:
+        with sync_playwright() as p:
+            br, _, page = _new_authenticated_context(p, BASE_URL, APP_TOKEN)
+            page.goto(f"{BASE_URL}/jobs")
+            page.wait_for_selector('[data-task-id="tCROSS-3"]', timeout=10000)
+            page.click('[data-task-id="tCROSS-3"]')
+            page.wait_for_selector('button[data-action="stop"]', timeout=5000)
+            # Auto-confirm the dialog
+            page.on("dialog", lambda d: d.accept())
+            page.click('button[data-action="stop"]')
+            # Status flips to 'stopped' on the next list poll cycle
+            page.wait_for_function(
+                """() => {
+                    const row = document.querySelector('[data-task-id="tCROSS-3"]');
+                    return row && row.dataset.status === 'stopped';
+                }""",
+                timeout=10000,
+            )
+            br.close()
+    finally:
+        cleanup_test_job(live_redis, "tCROSS-3")
