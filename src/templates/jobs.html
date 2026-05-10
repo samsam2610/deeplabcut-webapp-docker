@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Jobs{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/jobs.css') }}">
+{% endblock %}
+
+{% block content %}
+  <main class="jobs-page">
+    <header class="jobs-header">
+      <h2>Jobs</h2>
+      <span id="jobs-status-pill" class="jobs-status-pill"></span>
+    </header>
+    <div class="jobs-layout">
+      <aside id="jobs-rail" class="jobs-rail">
+        <p class="jobs-empty">Loading…</p>
+      </aside>
+      <section id="jobs-detail" class="jobs-detail">
+        <p class="jobs-empty">Select a job to see its log.</p>
+      </section>
+    </div>
+  </main>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script type="module" src="{{ url_for('static', filename='js/jobs.js') }}"></script>
+{% endblock %}

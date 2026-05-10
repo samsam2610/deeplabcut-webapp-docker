@@ -227,6 +227,17 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/jobs")
+def jobs_page():
+    """Session-independent monitor for DLC train/analyze tasks.
+
+    Reads from global Redis state (dlc_train_jobs zset, dlc_task:<id>:log
+    list). Works in any browser session — JS does not retain task_ids
+    across page loads.
+    """
+    return render_template("jobs.html")
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if _AUTH_DISABLED or flask_session.get("authenticated"):
