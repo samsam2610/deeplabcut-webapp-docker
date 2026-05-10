@@ -109,12 +109,85 @@ function _stopListPoll() {
   }
 }
 
-// ─── Row click — placeholder; real impl lands in Task 9 ─────────────────
-function _onRowClick(taskId) {
+// ─── Detail pane: backfill + SSE stream ─────────────────────────────────
+function _setStatusPill(text, cls) {
+  const pill = document.getElementById("jobs-status-pill");
+  if (!pill) return;
+  pill.textContent = text;
+  pill.className = "jobs-status-pill " + (cls || "");
+}
+
+function _renderDetailHeader(job) {
+  const status = job.status || "";
+  const showStop = status === "running" || status === "paused";
+  const startedTxt = job.started_at
+    ? new Date(parseFloat(job.started_at) * 1000).toLocaleTimeString()
+    : "?";
+  return `
+    <div class="jobs-detail-header">
+      <h3>${(job.operation || "train")} ${job.task_id || ""}</h3>
+      <div class="jobs-detail-meta">
+        <span>project: ${job.project || "?"}</span>
+        <span>engine: ${job.engine || "?"}</span>
+        <span>GPU${job.gpu_id || "?"}</span>
+        <span>started: ${startedTxt}</span>
+        <span>status: ${status}</span>
+      </div>
+      ${showStop ? `<button class="jobs-stop-btn" data-action="stop">Stop</button>` : ""}
+    </div>
+    <pre id="jobs-terminal" class="jobs-terminal"></pre>
+  `;
+}
+
+async function _backfillLog(taskId, terminalEl) {
+  try {
+    const res = await fetch(`/dlc/task/${taskId}/log-tail?n=2000`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const lines = (data.lines || []).join("\n");
+    terminalEl.textContent = lines + (lines ? "\n" : "");
+    terminalEl.scrollTop = terminalEl.scrollHeight;
+  } catch (err) {
+    console.error("[jobs] backfill failed:", err);
+  }
+}
+
+function _isAtBottom(el) {
+  return Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop) < 6;
+}
+
+function _openStream(taskId, terminalEl) {
+  if (State.eventSource) { State.eventSource.close(); State.eventSource = null; }
+  const es = new EventSource(`/dlc/task/${taskId}/log-stream`);
+  es.addEventListener("message", (ev) => {
+    if (taskId !== State.selectedTaskId) return;  // raced past selection change
+    const wasBottom = _isAtBottom(terminalEl);
+    terminalEl.textContent += ev.data + "\n";
+    if (wasBottom) terminalEl.scrollTop = terminalEl.scrollHeight;
+  });
+  es.addEventListener("error", () => {
+    _setStatusPill("disconnected (server unreachable)", "error");
+  });
+  State.eventSource = es;
+  _setStatusPill("live · streaming", "live");
+}
+
+async function _showJob(taskId) {
   State.selectedTaskId = taskId;
   _renderRail(State.jobs);
   const detail = document.getElementById("jobs-detail");
-  if (detail) detail.innerHTML = `<p class="jobs-empty">Selected ${taskId} — log streaming lands in Task 9.</p>`;
+  if (!detail) return;
+  const job = State.jobs.find(j => j.task_id === taskId) || { task_id: taskId };
+  detail.innerHTML = _renderDetailHeader(job);
+  const terminal = detail.querySelector("#jobs-terminal");
+  await _backfillLog(taskId, terminal);
+  _openStream(taskId, terminal);
+}
+
+// ─── Row click ──────────────────────────────────────────────────────────
+function _onRowClick(taskId) {
+  if (!taskId || taskId === State.selectedTaskId) return;
+  _showJob(taskId).catch(err => console.error("[jobs] _showJob:", err));
 }
 
 // ─── Bootstrap ──────────────────────────────────────────────────────────
