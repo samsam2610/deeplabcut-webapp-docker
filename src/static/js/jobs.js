@@ -190,6 +190,68 @@ function _onRowClick(taskId) {
   _showJob(taskId).catch(err => console.error("[jobs] _showJob:", err));
 }
 
+// ─── Visibility + 20-min idle timeout ───────────────────────────────────
+const IDLE_MS_DEFAULT = 20 * 60 * 1000;
+
+function _idleMs() {
+  // Test seam: ?_test_idle_ms=500 lets E2E tests force a fast timeout.
+  // Honored only when the URL is on localhost (defensive against accidental
+  // exposure in production).
+  if (location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+    return IDLE_MS_DEFAULT;
+  }
+  const v = parseInt(new URLSearchParams(location.search).get("_test_idle_ms"), 10);
+  return Number.isFinite(v) && v > 0 ? v : IDLE_MS_DEFAULT;
+}
+
+function _showReconnectButton() {
+  const detail = document.getElementById("jobs-detail");
+  if (!detail) return;
+  if (detail.querySelector(".jobs-reconnect-btn")) return;  // already shown
+  const btn = document.createElement("button");
+  btn.className = "jobs-reconnect-btn";
+  btn.textContent = "Reconnect";
+  btn.addEventListener("click", () => {
+    btn.remove();
+    if (State.selectedTaskId) _showJob(State.selectedTaskId);
+    _startListPoll();
+  });
+  detail.appendChild(btn);
+}
+
+function _onHidden() {
+  if (State.eventSource) { State.eventSource.close(); State.eventSource = null; }
+  _stopListPoll();
+  _setStatusPill("paused (tab hidden)", "paused");
+  if (State.idleTimer) clearTimeout(State.idleTimer);
+  State.idleTimer = setTimeout(() => {
+    State.idleTimer = null;
+    _setStatusPill("closed (idle 20m — Reconnect)", "closed");
+    _showReconnectButton();
+  }, _idleMs());
+}
+
+function _onVisible() {
+  if (State.idleTimer) { clearTimeout(State.idleTimer); State.idleTimer = null; }
+  // Don't auto-resume if the idle timer already fired and the user hasn't clicked Reconnect.
+  const detail = document.getElementById("jobs-detail");
+  if (detail && detail.querySelector(".jobs-reconnect-btn")) return;
+  _startListPoll();
+  if (State.selectedTaskId) {
+    const term = document.querySelector("#jobs-terminal");
+    if (term) {
+      _backfillLog(State.selectedTaskId, term).then(() => {
+        _openStream(State.selectedTaskId, term);
+      });
+    }
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) _onHidden();
+  else                  _onVisible();
+});
+
 // ─── Bootstrap ──────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
   _startListPoll();
