@@ -14,6 +14,7 @@ from pathlib import Path
 import deeplabcut as dlc
 
 from celery_app import celery  # shared Celery instance
+from dlc._log_stream import stream_log_lines_to_redis as _stream_log_lines_to_redis
 
 
 def _sanitize_dlc_config_yaml(config_path: str | Path) -> None:
@@ -616,7 +617,7 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         _stop_emit  = _threading.Event()
         _user_killed = [False]   # mutable so the closure can set it
 
-        _log_stream_cursor = [0]   # mutable so the closure can advance it
+        _log_byte_cursor = [0]   # byte offset into log_path; closure advances it
 
         def _emit_loop():
             import signal as _sig
@@ -652,19 +653,12 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
                     break  # proc.join() will unblock shortly
 
                 try:
+                    _stream_log_lines_to_redis(
+                        _redis, log_path, log_list_key, _log_byte_cursor
+                    )
+
                     with open(log_path) as _lf:
                         _log = _lf.read()[-8000:]
-
-                    # ── Stream new log lines to Redis list (SSE feed) ─────
-                    # Read the full file, split into lines, push only the
-                    # portion after the last-seen cursor so consumers get
-                    # incremental, non-duplicated output.
-                    all_lines = _log.splitlines()
-                    new_lines = all_lines[_log_stream_cursor[0]:]
-                    if new_lines:
-                        _redis.rpush(log_list_key, *new_lines)
-                        _redis.expire(log_list_key, 7200)
-                        _log_stream_cursor[0] = len(all_lines)
 
                     self.update_state(
                         state="PROGRESS",
@@ -1222,7 +1216,7 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
             r'(\d+)%\|[^|]*\|\s*(\d+)/(\d+)\s*\[([^\]<]+)<([^\],\]]+)'
         )
 
-        _log_stream_cursor = [0]   # mutable so the closure can advance it
+        _log_byte_cursor = [0]   # byte offset into log_path; closure advances it
 
         def _emit_loop():
             import signal as _sig
@@ -1249,16 +1243,12 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
                     break
 
                 try:
+                    _stream_log_lines_to_redis(
+                        _redis, log_path, log_list_key, _log_byte_cursor
+                    )
+
                     with open(log_path) as _lf:
                         _log = _lf.read()[-8000:]
-
-                    # ── Stream new log lines to Redis list (SSE feed) ─────
-                    all_lines = _log.splitlines()
-                    new_lines = all_lines[_log_stream_cursor[0]:]
-                    if new_lines:
-                        _redis.rpush(log_list_key, *new_lines)
-                        _redis.expire(log_list_key, 7200)
-                        _log_stream_cursor[0] = len(all_lines)
 
                     # Parse tqdm progress from log
                     _tqdm_pct   = None
