@@ -198,6 +198,9 @@ services:
       context: ../
       dockerfile: deeplabcut-webapp-docker-supports/dlc-3D/Dockerfile.worker
     image: dlc-3d-worker:latest
+    # PyTorch DataLoader workers need ample /dev/shm; the default 64 MB is too
+    # small and training fails with "No space left on device" during epoch 0.
+    shm_size: "4gb"
     volumes:
       - /home/sam/data-disk/Parra-Data:/user-data/Parra-Data/Disk
       - /home/sam/synology/Parra-Lab-Data:/user-data/Parra-Data/Cloud
