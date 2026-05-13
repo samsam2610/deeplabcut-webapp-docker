@@ -192,6 +192,36 @@ services:
       - default
     restart: unless-stopped
 
+  # ── DLC-3D GPU Worker (lightning-pose + EKS) ────────────────────
+  dlc-3d-worker:
+    build:
+      context: ../
+      dockerfile: deeplabcut-webapp-docker-supports/dlc-3D/Dockerfile.worker
+    image: dlc-3d-worker:latest
+    volumes:
+      - /home/sam/data-disk/Parra-Data:/user-data/Parra-Data/Disk
+      - /home/sam/synology/Parra-Lab-Data:/user-data/Parra-Data/Cloud
+      - /home/sam/data-mount-dir:/user-data/Martin-Data/USB
+      - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src:/app
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - USER_DATA_DIR=/user-data
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: on-failure
+
 volumes:
   redis-data:
 
