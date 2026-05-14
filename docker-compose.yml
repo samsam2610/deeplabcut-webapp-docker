@@ -188,6 +188,7 @@ services:
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_launcher.html:/app/templates/partials/card_lp_launcher.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_convert.html:/app/templates/partials/card_lp_convert.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_train.html:/app/templates/partials/card_lp_train.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_predict.html:/app/templates/partials/card_lp_predict.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_eks.html:/app/templates/partials/card_lp_eks.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_jobs.html:/app/templates/partials/card_lp_jobs.html
     environment:
