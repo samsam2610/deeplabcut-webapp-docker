@@ -224,7 +224,10 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - USER_DATA_DIR=/user-data
-      - NVIDIA_VISIBLE_DEVICES=all
+      # Pin CUDA enumeration to host PCI order so device_ids matches the
+      # host's nvidia-smi index numbering. With only one device exposed
+      # below, cuda:0 inside the container == that device unconditionally.
+      - CUDA_DEVICE_ORDER=PCI_BUS_ID
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     depends_on:
       redis:
@@ -233,8 +236,13 @@ services:
       resources:
         reservations:
           devices:
+            # Pin to host PCI 1 = RTX PRO 6000 Blackwell (96 GB VRAM). LP MVT
+            # with patch masking + 3D reprojection loss at our batch_size=64
+            # OOMs on the 5090's 32 GB; the PRO 6000 handles it cleanly.
+            # Restricting to a single device also stops the FD-leak that
+            # pinned the *other* GPU to P0.
             - driver: nvidia
-              count: all
+              device_ids: ['1']
               capabilities: [gpu]
     restart: on-failure
 
