@@ -190,6 +190,7 @@ services:
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_train.html:/app/templates/partials/card_lp_train.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_predict.html:/app/templates/partials/card_lp_predict.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_eks.html:/app/templates/partials/card_lp_eks.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_videos.html:/app/templates/partials/card_lp_videos.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_jobs.html:/app/templates/partials/card_lp_jobs.html
     environment:
       - AUTH_DISABLED=true
