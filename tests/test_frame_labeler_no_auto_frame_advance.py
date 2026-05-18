@@ -18,6 +18,10 @@ def _extract_function_body(src: str, fn_name: str) -> str:
 
     Walks braces from the opening { to its matching close. Raises AssertionError
     if the function isn't found or the braces don't balance.
+
+    NOTE: the brace walk does not skip string, template, or regex literals.
+    Safe for `_flAutoAdvanceBp`, whose body contains none. Revisit if the
+    target function ever grows literals that contain `{` or `}`.
     """
     m = re.search(r"function\s+" + re.escape(fn_name) + r"\s*\([^)]*\)\s*\{", src)
     assert m, f"function {fn_name} not found in source"
