@@ -1121,8 +1121,6 @@ import { _populateGpuSelect } from './training.js';
         const next = _flBodyparts[(cur + i) % _flBodyparts.length];
         if (!frameLabels[next]) { _flSelectBp(next); return; }
       }
-      // All body parts labeled on this frame → move to next frame
-      if (_flFrameIdx < _flFrames.length - 1) _flShowFrame(_flFrameIdx + 1);
     }
 
     // ── Chip status updates ──────────────────────────────────────
