@@ -1112,7 +1112,7 @@ import { _populateGpuSelect } from './training.js';
       }
     });
 
-    // Auto-advance to the next unlabeled body part (napari behavior)
+    // Cycle to the next unlabeled body part on this frame (napari behavior)
     function _flAutoAdvanceBp() {
       const fname       = _flFrames[_flFrameIdx];
       const frameLabels = _flLabels[fname] || {};
