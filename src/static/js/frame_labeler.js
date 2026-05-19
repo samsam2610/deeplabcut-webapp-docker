@@ -25,6 +25,7 @@ import { _populateGpuSelect } from './training.js';
     const flMarkerSizeInput = document.getElementById("fl-marker-size");
     const flMarkerSizeVal   = document.getElementById("fl-marker-size-val");
     const flShowNamesInput  = document.getElementById("fl-show-names");
+    const flLockBp          = document.getElementById("fl-lock-bp");
 
     // ── TAPNet propagation elements ──────────────────────────────
     const flTapCheckbox      = document.getElementById("fl-tap-checkbox");
@@ -1114,6 +1115,9 @@ import { _populateGpuSelect } from './training.js';
 
     // Cycle to the next unlabeled body part on this frame (napari behavior)
     function _flAutoAdvanceBp() {
+      // Lock BP toggle (L): when checked, stay on the current BP so the user
+      // can overwrite the marker on the next click instead of cycling away.
+      if (flLockBp && flLockBp.checked) return;
       const fname       = _flFrames[_flFrameIdx];
       const frameLabels = _flLabels[fname] || {};
       const cur         = _flBodyparts.indexOf(_flSelectedBp);
@@ -1173,6 +1177,13 @@ import { _populateGpuSelect } from './training.js';
           _flDraw();
           return;
         }
+      }
+
+      // L — toggle "Lock body-part selection" (case-insensitive, so Shift+L works too)
+      if (e.key.toLowerCase() === "l" && flLockBp) {
+        e.preventDefault();
+        flLockBp.checked = !flLockBp.checked;
+        return;
       }
 
       // Tab / Shift+Tab — cycle through body parts
