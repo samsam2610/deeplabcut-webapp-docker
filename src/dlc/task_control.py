@@ -34,6 +34,12 @@ _PAUSE_PREFIXES = ("dlc_train_pause:", "dlc_analyze_pause:")
 
 _TERMINAL_STATUSES = {"complete", "failed", "stopped", "dead"}
 
+# Periodic SSE comment frame (": heartbeat\n\n") to keep idle connections warm
+# through intermediate proxies (nginx) and let clients detect dead sockets even
+# during quiet periods (e.g. between training epochs). See
+# docs/superpowers/specs/2026-05-19-jobs-sse-heartbeat-hybrid-design.md.
+HEARTBEAT_SECONDS = 60
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal helpers
@@ -204,6 +210,7 @@ def task_log_stream(task_id: str):
     def _generate():
         cursor = 0
         idle_after_terminal = 0
+        last_send_at = time.monotonic()
 
         while True:
             # Read all log lines since last cursor position
@@ -213,6 +220,7 @@ def task_log_stream(task_id: str):
                 for line in new_lines:
                     yield f"data: {line}\n\n"
                 cursor += len(new_lines)
+                last_send_at = time.monotonic()
 
             # Check terminal state
             status = None
@@ -227,6 +235,17 @@ def task_log_stream(task_id: str):
                 if idle_after_terminal >= 2:
                     yield "event: done\ndata: {}\n\n"
                     return
+
+            # Heartbeat: keep idle SSE warm so nginx-style proxies don't close
+            # the connection and the client can detect a dead socket during
+            # quiet periods. Only emitted when this iteration had no real
+            # data; real frames update last_send_at above so this is a no-op
+            # while logs are actively flowing.
+            if not new_lines and (
+                time.monotonic() - last_send_at >= HEARTBEAT_SECONDS
+            ):
+                yield ": heartbeat\n\n"
+                last_send_at = time.monotonic()
 
             time.sleep(1)
 
