@@ -141,7 +141,6 @@ def test_annotator_uses_canonical_factory():
     )
 
 
-@pytest.mark.skip(reason="lands with refactor(postprocess): use canonical file_browser component")
 def test_postprocess_uses_canonical_factory():
     _assert_imports_factory(POSTPROC)
     _assert_no_inline_factory(POSTPROC, "_ppMakeEntry")

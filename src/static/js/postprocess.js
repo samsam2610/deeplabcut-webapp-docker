@@ -1,5 +1,6 @@
 /* Post-Process Predictions card controller. */
 import { state } from "./state.js";
+import { makeFileBrowser } from "./components/file_browser.js";
 
 (function () {
   "use strict";
@@ -59,99 +60,29 @@ import { state } from "./state.js";
   ppRefinePipelineBtn.addEventListener("click", () => setRefineMode("pipeline"));
   ppRefineSingleBtn.addEventListener("click", () => setRefineMode("single"));
 
-  // ── File browser (mimics annotator.js, isolated state) ──────
+  // ── File browser (canonical file-browser component) ─────────
   // Filter accepts analyzable predictions: .h5 or .csv, excluding *_filtered.*
+  // Folders are usable too — the component's single-click on a directory
+  // writes that path to ppInputPath, which is exactly the prior
+  // "Use this folder" semantics. Selecting an individual .h5/.csv on
+  // dblclick sets the input to that file path.
   const _ppPredExts = new Set([".h5", ".csv"]);
-  function _ppIsAnalyzable(name) {
-    const lower = name.toLowerCase();
-    if (lower.includes("_filtered")) return false;
-    const dot = lower.lastIndexOf(".");
-    if (dot < 0) return false;
-    return _ppPredExts.has(lower.slice(dot));
-  }
-
-  async function _ppBrowseDir(dirPath) {
-    ppBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
-    try {
-      const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
-      const data = await res.json();
-      if (data.error) { ppBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">${data.error}</span>`; return; }
-      ppBrowser.innerHTML = "";
-
-      // Header: path + "Use this folder" + Up
-      const header = document.createElement("div");
-      header.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.15rem .2rem .3rem;border-bottom:1px solid var(--border);margin-bottom:.2rem;min-width:0";
-      const pathLabel = document.createElement("span");
-      pathLabel.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.7rem;color:var(--text-dim)";
-      pathLabel.textContent = data.path;
-      pathLabel.title = data.path;
-      header.appendChild(pathLabel);
-
-      const useFolderBtn = document.createElement("button");
-      useFolderBtn.className = "btn-sm";
-      useFolderBtn.style.cssText = "padding:.12rem .45rem;font-size:.7rem;flex-shrink:0";
-      useFolderBtn.textContent = "Use this folder";
-      useFolderBtn.title = "Batch-process every analyzable file in this folder (and subfolders)";
-      useFolderBtn.addEventListener("click", e => {
-        e.stopPropagation();
-        ppInputPath.value = data.path;
-        ppBrowser.classList.add("hidden");
-      });
-      header.appendChild(useFolderBtn);
-
-      if (data.parent) {
-        const upBtn = document.createElement("button");
-        upBtn.className = "btn-sm";
-        upBtn.style.cssText = "padding:.12rem .45rem;font-size:.7rem;flex-shrink:0";
-        upBtn.textContent = "↑ Up";
-        upBtn.addEventListener("click", e => { e.stopPropagation(); _ppBrowseDir(data.parent); });
-        header.appendChild(upBtn);
-      }
-      ppBrowser.appendChild(header);
-
-      const visible = data.entries.filter(e => e.type === "dir" || (e.type === "file" && _ppIsAnalyzable(e.name)));
-      if (!visible.length) {
-        const empty = document.createElement("span");
-        empty.style.cssText = "font-size:.75rem;color:var(--text-dim);padding:.25rem;display:block";
-        empty.textContent = "(no .h5/.csv files here — use 'Use this folder' to batch-process the directory)";
-        ppBrowser.appendChild(empty);
-      } else {
-        visible.forEach(e => {
-          const row = document.createElement("div");
-          row.style.cssText = "display:flex;align-items:center;gap:.35rem;padding:.18rem .3rem;border-radius:4px;cursor:pointer;font-size:.77rem";
-          const icon = e.type === "dir"
-            ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;color:var(--text-dim)"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`
-            : `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;color:var(--text-dim)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
-          row.innerHTML = `${icon}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>`;
-          row.querySelector("span").textContent = e.name;
-          row.addEventListener("mouseenter", () => { row.style.background = "var(--surface-3,#2a2a2a)"; });
-          row.addEventListener("mouseleave", () => { row.style.background = ""; });
-          const fullPath = data.path.replace(/\/+$/, "") + "/" + e.name;
-          if (e.type === "dir") {
-            row.addEventListener("click", () => _ppBrowseDir(fullPath));
-          } else {
-            row.addEventListener("click", () => {
-              ppInputPath.value = fullPath;
-              ppBrowser.classList.add("hidden");
-            });
-          }
-          ppBrowser.appendChild(row);
-        });
-      }
-    } catch (err) {
-      ppBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">Error: ${err.message}</span>`;
-    }
-  }
+  const ppPicker = makeFileBrowser({
+    inputEl: ppInputPath,
+    paneEl:  ppBrowser,
+    fileFilter: (name) => {
+      const lower = name.toLowerCase();
+      if (lower.includes("_filtered")) return false;
+      const dot = lower.lastIndexOf(".");
+      if (dot < 0) return false;
+      return _ppPredExts.has(lower.slice(dot));
+    },
+  });
 
   ppBrowseBtn.addEventListener("click", () => {
-    if (ppBrowser.classList.contains("hidden")) {
-      ppBrowser.classList.remove("hidden");
-      const seed = ppInputPath.value.trim();
-      const startPath = seed || state.userDataDir || "/";
-      _ppBrowseDir(startPath);
-    } else {
-      ppBrowser.classList.add("hidden");
-    }
+    const seed = ppInputPath.value.trim();
+    const startPath = seed || state.userDataDir || "/";
+    ppPicker.openAt(startPath);
   });
 
   // ── Build params payload ────────────────────────────────────
