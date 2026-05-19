@@ -654,7 +654,8 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
 
                 try:
                     _stream_log_lines_to_redis(
-                        _redis, log_path, log_list_key, _log_byte_cursor
+                        _redis, log_path, log_list_key, _log_byte_cursor,
+                        job_key=job_key,
                     )
 
                     with open(log_path) as _lf:
@@ -1244,7 +1245,8 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
 
                 try:
                     _stream_log_lines_to_redis(
-                        _redis, log_path, log_list_key, _log_byte_cursor
+                        _redis, log_path, log_list_key, _log_byte_cursor,
+                        job_key=job_key,
                     )
 
                     with open(log_path) as _lf:
