@@ -196,6 +196,12 @@ class TestDlcConvertLabelsToH5:
         df.to_csv(str(csv_path))
         return csv_path
 
+    # to_hdf uses PyTables, which has a numpy ABI mismatch on host Python.
+    # Mock it in all task-level tests — we're testing task logic, not pandas HDF5 I/O.
+    @staticmethod
+    def _mock_to_hdf():
+        return patch("pandas.DataFrame.to_hdf")
+
     def test_converts_csv_to_h5(self, tmp_path, tasks_mod, mock_dlc):
         project_dir = tmp_path / "dlc_h5_test"
         config_path = _make_minimal_config(project_dir)
@@ -209,7 +215,8 @@ class TestDlcConvertLabelsToH5:
             cfg = yaml.safe_load(f)
         mock_dlc.auxiliaryfunctions.read_config.return_value = cfg
 
-        result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
+        with self._mock_to_hdf():
+            result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
 
         assert result["status"] == "complete"
         assert result["operation"] == "convert_labels_to_h5"
@@ -219,7 +226,6 @@ class TestDlcConvertLabelsToH5:
     def test_no_csv_means_folder_skipped(self, tmp_path, tasks_mod, mock_dlc):
         project_dir = tmp_path / "dlc_no_csv"
         config_path = _make_minimal_config(project_dir)
-        # labeled-data/test_video_001 exists but has no CSV
         labeled_dir = project_dir / "labeled-data"
         (labeled_dir / "test_video_001").mkdir(exist_ok=True)
 
@@ -228,8 +234,63 @@ class TestDlcConvertLabelsToH5:
             cfg = yaml.safe_load(f)
         mock_dlc.auxiliaryfunctions.read_config.return_value = cfg
 
-        result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
+        with self._mock_to_hdf():
+            result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
         assert "test_video_001" in result["skipped"]
+
+    def test_converts_csv_for_tensorflow_engine_project(self, tmp_path, tasks_mod, mock_dlc):
+        """Task is pure pandas — must succeed regardless of engine field in config."""
+        project_dir = tmp_path / "dlc_h5_tf"
+        config_path = _make_minimal_config(project_dir)
+        text = config_path.read_text().replace("engine: pytorch", "engine: tensorflow")
+        config_path.write_text(text)
+
+        labeled_dir = project_dir / "labeled-data"
+        self._write_labeled_data_csv(labeled_dir, "test_video_001", "TestScorer")
+
+        import yaml
+        with open(str(config_path)) as f:
+            cfg = yaml.safe_load(f)
+        mock_dlc.auxiliaryfunctions.read_config.return_value = cfg
+
+        with self._mock_to_hdf():
+            result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
+
+        assert result["status"] == "complete"
+        assert "test_video_001" in result["converted"]
+
+    def test_multiple_stems_all_converted(self, tmp_path, tasks_mod, mock_dlc):
+        """All stems in video_sets get a corresponding H5 file."""
+        import yaml
+
+        project_dir = tmp_path / "dlc_h5_multi"
+        labeled_dir = project_dir / "labeled-data"
+        labeled_dir.mkdir(parents=True)
+        videos_dir = project_dir / "videos"
+        videos_dir.mkdir()
+
+        stems = ["vid_a", "vid_b", "vid_c"]
+        for stem in stems:
+            self._write_labeled_data_csv(labeled_dir, stem, "TestScorer")
+
+        video_sets = {f"{videos_dir}/{s}.mp4": {"crop": "0, 640, 0, 480"} for s in stems}
+        config = {
+            "Task": "T", "scorer": "TestScorer", "project_path": str(project_dir),
+            "date": "Jan2026", "engine": "pytorch",
+            "TrainingFraction": [0.8], "bodyparts": ["Snout", "Wrist"],
+            "video_sets": video_sets,
+        }
+        config_path = project_dir / "config.yaml"
+        with open(str(config_path), "w") as f:
+            yaml.dump(config, f)
+        mock_dlc.auxiliaryfunctions.read_config.return_value = config
+
+        with self._mock_to_hdf():
+            result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
+
+        assert result["status"] == "complete"
+        assert set(result["converted"]) == set(stems)
+        assert result["skipped"] == []
 
 
 # ── dlc_create_training_dataset ───────────────────────────────────────────────
