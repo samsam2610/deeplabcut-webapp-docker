@@ -14,11 +14,14 @@ Flask Blueprint package for all DeepLabCut functionality.
 | `inference.py` | `dlc_inference` | `/dlc/project/analyze`, `/dlc/project/analyze/stop`, `/dlc/project/labeled-content` |
 | `monitoring.py` | `dlc_monitoring` | `/dlc/project/machine-label-frames`, `/dlc/project/machine-label-raw`, `/dlc/project/machine-label-reapply`, `/dlc/training/jobs`, `/dlc/gpu/status` |
 
+| `vlm_routes.py` | `dlc_vlm` | `GET /vlm/refiner`, `/vlm/index-status`, `/vlm/index-stems`, `POST /vlm/index/build`, `GET /vlm/similar`, `POST /vlm/refine`, `GET /vlm/frame-data`, `/vlm/reference-image`, `/vlm/stem-vlm-frames`, `/vlm/stem-likelihoods` |
+
 ## Support files
 
 | File | Purpose |
 |------|---------|
 | `utils.py` | Pure utility functions: `_engine_info`, `_get_pipeline_folders`, `_get_engine_queue`, `_walk_dir`, `_dir_has_media`, `_dlc_project_security_check`, `_resolve_project_dir` |
+| `vlm_indexer.py` | VLM + KNN logic (no Flask): `build_index`, `find_similar`, `_ensure_raw_pred_csv`, `read_raw_predictions`, `frame_min_likelihoods`, `refine_coords_with_vlm`, `save_vlm_result`, `load_vlm_result`, `list_vlm_frames` |
 | `ctx.py` | Shared mutable context (DATA_DIR, Redis, Celery). Populated by `app.py`'s `before_request` hook; read by Blueprint route handlers via `_ctx.*()` accessors. Avoids circular imports. |
 | `tasks.py` | Celery task implementations: `dlc_create_training_dataset`, `dlc_train_network`, `dlc_analyze`, `dlc_machine_label_frames`, `dlc_machine_label_reapply`, etc. Imported by `tasks.py` for worker discovery. |
 

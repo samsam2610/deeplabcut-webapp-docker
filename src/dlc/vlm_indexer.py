@@ -39,6 +39,50 @@ from pathlib import Path
 from typing import Any
 
 
+# ── JSON extraction helper ─────────────────────────────────────────────────────
+
+def _extract_first_json_obj(text: str) -> str | None:
+    """
+    Extract the first well-formed JSON object from text.
+
+    Handles:
+    - qwen3 <think>...</think> thinking tokens before the JSON
+    - Nested braces inside the object
+    - Brace / quote characters inside string literals
+
+    Returns the JSON substring on success, None if no valid object found.
+    """
+    # Strip thinking-mode tags (qwen3 / qwen3-vl emit these)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth       = 0
+    in_string   = False
+    escape_next = False
+    for i, c in enumerate(text[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if c == "\\" and in_string:
+            escape_next = True
+            continue
+        if c == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
 # ── Image backends (cv2 preferred; PIL fallback) ──────────────────────────────
 try:
     import cv2 as _cv2
@@ -651,7 +695,7 @@ def refine_coords_with_vlm(
     reference_labels: dict[str, list[float | None] | None],
     machine_coords: dict[str, list[float | None] | None],
     bodyparts: list[str],
-    patch_size: int = 128,
+    patch_size: int = 64,
     model: str = "qwen3-vl:32b",
 ) -> tuple[dict[str, list[float] | None], dict[str, dict]]:
     """
@@ -711,7 +755,7 @@ def refine_coords_with_vlm(
         images.extend([ref_crop, active_crop])
 
     # ── Pass 2: batched VLM calls (≤ MAX_BATCH bodyparts per call) ────────────
-    MAX_BATCH = 5   # keep each call to ≤10 images so the model stays reliable
+    MAX_BATCH = 3   # 3 pairs = 6 images per call; keeps qwen3-vl within GPU budget
 
     # Pre-build crop maps so we can re-slice per chunk
     ref_crop_map:    dict[str, str] = {}
@@ -751,20 +795,26 @@ def refine_coords_with_vlm(
             "{" + example_entries + "}"
         )
 
-        timeout = 60 + 30 * len(chunk)
-        raw, err = _ollama_chat(
-            [{"role": "user", "content": prompt, "images": chunk_images}],
-            model, timeout=timeout, fmt="json",
-        )
+        timeout = 90 + 45 * len(chunk)  # 64px crops are faster; generous for 3-bp chunks
+        raw = err = None
+        for _attempt in range(2):  # one retry on failure
+            if _attempt:
+                time.sleep(5)
+            raw, err = _ollama_chat(
+                [{"role": "user", "content": prompt, "images": chunk_images}],
+                model, timeout=timeout, fmt="json",
+            )
+            if raw:
+                break
         if not raw:
             return {"_failed": "ollama_failed", "_raw": err}
 
-        # Extract JSON; tolerate markdown fences
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not m:
+        # Extract the first well-formed JSON object (strips <think>…</think> first)
+        json_str = _extract_first_json_obj(raw)
+        if not json_str:
             return {"_failed": "parse_failed", "_raw": raw[:400]}
         try:
-            parsed = json.loads(m.group())
+            parsed = json.loads(json_str)
         except (ValueError, TypeError):
             return {"_failed": "parse_failed", "_raw": raw[:400]}
 
@@ -1056,7 +1106,7 @@ def refine_coords_posture_aware(
     reference_labels: dict[str, list[float | None] | None],
     machine_coords: dict[str, list[float | None] | None],
     bodyparts: list[str],
-    patch_size: int = 128,
+    patch_size: int = 64,
     model: str = "qwen3-vl:32b",
 ) -> tuple[dict[str, list[float] | None], dict[str, dict]]:
     """
@@ -1109,7 +1159,7 @@ def refine_coords_posture_aware(
         ref_crop_map[bp]    = ref_crop
         active_crop_map[bp] = active_crop
 
-    MAX_BATCH = 5
+    MAX_BATCH = 3  # 3 pairs = 6 images per call; keeps qwen3-vl within GPU budget
 
     def _posture_chunk(chunk: list[str]) -> dict:
         chunk_images = []
@@ -1140,19 +1190,26 @@ def refine_coords_posture_aware(
             "{" + example_entries + "}"
         )
 
-        timeout = 60 + 30 * len(chunk)
-        raw, err = _ollama_chat(
-            [{"role": "user", "content": prompt, "images": chunk_images}],
-            model, timeout=timeout, fmt="json",
-        )
+        timeout = 90 + 45 * len(chunk)  # 64px crops are faster; generous for 3-bp chunks
+        raw = err = None
+        for _attempt in range(2):  # one retry on failure
+            if _attempt:
+                time.sleep(5)
+            raw, err = _ollama_chat(
+                [{"role": "user", "content": prompt, "images": chunk_images}],
+                model, timeout=timeout, fmt="json",
+            )
+            if raw:
+                break
         if not raw:
             return {"_failed": "ollama_failed", "_raw": err}
 
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not m:
+        # Extract the first well-formed JSON object (strips <think>…</think> first)
+        json_str = _extract_first_json_obj(raw)
+        if not json_str:
             return {"_failed": "parse_failed", "_raw": raw[:400]}
         try:
-            parsed = json.loads(m.group())
+            parsed = json.loads(json_str)
         except (ValueError, TypeError):
             return {"_failed": "parse_failed", "_raw": raw[:400]}
 

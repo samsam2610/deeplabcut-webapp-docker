@@ -414,7 +414,7 @@ function loadRefImage(idx) {
     els.refFooter.textContent = state.indexAvailable
       ? 'No similar frames found'
       : 'Index not built — build index to enable reference panel';
-    els.refScoreBadge.textContent = '';
+    _setMatchBadge(null);
     return;
   }
   els.refPlaceholder.style.display = 'none';
@@ -425,9 +425,7 @@ function loadRefImage(idx) {
   };
   img.onerror = () => { els.refPlaceholder.style.display = ''; };
   img.src = `/vlm/reference-image/${encodeURIComponent(ref.video_stem)}/${encodeURIComponent(ref.frame)}`;
-  const matchLabel = state.matchType === 'posture' ? 'posture' : 'pixel';
-  els.refScoreBadge.textContent = `${matchLabel} ${(ref.score * 100).toFixed(1)}%`;
-  els.refScoreBadge.style.color = state.matchType === 'posture' ? '#818cf8' : 'var(--text-dim)';
+  _setMatchBadge(state.matchType);
   els.refFooter.textContent = `${ref.video_stem} / ${ref.frame}`;
 }
 
@@ -555,6 +553,28 @@ els.activeCanvas.addEventListener('click', e => {
   renderCoordList();
 });
 
+// ── Match-type badge ───────────────────────────────────────────────────────────
+function _setMatchBadge(matchType) {
+  const el = els.refScoreBadge;
+  if (!matchType || matchType === 'none') {
+    el.textContent = '';
+    el.removeAttribute('style');
+    return;
+  }
+  const isPosture = matchType === 'posture';
+  el.textContent  = isPosture ? '⬡ Posture' : '◎ Pixel';
+  el.style.cssText = [
+    'font-size:.68rem',
+    'font-weight:600',
+    'letter-spacing:.03em',
+    'padding:.15rem .45rem',
+    'border-radius:99px',
+    isPosture
+      ? 'background:rgba(129,140,248,.18);border:1px solid rgba(129,140,248,.5);color:#a5b4fc'
+      : 'background:rgba(100,116,139,.12);border:1px solid rgba(100,116,139,.35);color:var(--text-dim)',
+  ].join(';');
+}
+
 // ── Reference tabs ─────────────────────────────────────────────────────────────
 function renderRefTabs() {
   els.refTabs.innerHTML = '';
@@ -563,12 +583,13 @@ function renderRefTabs() {
     msg.style.cssText = 'font-size:.72rem;color:var(--text-dim);align-self:center';
     msg.textContent = state.indexAvailable ? 'No matches found' : 'Index not built';
     els.refTabs.appendChild(msg);
+    _setMatchBadge(null);
     return;
   }
   state.similar.forEach((ref, i) => {
     const btn = document.createElement('button');
     btn.className = 'vlm-ref-tab' + (i === state.activeRefIdx ? ' active' : '');
-    btn.textContent = `#${i + 1} (${ref.score?.toFixed(2) ?? '?'})`;
+    btn.textContent = `#${i + 1} · ${ref.score != null ? (ref.score * 100).toFixed(0) + '%' : '?'}`;
     btn.title = `${ref.video_stem}/${ref.frame}`;
     btn.addEventListener('click', () => {
       state.activeRefIdx = i;
