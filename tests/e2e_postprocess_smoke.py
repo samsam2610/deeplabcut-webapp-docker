@@ -16,10 +16,20 @@ Runs against the live app (http://localhost:5000). Drives the browser:
 
 Not part of the unit suite — invoked manually:
     python tests/e2e_postprocess_smoke.py
+
+Sandboxing
+----------
+The test never writes into the user's real data folder. It copies a single
+analyzed .h5 from the OM-2 RatBox source into ./data/_e2e_postproc_sandbox/
+(host view) which the flask container sees as /app/data/_e2e_postproc_sandbox/.
+The sandbox is wiped on entry and (by default) on exit. Set
+KEEP_SANDBOX=1 in the environment to preserve it for inspection.
 """
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -27,14 +37,58 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 APP_URL = "http://localhost:5000/?token=deeplabcut"
-TARGET_DIR_CONTAINER = (
-    "/user-data/Parra-Data/Cloud/Reaching-Task-Data/RatBox Videos/tdcs/"
-    "042426/OM-2_cam0_20260424_105301_2_trig1_fps200_exposure1500_gain10"
-)
-TARGET_DIR_HOST = (
+
+# Source from which we copy a single analyzed .h5 — read-only, never written.
+SOURCE_DIR_HOST = Path(
     "/home/sam/synology/Parra-Lab-Data/Reaching-Task-Data/RatBox Videos/"
     "tdcs/042426/OM-2_cam0_20260424_105301_2_trig1_fps200_exposure1500_gain10"
 )
+
+# Sandbox target. Host path resolves relative to the repo root (cwd when
+# invoked via `python tests/e2e_postprocess_smoke.py`), and the container
+# mount point is fixed by docker-compose (`./data` -> `/app/data`).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+SANDBOX_DIR_HOST = _REPO_ROOT / "data" / "_e2e_postproc_sandbox"
+SANDBOX_DIR_CONTAINER = "/app/data/_e2e_postproc_sandbox"
+
+
+def _pick_source_h5(src_dir: Path) -> Path | None:
+    """Return the first analyzed .h5 in src_dir, ignoring already-filtered files."""
+    for p in sorted(src_dir.glob("*.h5")):
+        n = p.name.lower()
+        if "_filtered" in n:
+            continue
+        if any(t in n for t in ("hrnet", "resnet", "mobilenet", "efficientnet", "dlcrnetms5")):
+            return p
+    return None
+
+
+def _prepare_sandbox(src_dir: Path) -> Path:
+    """Wipe and repopulate the sandbox with one analyzed .h5 (and .csv if present).
+
+    Returns the host-side sandbox path.
+    """
+    if SANDBOX_DIR_HOST.exists():
+        shutil.rmtree(SANDBOX_DIR_HOST)
+    SANDBOX_DIR_HOST.mkdir(parents=True)
+
+    src = _pick_source_h5(src_dir)
+    if src is None:
+        raise FileNotFoundError(f"No analyzed .h5 in {src_dir}")
+    shutil.copy2(src, SANDBOX_DIR_HOST / src.name)
+    csv_pair = src.with_suffix(".csv")
+    if csv_pair.is_file():
+        shutil.copy2(csv_pair, SANDBOX_DIR_HOST / csv_pair.name)
+    return SANDBOX_DIR_HOST
+
+
+def _cleanup_sandbox() -> None:
+    if os.environ.get("KEEP_SANDBOX"):
+        print(f"[teardown] KEEP_SANDBOX set — leaving {SANDBOX_DIR_HOST}")
+        return
+    if SANDBOX_DIR_HOST.exists():
+        shutil.rmtree(SANDBOX_DIR_HOST, ignore_errors=True)
+        print(f"[teardown] removed {SANDBOX_DIR_HOST}")
 
 
 def _newest_postproc_run(parent_host: Path) -> Path | None:
@@ -48,11 +102,19 @@ def _newest_postproc_run(parent_host: Path) -> Path | None:
 
 
 def main() -> int:
-    parent_host = Path(TARGET_DIR_HOST)
-    if not parent_host.is_dir():
-        print(f"FATAL: TARGET_DIR_HOST does not exist: {parent_host}",
+    if not SOURCE_DIR_HOST.is_dir():
+        print(f"FATAL: source directory does not exist: {SOURCE_DIR_HOST}",
               file=sys.stderr)
         return 2
+
+    try:
+        parent_host = _prepare_sandbox(SOURCE_DIR_HOST)
+    except FileNotFoundError as exc:
+        print(f"FATAL: {exc}", file=sys.stderr)
+        return 2
+    print(f"[setup] sandbox host:      {parent_host}")
+    print(f"[setup] sandbox container: {SANDBOX_DIR_CONTAINER}")
+    print(f"[setup] files: {sorted(p.name for p in parent_host.iterdir())}")
 
     pre_run = _newest_postproc_run(parent_host)
     pre_run_path = str(pre_run) if pre_run else None
@@ -122,9 +184,9 @@ def main() -> int:
             return 1
 
         # Phase B: type the target folder, click Run.
-        page.fill("#pp-input-path", TARGET_DIR_CONTAINER)
+        page.fill("#pp-input-path", SANDBOX_DIR_CONTAINER)
         page.click("#pp-run")
-        print(f"[B] Run clicked with path={TARGET_DIR_CONTAINER}")
+        print(f"[B] Run clicked with path={SANDBOX_DIR_CONTAINER}")
         # Give the fetch chain a moment to fire.
         time.sleep(2.0)
         status_text = page.text_content("#pp-status") or ""
@@ -205,4 +267,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        rc = main()
+    finally:
+        _cleanup_sandbox()
+    sys.exit(rc)

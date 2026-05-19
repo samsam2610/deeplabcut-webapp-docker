@@ -28,6 +28,27 @@ def _dlc_key() -> str:
     return f"webapp:dlc_project:{_user_id()}"
 
 
+def _recent_paths_key() -> str:
+    """Per-user redis SET of input parent dirs the user has dispatched runs on.
+
+    Sets used (not lists) because the FakeRedis test stub implements sadd/
+    smembers but lacks lpush/lrange.
+    """
+    return f"webapp:postproc_recent:{_user_id()}"
+
+
+def _track_recent_parents(parents) -> None:
+    try:
+        r = _ctx.redis_client()
+    except Exception:
+        return
+    for p in parents:
+        try:
+            r.sadd(_recent_paths_key(), str(p))
+        except Exception:
+            continue
+
+
 def _active_project_data() -> dict | None:
     """Read active DLC project metadata from redis, or return None."""
     raw = _ctx.redis_client().get(_dlc_key())
@@ -177,6 +198,10 @@ def run():
             "params": params, "inputs": list(inputs),
         },
     )
+    # Remember which directories the user has run postprocessing on so the
+    # "Recent runs" panel can find sidecars even when the input is outside the
+    # active DLC project root (e.g. RatBox Videos elsewhere on the share).
+    _track_recent_parents({Path(p).parent for p in inputs})
     return jsonify({"task_id": async_result.id})
 
 
@@ -194,7 +219,16 @@ def _revoke(task_id: str) -> None:
 def status(task_id: str):
     ar = _async_result(task_id)
     info = ar.info if isinstance(ar.info, dict) else {}
-    return jsonify({"state": ar.state, "progress": info})
+    out = {"state": ar.state, "progress": info}
+    # Expose the task return payload (run.json contents) on terminal states so
+    # the UI can show per-input failures even when Celery itself reports
+    # SUCCESS. ar.result on a SUCCESS task is the dict the task returned;
+    # on FAILURE it's the exception, which we skip.
+    if ar.state == "SUCCESS":
+        result = ar.result
+        if isinstance(result, dict):
+            out["result"] = result
+    return jsonify(out)
 
 
 @bp.route("/cancel/<task_id>", methods=["POST"])
@@ -228,16 +262,41 @@ def _active_project_root():
 
 @bp.route("/recent", methods=["GET"])
 def recent():
-    root = _active_project_root()
-    if root is None:
-        return jsonify({"runs": []})
-    runs = []
-    for sidecar in Path(root).rglob("postproc/*/run.json"):
+    runs: list[dict] = []
+    seen: set[str] = set()
+
+    def _ingest(sidecar: Path) -> None:
+        s = str(sidecar)
+        if s in seen:
+            return
+        seen.add(s)
         try:
             payload = json.loads(sidecar.read_text())
         except (OSError, json.JSONDecodeError):
-            continue
-        payload["_sidecar"] = str(sidecar)
+            return
+        payload["_sidecar"] = s
         runs.append(payload)
+
+    # 1. Active DLC project root (existing behavior).
+    root = _active_project_root()
+    if root is not None:
+        for sidecar in Path(root).rglob("postproc/*/run.json"):
+            _ingest(sidecar)
+
+    # 2. Per-user tracked input parents — covers folders OUTSIDE the active
+    #    project root (RatBox Videos and similar). Without this, runs on
+    #    arbitrary paths never show up in the panel.
+    try:
+        members = _ctx.redis_client().smembers(_recent_paths_key())
+    except Exception:
+        members = set()
+    for m in members or set():
+        parent = m.decode() if isinstance(m, (bytes, bytearray)) else m
+        pp_dir = Path(parent) / "postproc"
+        if not pp_dir.is_dir():
+            continue
+        for sidecar in pp_dir.glob("*/run.json"):
+            _ingest(sidecar)
+
     runs.sort(key=lambda r: r.get("started_at", ""), reverse=True)
     return jsonify({"runs": runs[:20]})
