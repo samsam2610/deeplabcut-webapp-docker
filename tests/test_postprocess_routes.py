@@ -221,6 +221,79 @@ def test_cancel_revokes(flask_test_client, monkeypatch):
     assert revoked["id"] == "abc"
 
 
+def test_status_surfaces_run_payload_on_success(flask_test_client, monkeypatch):
+    """Celery reports SUCCESS even when every input failed in the task body.
+
+    The /status route must expose the returned payload so the UI can show
+    per-input failures. Regression: previously the route only returned
+    {state, progress} and the UI thought everything succeeded.
+    """
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+
+    payload = {
+        "run_id": "20260502-210409_filterpredictions",
+        "status": "failed",
+        "tool": "deeplabcut",
+        "action": "filterpredictions",
+        "params": {"filtertype": "median", "windowlength": 10},
+        "inputs": [
+            {"path": "/x/a.h5", "output": None, "status": "failed",
+             "error": "windowlength must be odd and >= 3"},
+        ],
+    }
+
+    class FakeAR:
+        state = "SUCCESS"
+        info = {"current": 1, "total": 1, "stage": "Done"}
+        result = payload
+
+    monkeypatch.setattr("dlc.postprocess._async_result", lambda tid: FakeAR())
+    resp = client.get("/dlc/postprocess/status/abc")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["state"] == "SUCCESS"
+    assert body["result"]["status"] == "failed"
+    assert body["result"]["inputs"][0]["error"].startswith("windowlength")
+
+
+def test_recent_includes_tracked_parents_outside_project(
+        flask_test_client, tmp_path, monkeypatch):
+    """Recent runs must include sidecars under per-user tracked input parents,
+    not just the active DLC project root.
+
+    Regression: postprocessing on RatBox Videos (outside the active DLC
+    project) yielded an empty Recent Runs panel because /recent only walked
+    the project root.
+    """
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    # No active project — without tracked parents, /recent would be empty.
+    monkeypatch.setattr(pp, "_active_project_root", lambda: None)
+
+    # Pretend the user already dispatched a run on this RatBox-style folder.
+    ratbox = tmp_path / "ratbox" / "OM-2_cam0"
+    run_dir = ratbox / "postproc" / "20260502-210519_filterpredictions"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps({
+        "run_id": "20260502-210519_filterpredictions",
+        "tool": "deeplabcut", "action": "filterpredictions",
+        "status": "success", "started_at": "2026-05-02T21:05:19Z",
+        "finished_at": "2026-05-02T21:05:20Z",
+        "params": {}, "inputs": [],
+    }))
+
+    # Track the parent in the per-user redis set, mimicking what /run does.
+    monkeypatch.setattr(pp, "_user_id", lambda: "test-uid")
+    _redis.sadd(pp._recent_paths_key(), str(ratbox))
+
+    resp = client.get("/dlc/postprocess/recent")
+    assert resp.status_code == 200
+    runs = resp.get_json()["runs"]
+    assert len(runs) == 1
+    assert runs[0]["run_id"] == "20260502-210519_filterpredictions"
+
+
 def test_recent_returns_sidecars_under_project(flask_test_client, tmp_path, monkeypatch):
     client, _app, _redis, _data, _user = flask_test_client
     _auth(client)

@@ -209,15 +209,25 @@ import { state } from "./state.js";
       }
       data.runs.forEach((run) => {
         const row = document.createElement("div");
-        row.style.cssText = "display:flex;justify-content:space-between;gap:.4rem;padding:.15rem 0";
+        row.style.cssText = "display:flex;justify-content:space-between;gap:.4rem;padding:.15rem 0;cursor:pointer";
+        row.title = "Click to view full run.json";
         const id = document.createElement("span");
         id.style.fontFamily = "var(--mono)";
         id.textContent = run.run_id || "";
         const tool = document.createElement("span");
         tool.textContent = `${run.tool || ""}/${run.action || ""}`;
         const status = document.createElement("span");
-        status.textContent = run.status || "";
+        const s = run.status || "";
+        status.textContent = s;
+        if (s === "success") status.style.color = "#67c267";
+        else if (s === "partial") status.style.color = "#e8b339";
+        else if (s === "failed") status.style.color = "#e36464";
         row.appendChild(id); row.appendChild(tool); row.appendChild(status);
+        row.addEventListener("click", () => {
+          const copy = { ...run };
+          delete copy._sidecar;
+          renderRunResult({ result: copy });
+        });
         ppRecent.appendChild(row);
       });
     } catch (e) { /* silent */ }
@@ -226,6 +236,17 @@ import { state } from "./state.js";
   async function runPostprocess() {
     const path = ppInputPath.value.trim();
     if (!path) { ppStatus.textContent = "input path is empty"; return; }
+
+    // Client-side guard: median filter requires odd windowlength ≥ 3.
+    // The HTML <input step=2 min=3> doesn't prevent typed even numbers.
+    if (ppTool.value === "deeplabcut") {
+      const wl = Number(document.getElementById("pp-dlc-windowlength").value);
+      if (!Number.isInteger(wl) || wl < 3 || wl % 2 === 0) {
+        ppStatus.textContent = `error: windowlength must be odd and ≥ 3 (got ${wl})`;
+        return;
+      }
+    }
+
     const mode = detectMode(path);
     ppStatus.textContent = `scanning (${mode})…`;
 
@@ -278,11 +299,53 @@ import { state } from "./state.js";
       if (data.state === "SUCCESS" || data.state === "FAILURE" || data.state === "REVOKED") {
         activeTaskId = null;
         ppCancelBtn.classList.add("hidden");
+        renderRunResult(data);
         refreshRecent();
         return;
       }
     } catch (e) { /* keep polling */ }
     pollHandle = setTimeout(pollStatus, 1500);
+  }
+
+  // Surface run.json payload after a task lands. Celery reports SUCCESS even
+  // when every input failed inside the task; the actual run-status lives in
+  // the returned payload. Show a clear pass/partial/fail line plus a per-input
+  // failure list, and dump the full JSON into the log panel.
+  function renderRunResult(data) {
+    const result = data && data.result;
+    if (!result || typeof result !== "object") {
+      // No payload: fall back to celery state only.
+      if (data && data.state === "FAILURE") {
+        ppStatus.textContent = "✗ Task crashed (no run.json)";
+      }
+      return;
+    }
+    const inputs = Array.isArray(result.inputs) ? result.inputs : [];
+    const succeeded = inputs.filter(i => i && i.status === "success");
+    const failed    = inputs.filter(i => i && i.status === "failed");
+    const status = result.status || "unknown";
+
+    let label;
+    if (status === "success") {
+      label = `✓ Success — ${succeeded.length}/${inputs.length} file(s) processed`;
+    } else if (status === "partial") {
+      label = `⚠ Partial — ${succeeded.length} ok, ${failed.length} failed`;
+    } else {
+      label = `✗ Failed — ${failed.length}/${inputs.length} file(s) failed`;
+    }
+    ppStatus.textContent = label;
+
+    ppLog.classList.remove("hidden");
+    let log = `Run: ${result.run_id || "(no run_id)"}\nStatus: ${status}\n`;
+    if (failed.length) {
+      log += "\nFailures:\n";
+      failed.forEach(f => {
+        const name = (f.path || "").split("/").pop();
+        log += `  ${name}: ${f.error || "(no error message)"}\n`;
+      });
+    }
+    log += "\nFull run.json:\n" + JSON.stringify(result, null, 2);
+    ppLog.textContent = log;
   }
 
   async function cancelRun() {
