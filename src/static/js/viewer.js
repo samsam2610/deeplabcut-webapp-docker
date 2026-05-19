@@ -643,9 +643,19 @@ import { state } from './state.js';
 
     function _vaDrawHoverLabel() {
       if (!vaOverlayCtx) return;
-      _vaSyncCanvas();
-      vaOverlayCtx.clearRect(0, 0, vaOverlayCanvas.width, vaOverlayCanvas.height);
-      _vaDrawPoseMarkers();
+      // Re-paint via the multi-layer renderer so comparison-layer shapes are
+      // preserved and the primary layer's visibility flag is honored. The old
+      // path (clearRect + _vaDrawPoseMarkers) wiped comparison layers off the
+      // canvas and re-drew the primary's poses as hardcoded filled circles
+      // even when the primary layer was toggled hidden — so any mousemove,
+      // marker-size change or chip-toggle after hiding the primary made the
+      // comparison layer's shape disappear and replaced it with circles at
+      // the primary's coordinates.
+      _vaDrawCurrentFrame();
+      // Hover label only makes sense when the primary layer is visible (its
+      // poses drive _vaCurrentPoses + hit-testing).
+      const primary = _vaPrimary();
+      if (!primary || !primary.visible) return;
       if (!_vaHoverBp || !_vaCurrentPoses.length) return;
       const pose = _vaCurrentPoses.find(p => p.bp === _vaHoverBp);
       if (!pose) return;
