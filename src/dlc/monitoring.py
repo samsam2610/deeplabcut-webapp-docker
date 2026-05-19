@@ -239,7 +239,11 @@ def dlc_training_jobs():
     def _reconcile(redis_key: str, jid: str) -> dict | None:
         job = _ctx.redis_client().hgetall(redis_key)
         if not job:
-            return None
+            # Orphan: zset still indexes this jid but the backing hash is
+            # gone (partial hard-reset, manual cleanup, TTL surprise…).
+            # Surface a stub so the UI can show + clear it instead of
+            # silently hiding running-but-untracked work.
+            return {"task_id": jid, "status": "orphaned"}
         celery_state = AsyncResult(jid, app=_ctx.celery()).state
         if job.get("status") == "running" and celery_state not in _LIVE_CELERY_STATES:
             _ctx.redis_client().hset(redis_key, "status", "dead")
