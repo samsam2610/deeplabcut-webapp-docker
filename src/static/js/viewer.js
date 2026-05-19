@@ -1,5 +1,6 @@
 "use strict";
 import { state } from './state.js';
+import { makeFileBrowser } from './components/file_browser.js';
 
     const vaCard         = document.getElementById("view-analyzed-card");
     const vaOpenBtn      = document.getElementById("btn-open-view-analyzed");
@@ -1594,73 +1595,37 @@ import { state } from './state.js';
       _vaUpdateBpChipStatus();
     });
 
-    // h5 file browser (shows .h5 files and dirs)
-    let _vaH5BrowsePath = null;
-
-    async function _vaH5BrowseDir(path) {
-      _vaH5BrowsePath = path;
-      vaOverlayH5Browser.innerHTML = '<p class="explorer-empty">Loading…</p>';
-      try {
-        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(path)}`);
-        const data = await res.json();
-        if (data.error) { vaOverlayH5Browser.innerHTML = `<p class="explorer-empty">${data.error}</p>`; return; }
-        vaOverlayH5Browser.innerHTML = "";
-        const entries = data.entries || [];
-        // Up button
-        if (data.parent) {
-          const upRow = document.createElement("div");
-          upRow.className = "fe-video-item";
-          upRow.style.cursor = "pointer";
-          upRow.textContent = "↑ ..";
-          upRow.addEventListener("click", () => _vaH5BrowseDir(data.parent));
-          vaOverlayH5Browser.appendChild(upRow);
-        }
-        entries.forEach(e => {
-          const isH5  = e.type === "file" && e.name.toLowerCase().endsWith(".h5");
-          const isDir = e.type === "dir";
-          if (!isH5 && !isDir) return;
-          const row = document.createElement("div");
-          row.className   = "fe-video-item";
-          row.style.cursor = "pointer";
-          row.textContent  = isDir ? `📁 ${e.name}/` : `📊 ${e.name}`;
-          row.addEventListener("click", async () => {
-            if (isDir) {
-              _vaH5BrowseDir(path + "/" + e.name);
-            } else {
-              const full = path + "/" + e.name;
-              const layer = _vaMakeLayer({
-                path:  full,
-                label: `Custom — ${full.split("/").pop()}`,
-                type:  "raw",
-              });
-              _vaSetPrimaryLayer(layer);
-              vaOverlayH5Path.value = full;
-              _vaClearPoseCache();
-              vaOverlayH5Browser.classList.add("hidden");
-              _vaOverlayStatus("h5 selected");
-              await _vaLoadH5Info(full);
-              await _vaLoadLayerInfo(layer);
-              await _vaLoadEditCacheForPrimary();
-              if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
-            }
-          });
-          vaOverlayH5Browser.appendChild(row);
-        });
-        if (!vaOverlayH5Browser.children.length)
-          vaOverlayH5Browser.innerHTML = '<p class="explorer-empty">No .h5 files found here.</p>';
-      } catch (e) {
-        vaOverlayH5Browser.innerHTML = `<p class="explorer-empty">Error: ${e.message}</p>`;
-      }
+    // h5 file browser — canonical file-browser component, .h5 files only.
+    // dblclick a .h5 row to select it (component leaves the browser open;
+    // user closes via Browse-toggle when done).
+    async function _vaPickH5(full) {
+      const layer = _vaMakeLayer({
+        path:  full,
+        label: `Custom — ${full.split("/").pop()}`,
+        type:  "raw",
+      });
+      _vaSetPrimaryLayer(layer);
+      vaOverlayH5Path.value = full;
+      _vaClearPoseCache();
+      _vaOverlayStatus("h5 selected");
+      await _vaLoadH5Info(full);
+      await _vaLoadLayerInfo(layer);
+      await _vaLoadEditCacheForPrimary();
+      if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
     }
 
+    const vaH5Picker = vaOverlayH5Path && vaOverlayH5Browser ? makeFileBrowser({
+      inputEl: vaOverlayH5Path,
+      paneEl:  vaOverlayH5Browser,
+      fileFilter: (name) => name.toLowerCase().endsWith(".h5"),
+      onPick:  _vaPickH5,
+    }) : null;
+
     vaOverlayH5Browse?.addEventListener("click", () => {
-      const isHidden = vaOverlayH5Browser.classList.toggle("hidden");
-      if (!isHidden) {
-        const startDir = _vaCurrentVideoPath
-          ? _vaCurrentVideoPath.substring(0, _vaCurrentVideoPath.lastIndexOf("/"))
-          : (state.userDataDir || state.dataDir || "/");
-        _vaH5BrowseDir(startDir);
-      }
+      const startDir = _vaCurrentVideoPath
+        ? _vaCurrentVideoPath.substring(0, _vaCurrentVideoPath.lastIndexOf("/"))
+        : (state.userDataDir || state.dataDir || "/");
+      vaH5Picker?.openAt(startDir);
     });
 
     // ── Load content list ─────────────────────────────────────

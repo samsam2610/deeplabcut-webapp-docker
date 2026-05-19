@@ -123,7 +123,6 @@ def test_analyze_uses_canonical_factory():
     _assert_no_inline_factory(ANALYZE, "_avMakeEntry")
 
 
-@pytest.mark.skip(reason="lands with refactor(viewer): use canonical file_browser component (H5)")
 def test_viewer_uses_canonical_factory():
     _assert_imports_factory(VIEWER)
     _assert_no_inline_factory(VIEWER, "_vaH5MakeEntry")
