@@ -1,6 +1,7 @@
 "use strict";
 import { state } from './state.js';
 import { _populateGpuSelect } from './training.js';
+import { makeFileBrowser } from './components/file_browser.js';
 
     const avCard         = document.getElementById("analyze-card");
     const avOpenBtn      = document.getElementById("btn-open-analyze");
@@ -26,12 +27,9 @@ import { _populateGpuSelect } from './training.js';
     const avBatchAddBtn  = document.getElementById("av-batch-add-btn");
     const avBatchClearBtn= document.getElementById("av-batch-clear-btn");
     let _avBatchList     = [];         // ordered array of selected paths
-    let _avHighlightedRow= null;       // currently highlighted browser row element
-    let _avHighlightedPath = null;     // path of highlighted row
 
     let _avPollTimer  = null;
     let _avActiveTask = null;
-    let _avBrowserLoaded = false;
     let _avProjectPath   = null;   // set when browse data arrives
 
     // ── Labeled video params toggle ──────────────────────────────
@@ -130,189 +128,60 @@ import { _populateGpuSelect } from './training.js';
     }
 
     avBatchAddBtn?.addEventListener("click", () => {
-      if (_avHighlightedPath) {
-        _avAddToList(_avHighlightedPath);
-      } else {
-        // Fall back to the typed text-input value
-        const typed = avTargetPath.value.trim();
-        if (typed) _avAddToList(typed);
-      }
+      // The component writes the highlighted path into avTargetPath.value on
+      // single-click, so the typed-input fallback IS the highlighted path.
+      const typed = avTargetPath.value.trim();
+      if (typed) _avAddToList(typed);
     });
 
     avBatchClearBtn?.addEventListener("click", () => {
       _avBatchList = [];
-      _avHighlightedPath = null;
-      _avHighlightedRow = null;
       _avRenderBatchList();
     });
 
-    // ── Project browser ───────────────────────────────────────
-    const _AV_VIDEO_EXTS = new Set(['.mp4','.avi','.mov','.mkv','.wmv','.m4v']);
-    const _AV_IMAGE_EXTS = new Set(['.jpg','.jpeg','.png','.bmp','.tif','.tiff']);
-    function _avSupportedFile(name) {
-      const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : '';
-      return _AV_VIDEO_EXTS.has(ext) || _AV_IMAGE_EXTS.has(ext);
-    }
-
-    function _avSetHighlight(row, path) {
-      // Clear previous highlight
-      if (_avHighlightedRow && _avHighlightedRow !== row) {
-        _avHighlightedRow.style.background = "";
-        _avHighlightedRow.style.outline = "";
-      }
-      _avHighlightedRow  = row;
-      _avHighlightedPath = path;
-      avTargetPath.value = path;
-      row.style.background = "var(--accent-dim, rgba(99,179,237,.18))";
-      row.style.outline = "1px solid var(--accent, #63b3ed)";
-    }
-
-    function _avMakeEntry(name, fullPath, isDir) {
-      const wrapper = document.createElement("div");
-      const row = document.createElement("div");
-      row.style.cssText = "display:flex;align-items:center;gap:.3rem;padding:.18rem .4rem;cursor:pointer;border-radius:4px;user-select:none";
-      row.title = fullPath;
-
-      const arrow = document.createElement("span");
-      arrow.style.cssText = "font-size:.62rem;color:var(--text-dim);flex-shrink:0;width:.8rem;text-align:center";
-      arrow.textContent = isDir ? "▶" : "";
-
-      const icon = document.createElement("span");
-      icon.style.flexShrink = "0";
-      icon.textContent = isDir ? "📁" : "📄";
-
-      const label = document.createElement("span");
-      label.textContent = name;
-      label.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.75rem;flex:1;min-width:0";
-
-      row.appendChild(arrow); row.appendChild(icon); row.appendChild(label);
-      wrapper.appendChild(row);
-
-      row.addEventListener("mouseenter", () => {
-        if (row !== _avHighlightedRow) row.style.background = "var(--surface-3,#2a2a2a)";
-      });
-      row.addEventListener("mouseleave", () => {
-        if (row !== _avHighlightedRow) row.style.background = "";
-      });
-
-      if (isDir) {
-        const childContainer = document.createElement("div");
-        childContainer.style.cssText = "display:none;padding-left:1rem";
-        wrapper.appendChild(childContainer);
-        let loaded = false, expanded = false;
-
-        row.addEventListener("click", async (e) => {
-          // Single-click: highlight the directory path
-          _avSetHighlight(row, fullPath);
-
-          // Also expand/collapse the tree
-          if (!expanded && !loaded) {
-            childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">Loading…</span>`;
-            childContainer.style.display = "block";
-            try {
-              const res = await fetch(`/fs/ls?path=${encodeURIComponent(fullPath)}`);
-              const d   = await res.json();
-              childContainer.innerHTML = "";
-              if (!d.error) {
-                const vis = d.entries.filter(e => (e.type === "dir" && e.has_media !== false) || (e.type === "file" && _avSupportedFile(e.name)));
-                vis.forEach(e =>
-                  childContainer.appendChild(_avMakeEntry(e.name, fullPath.replace(/\/+$/, "") + "/" + e.name, e.type === "dir"))
-                );
-                if (!vis.length)
-                  childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">(no supported files)</span>`;
-              } else {
-                childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">${d.error}</span>`;
-              }
-            } catch (e) {
-              childContainer.innerHTML = `<span style="font-size:.72rem;color:var(--text-dim);padding:.15rem .4rem;display:block">Error loading.</span>`;
-            }
-            loaded = true; expanded = true; arrow.textContent = "▼";
-          } else {
-            expanded = !expanded;
-            childContainer.style.display = expanded ? "block" : "none";
-            arrow.textContent = expanded ? "▼" : "▶";
-          }
-        });
-      } else {
-        // Files: single-click highlights only
-        row.addEventListener("click", () => {
-          _avSetHighlight(row, fullPath);
-        });
-      }
-
-      // Double-click: add to batch list immediately and close browser
-      row.addEventListener("dblclick", (e) => {
-        e.stopPropagation();
-        _avAddToList(fullPath);
-        avTargetPath.value = fullPath;
-        avBrowser.classList.add("hidden");
-        _avBrowserLoaded = false;
-      });
-
-      return wrapper;
-    }
-
-    async function _avBrowseDir(dirPath) {
-      _avBrowserLoaded = false;
-      _avProjectPath = dirPath;
-      avTargetPath.value = dirPath;
-      avBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
-      try {
-        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
-        const data = await res.json();
-        if (data.error) { avBrowser.textContent = data.error; return; }
-        avBrowser.innerHTML = "";
-
-        const visible = data.entries.filter(e => (e.type === "dir" && e.has_media !== false) || (e.type === "file" && _avSupportedFile(e.name)));
-        if (!visible.length) {
-          const empty = document.createElement("span");
-          empty.style.cssText = "font-size:.78rem;color:var(--text-dim);padding:.3rem;display:block";
-          empty.textContent = "(no supported video or image files)";
-          avBrowser.appendChild(empty);
-        } else {
-          visible.forEach(e =>
-            avBrowser.appendChild(_avMakeEntry(e.name, data.path.replace(/\/+$/, "") + "/" + e.name, e.type === "dir"))
-          );
-        }
-        _avBrowserLoaded = true;
-      } catch (err) {
-        avBrowser.textContent = "Failed to load.";
-        console.error("avBrowseDir:", err);
-      }
-    }
+    // ── Project browser (canonical file-browser component) ────
+    const avPicker = makeFileBrowser({
+      inputEl: avTargetPath,
+      paneEl:  avBrowser,
+      onPick:  _avAddToList,
+    });
 
     avBrowseBtn.addEventListener("click", async () => {
       const isHidden = avBrowser.classList.contains("hidden");
-      avBrowser.classList.toggle("hidden");
-      if (!isHidden) return;  // closing
+      if (!isHidden) {
+        // closing
+        avBrowser.classList.add("hidden");
+        return;
+      }
       const typed = avTargetPath.value.trim();
-      if (typed) { await _avBrowseDir(typed); return; }
-      if (_avBrowserLoaded) return;  // already showing content
+      if (typed) { avPicker.openAt(typed); return; }
+      // No typed path → bootstrap from project browse endpoint.
       try {
         const res  = await fetch("/dlc/project/browse");
         const data = await res.json();
-        if (data.error) { avBrowser.textContent = data.error; return; }
-        await _avBrowseDir(data.project_path);
+        if (data.error) {
+          avBrowser.classList.remove("hidden");
+          avBrowser.textContent = data.error;
+          return;
+        }
+        _avProjectPath = data.project_path;
+        avPicker.openAt(data.project_path);
       } catch (err) {
+        avBrowser.classList.remove("hidden");
         avBrowser.textContent = "Failed to load project.";
         console.error("avBrowse:", err);
       }
     });
 
-    avBrowseUp?.addEventListener("click", () => {
-      const cur = (avTargetPath.value.trim() || _avProjectPath || "").replace(/\/$/, "");
-      if (!cur) return;
-      const parent = cur.split("/").slice(0, -1).join("/") || "/";
-      if (parent !== cur) { _avBrowseDir(parent); avBrowser.classList.remove("hidden"); }
-    });
+    avBrowseUp?.addEventListener("click", () => avPicker.up());
 
     avTargetPath?.addEventListener("keydown", e => {
-      if (e.key === "Enter")  { e.preventDefault(); _avBrowseDir(avTargetPath.value.trim()); avBrowser.classList.remove("hidden"); }
+      if (e.key === "Enter")  { e.preventDefault(); avPicker.browseDir(avTargetPath.value.trim()); avBrowser.classList.remove("hidden"); }
       if (e.key === "Escape") { avBrowser.classList.add("hidden"); avTargetPath.blur(); }
     });
     avTargetPath?.addEventListener("paste", e => {
       if (avBrowser.classList.contains("hidden")) return;  // only navigate when browser is open
-      setTimeout(() => _avBrowseDir(avTargetPath.value.trim()), 0);
+      setTimeout(() => avPicker.browseDir(avTargetPath.value.trim()), 0);
     });
 
     // ── Running state helpers ─────────────────────────────────
@@ -390,7 +259,6 @@ import { _populateGpuSelect } from './training.js';
       avCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
       _avLoadSnapshots();
       _populateGpuSelect("av-gputouse");
-      _avBrowserLoaded = false;
       avBrowser.classList.add("hidden");
       // Auto-reconnect to a running analyze job
       if (!_avActiveTask) {
@@ -509,65 +377,26 @@ import { _populateGpuSelect } from './training.js';
     const clvDestClear  = document.getElementById("clv-dest-clear-btn");
     const clvDestBrowser= document.getElementById("clv-dest-browser");
 
-    // destfolder browser — shows directories only, double-click selects
-    async function _clvBrowseDir(dirPath) {
-      clvDestInput.value = dirPath;
-      clvDestBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
-      try {
-        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
-        const data = await res.json();
-        if (data.error) { clvDestBrowser.textContent = data.error; return; }
-        clvDestBrowser.innerHTML = "";
-
-        const dirs = data.entries.filter(e => e.type === "dir");
-        if (!dirs.length) {
-          const em = document.createElement("span");
-          em.style.cssText = "font-size:.78rem;color:var(--text-dim);padding:.3rem;display:block";
-          em.textContent = "(no subdirectories)";
-          clvDestBrowser.appendChild(em);
-        }
-        dirs.forEach(e => {
-          const row = document.createElement("div");
-          const fullPath = data.path.replace(/\/+$/, "") + "/" + e.name;
-          row.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.18rem .4rem;cursor:pointer;border-radius:4px;user-select:none;font-size:.78rem";
-          row.innerHTML = `<span style="flex-shrink:0">📁</span><span style="font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.name}</span>`;
-          row.title = fullPath;
-          row.addEventListener("mouseenter", () => row.style.background = "var(--surface-3,#2a2a2a)");
-          row.addEventListener("mouseleave", () => row.style.background = "");
-          row.addEventListener("click",    () => _clvBrowseDir(fullPath));
-          row.addEventListener("dblclick", () => {
-            clvDestInput.value = fullPath;
-            clvDestBrowser.classList.add("hidden");
-          });
-          clvDestBrowser.appendChild(row);
-        });
-      } catch (err) {
-        clvDestBrowser.textContent = "Failed to load.";
-      }
-    }
+    // destfolder browser — directories only (canonical file-browser component)
+    const clvDestPicker = clvDestInput && clvDestBrowser ? makeFileBrowser({
+      inputEl: clvDestInput,
+      paneEl:  clvDestBrowser,
+      dirOnly: true,
+    }) : null;
 
     clvDestBrowse?.addEventListener("click", () => {
-      const isHidden = clvDestBrowser.classList.contains("hidden");
-      clvDestBrowser.classList.toggle("hidden");
-      if (isHidden) {
-        const startPath = clvDestInput.value.trim() || _avProjectPath || "/";
-        _clvBrowseDir(startPath);
-      }
+      const startPath = clvDestInput.value.trim() || _avProjectPath || "/";
+      clvDestPicker?.openAt(startPath);
     });
 
-    clvDestUp?.addEventListener("click", () => {
-      const cur = clvDestInput.value.trim().replace(/\/$/, "");
-      if (!cur) return;
-      const parent = cur.split("/").slice(0, -1).join("/") || "/";
-      if (parent !== cur) { _clvBrowseDir(parent); clvDestBrowser.classList.remove("hidden"); }
-    });
+    clvDestUp?.addEventListener("click", () => clvDestPicker?.up());
 
     clvDestInput?.addEventListener("keydown", e => {
-      if (e.key === "Enter")  { e.preventDefault(); _clvBrowseDir(clvDestInput.value.trim()); clvDestBrowser.classList.remove("hidden"); }
+      if (e.key === "Enter")  { e.preventDefault(); clvDestPicker?.browseDir(clvDestInput.value.trim()); clvDestBrowser.classList.remove("hidden"); }
       if (e.key === "Escape") { clvDestBrowser.classList.add("hidden"); clvDestInput.blur(); }
     });
     clvDestInput?.addEventListener("paste", e => {
-      setTimeout(() => { _clvBrowseDir(clvDestInput.value.trim()); clvDestBrowser.classList.remove("hidden"); }, 0);
+      setTimeout(() => { clvDestPicker?.browseDir(clvDestInput.value.trim()); clvDestBrowser.classList.remove("hidden"); }, 0);
     });
 
     clvDestClear?.addEventListener("click", () => { clvDestInput.value = ""; });
