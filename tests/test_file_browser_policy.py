@@ -128,10 +128,17 @@ def test_viewer_uses_canonical_factory():
     _assert_no_inline_factory(VIEWER, "_vaH5MakeEntry")
 
 
-@pytest.mark.skip(reason="lands with refactor(annotator): use canonical file_browser component")
 def test_annotator_uses_canonical_factory():
     _assert_imports_factory(ANNOTATOR)
     _assert_no_inline_factory(ANNOTATOR, "_anvMakeEntry", "_anvClipMakeEntry")
+    # Regression guard: the prior inline factories should be removed entirely.
+    src = ANNOTATOR.read_text()
+    assert "function _anvBrowseDir" not in src, (
+        "annotator.js must not redefine _anvBrowseDir — use makeFileBrowser"
+    )
+    assert "function _anvClipBrowseDir" not in src, (
+        "annotator.js must not redefine _anvClipBrowseDir — use makeFileBrowser"
+    )
 
 
 @pytest.mark.skip(reason="lands with refactor(postprocess): use canonical file_browser component")
