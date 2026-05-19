@@ -118,7 +118,6 @@ def test_dblclick_does_not_hide_pane():
 # refactor. The component-level tests (1-3, 6) stay green from commit 1.
 # ─────────────────────────────────────────────────────────────────────
 
-@pytest.mark.skip(reason="lands with refactor(analyze): use canonical file_browser component")
 def test_analyze_uses_canonical_factory():
     _assert_imports_factory(ANALYZE)
     _assert_no_inline_factory(ANALYZE, "_avMakeEntry")
