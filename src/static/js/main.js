@@ -12,4 +12,5 @@ import './viewer.js';
 import './postprocess.js';
 import './annotator.js';
 import './gpu_monitor.js';
+import './admin.js';
 import './custom_script.js';
