@@ -4,16 +4,22 @@
 //
 // Reads list state from /dlc/training/jobs (global Redis-backed) every 3s
 // when the tab is visible. Selecting a job opens a backfill+SSE stream to
-// /dlc/task/<id>/log-stream (added in Task 9). Stop button calls
-// /dlc/task/<id>/terminate (added in Task 11). Visibility + 20-min
-// idle timeout govern the SSE lifecycle (added in Task 10).
+// /dlc/task/<id>/log-stream via the shared window.logStream module, which
+// keeps a single EventSource per tab. Stop button calls
+// /dlc/task/<id>/terminate. If another consumer takes the shared SSE for a
+// different task, this page transparently falls back to 60s pollTail.
+//
+// Heartbeat-bearing SSE + the shared client (see log_stream.js + spec
+// docs/superpowers/specs/2026-05-19-jobs-sse-heartbeat-hybrid-design.md)
+// removed the need for the previous client-side idle timeout and bespoke
+// reconnect logic.
 
 const State = {
-  selectedTaskId: null,
-  eventSource:    null,
-  listPollTimer:  null,
-  idleTimer:      null,
-  jobs:           [],   // last-rendered list (for Stop confirmation)
+  selectedTaskId:   null,
+  unsubscribeLog:   null,   // returned by logStream.subscribe()
+  stopPollFallback: null,   // returned by logStream.pollTail() when demoted
+  listPollTimer:    null,
+  jobs:             [],     // last-rendered list (for Stop confirmation)
 };
 
 const POLL_MS = 3000;
@@ -175,41 +181,45 @@ function _isAtBottom(el) {
   return Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop) < 6;
 }
 
+function _appendLine(taskId, terminalEl, line) {
+  if (taskId !== State.selectedTaskId) return;  // raced past selection change
+  const wasBottom = _isAtBottom(terminalEl);
+  terminalEl.textContent += line + "\n";
+  if (wasBottom) terminalEl.scrollTop = terminalEl.scrollHeight;
+}
+
+function _closeStream() {
+  if (State.unsubscribeLog) { try { State.unsubscribeLog(); } catch (_) {} State.unsubscribeLog = null; }
+  if (State.stopPollFallback) { try { State.stopPollFallback(); } catch (_) {} State.stopPollFallback = null; }
+}
+
 function _openStream(taskId, terminalEl) {
-  if (State.eventSource) { State.eventSource.close(); State.eventSource = null; }
-  const es = new EventSource(`/dlc/task/${taskId}/log-stream`);
-  es.addEventListener("message", (ev) => {
-    if (taskId !== State.selectedTaskId) return;  // raced past selection change
-    const wasBottom = _isAtBottom(terminalEl);
-    terminalEl.textContent += ev.data + "\n";
-    if (wasBottom) terminalEl.scrollTop = terminalEl.scrollHeight;
+  _closeStream();
+  const ls = window.logStream;
+  if (!ls) {
+    _setStatusPill("error: log_stream.js not loaded", "error");
+    console.error("[jobs] window.logStream missing — log_stream.js was not loaded before jobs.js");
+    return;
+  }
+  State.unsubscribeLog = ls.subscribe(taskId, {
+    onLine: (line) => _appendLine(taskId, terminalEl, line),
+    onDone: () => {
+      _setStatusPill("stream ended", "closed");
+    },
+    onDemoted: () => {
+      // Another consumer took the SSE for a different task. Fall back to
+      // polling so we keep seeing log updates (at a slower cadence).
+      _setStatusPill("polling (shared SSE busy)", "paused");
+      if (State.stopPollFallback) { try { State.stopPollFallback(); } catch (_) {} }
+      State.stopPollFallback = ls.pollTail(taskId, {
+        intervalMs: 60000,
+        onLines: (newLines) => {
+          newLines.forEach(l => _appendLine(taskId, terminalEl, l));
+        },
+      });
+    },
+    onStatus: (text, cls) => _setStatusPill(text, cls),
   });
-  let retryArmed = true;
-  es.addEventListener("error", () => {
-    if (retryArmed) {
-      retryArmed = false;
-      _setStatusPill("reconnecting…", "paused");
-      // Browsers auto-reconnect EventSource by default; give it 2s. If a
-      // second 'error' fires within that window OR no 'message' arrives,
-      // close and surface Reconnect.
-      setTimeout(() => {
-        if (es.readyState === EventSource.CLOSED || es.readyState === EventSource.CONNECTING) {
-          _setStatusPill("disconnected (server unreachable)", "error");
-          es.close();
-          _showReconnectButton();
-        } else {
-          retryArmed = true;  // back to live; re-arm
-          _setStatusPill("live · streaming", "live");
-        }
-      }, 2000);
-    } else {
-      _setStatusPill("disconnected (server unreachable)", "error");
-      es.close();
-      _showReconnectButton();
-    }
-  });
-  State.eventSource = es;
-  _setStatusPill("live · streaming", "live");
 }
 
 async function _showJob(taskId) {
@@ -252,52 +262,18 @@ function _onRowClick(taskId) {
   _showJob(taskId).catch(err => console.error("[jobs] _showJob:", err));
 }
 
-// ─── Visibility + 20-min idle timeout ───────────────────────────────────
-const IDLE_MS_DEFAULT = 20 * 60 * 1000;
-
-function _idleMs() {
-  // Test seam: ?_test_idle_ms=500 lets E2E tests force a fast timeout.
-  // Honored only when the URL is on localhost (defensive against accidental
-  // exposure in production).
-  if (location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
-    return IDLE_MS_DEFAULT;
-  }
-  const v = parseInt(new URLSearchParams(location.search).get("_test_idle_ms"), 10);
-  return Number.isFinite(v) && v > 0 ? v : IDLE_MS_DEFAULT;
-}
-
-function _showReconnectButton() {
-  const detail = document.getElementById("jobs-detail");
-  if (!detail) return;
-  if (detail.querySelector(".jobs-reconnect-btn")) return;  // already shown
-  const btn = document.createElement("button");
-  btn.className = "jobs-reconnect-btn";
-  btn.textContent = "Reconnect";
-  btn.addEventListener("click", () => {
-    btn.remove();
-    if (State.selectedTaskId) _showJob(State.selectedTaskId);
-    _startListPoll();
-  });
-  detail.appendChild(btn);
-}
-
+// ─── Visibility ─────────────────────────────────────────────────────────
+// On hide: pause the list poll (cheap fetch) and close the shared SSE so
+// other consumers can claim it. On show: resume the list poll and re-open
+// the stream. The shared logStream module owns reconnection concerns —
+// no bespoke retry / idle timer needed here.
 function _onHidden() {
-  if (State.eventSource) { State.eventSource.close(); State.eventSource = null; }
+  _closeStream();
   _stopListPoll();
   _setStatusPill("paused (tab hidden)", "paused");
-  if (State.idleTimer) clearTimeout(State.idleTimer);
-  State.idleTimer = setTimeout(() => {
-    State.idleTimer = null;
-    _setStatusPill("closed (idle 20m — Reconnect)", "closed");
-    _showReconnectButton();
-  }, _idleMs());
 }
 
 function _onVisible() {
-  if (State.idleTimer) { clearTimeout(State.idleTimer); State.idleTimer = null; }
-  // Don't auto-resume if the idle timer already fired and the user hasn't clicked Reconnect.
-  const detail = document.getElementById("jobs-detail");
-  if (detail && detail.querySelector(".jobs-reconnect-btn")) return;
   _startListPoll();
   if (State.selectedTaskId) {
     const term = document.querySelector("#jobs-terminal");
