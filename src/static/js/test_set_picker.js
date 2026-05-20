@@ -1,5 +1,5 @@
 "use strict";
-import { drawFrame, drawBodyparts } from "./frame_overlay.js";
+import { drawFrame, drawBodyparts, DEFAULT_PALETTE } from "./frame_overlay.js";
 
 const tsCard       = document.getElementById("test-set-picker-card");
 const tsOpenBtn    = document.getElementById("btn-open-test-set-picker");
@@ -38,14 +38,9 @@ let _tsBodyparts = [];
 let _tsPalette = {};
 let _tsProjectTotal = 0;
 
-const TS_DEFAULT_PALETTE = [
-  "#ff5050", "#50c8ff", "#a0e040", "#ffa040", "#c060ff",
-  "#40e0c0", "#ff7090", "#80c080", "#f0c020", "#60a0ff",
-];
-
 function _buildPalette(bps) {
   const out = {};
-  bps.forEach((bp, i) => { out[bp] = TS_DEFAULT_PALETTE[i % TS_DEFAULT_PALETTE.length]; });
+  bps.forEach((bp, i) => { out[bp] = DEFAULT_PALETTE[i % DEFAULT_PALETTE.length]; });
   return out;
 }
 
