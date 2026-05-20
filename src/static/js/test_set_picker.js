@@ -137,11 +137,20 @@ async function _loadStemFrames(stem) {
 }
 
 function _updateCounters(counts) {
-  const stemCount = (_tsMarks[_tsStem] || new Set()).size;
   const folderTotal = _tsFrames.length;
+  const projTotal = counts.total_labeled ?? _tsProjectTotal;
+  if (_tsInspect) {
+    // Inspect mode — counters reflect the INSPECTED split's test set,
+    // not the user's edit-mode marks.
+    const stemCount = _tsStem ? _countInspectTestForStem(_tsStem) : 0;
+    const projTest = _tsInspect.testSet ? _tsInspect.testSet.size : 0;
+    if (tsFolderCntr) tsFolderCntr.textContent = `${stemCount} / ${folderTotal} in test set (this folder)`;
+    if (tsProjectCntr) tsProjectCntr.textContent = `${projTest} / ${projTotal} in test set (project)`;
+    return;
+  }
+  const stemCount = (_tsMarks[_tsStem] || new Set()).size;
   if (tsFolderCntr) tsFolderCntr.textContent = `${stemCount} / ${folderTotal} marked in this folder`;
   const projMarked = Object.values(_tsMarks).reduce((acc, s) => acc + s.size, 0);
-  const projTotal = counts.total_labeled ?? _tsProjectTotal;
   if (tsProjectCntr) tsProjectCntr.textContent = `${projMarked} / ${projTotal} marked in project`;
 }
 
@@ -422,8 +431,9 @@ async function _runInspect() {
       `Inspecting iteration-${iter} / shuffle-${shuffle} ` +
       `(trainset${Math.round(ds.train_fraction * 100)}) — read-only`;
     _closeInspectDialog();
-    // Switch the folder dropdown to show per-folder test-count from THIS split.
+    // Switch the folder dropdown + bottom counters to show split-derived stats.
     _refreshAllStemOptionLabels();
+    _updateCounters({});
     _renderFrameInspectAware();
   } catch (e) {
     alert(`Inspect failed: ${e.message || e}`);
@@ -435,8 +445,9 @@ function _exitInspect() {
   if (tsInspectBanner) tsInspectBanner.classList.add("hidden");
   // Re-enable the toggle button (it was disabled in inspect mode)
   if (tsToggleBtn) tsToggleBtn.disabled = false;
-  // Restore the folder dropdown to picker-mode marks counts.
+  // Restore the folder dropdown + bottom counters to picker-mode marks counts.
   _refreshAllStemOptionLabels();
+  _updateCounters({});
   _renderFrameInspectAware();
 }
 
