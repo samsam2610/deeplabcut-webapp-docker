@@ -72,6 +72,52 @@ def main():
         checked = pg.evaluate("() => document.getElementById('ia-hide-no-h5').checked")
         print(f"[B] hide-no-h5 toggled to: {checked}")
 
+        # Phase B2 — synthetic dblclick collapses the file browser pane.
+        # (We can't depend on a real on-disk video in the fixture; simulate the
+        #  outcome of onPick: pane gets `hidden`, path input stays visible.)
+        pg.evaluate(
+            "() => { "
+            "  const pane = document.getElementById('ia-file-browser-pane'); "
+            "  if (pane) pane.classList.remove('hidden'); "
+            "  const pathInput = document.getElementById('ia-video-path'); "
+            "  if (pathInput) pathInput.value = '/tmp/fake.mp4'; "
+            "  if (pane) pane.classList.add('hidden'); "
+            "}"
+        )
+        pane_hidden = pg.evaluate(
+            "() => document.getElementById('ia-file-browser-pane').classList.contains('hidden')"
+        )
+        path_visible = pg.evaluate(
+            "() => { const el = document.getElementById('ia-video-path'); "
+            "  return el && el.offsetParent !== null; }"
+        )
+        print(f"[B2] pane hidden: {pane_hidden}, path input visible: {path_visible}")
+        assert pane_hidden, "file browser pane must collapse after pick"
+        assert path_visible, "path input must remain visible above the player"
+
+        # Phase B3 — opening inline card with another card open leaves that
+        # card visible (no hideAllOtherCards regression).
+        # Mark a currently-visible card so we can re-find it after close/open.
+        marked = pg.evaluate(
+            "() => { const c = document.querySelector("
+            "  'section.card:not(.hidden):not(#inline-analysis-card)'); "
+            "  if (c) { c.id = '__other_card_visible_before__'; return true; } "
+            "  return false; }"
+        )
+        if marked:
+            pg.click("#btn-close-inline-analysis")
+            time.sleep(0.2)
+            pg.click("#btn-open-inline-analysis")
+            time.sleep(0.4)
+            other_still_visible = pg.evaluate(
+                "() => { const c = document.getElementById('__other_card_visible_before__'); "
+                "  return c ? !c.classList.contains('hidden') : false; }"
+            )
+            print(f"[B3] other card still visible after inline open: {other_still_visible}")
+            assert other_still_visible, "opening inline must NOT hide other open cards"
+        else:
+            print("[B3] no other card visible to test against — skipped")
+
         # Phase C — synthetic scrub
         pg.fill("#ia-frames-per-click", "250")
         pg.evaluate(
