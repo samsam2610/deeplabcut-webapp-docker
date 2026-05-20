@@ -28,6 +28,14 @@
   <div style="margin-bottom:.6rem;padding:.5rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)">
     <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:.4rem">Analysis Parameters</div>
     <div class="scorer-row" style="margin-bottom:.4rem">
+      <label for="ia-shuffle">Shuffle</label>
+      <input type="number" id="ia-shuffle" value="1" min="1" max="20" style="width:5rem"/>
+    </div>
+    <div class="scorer-row" style="margin-bottom:.4rem">
+      <label for="ia-trainingsetindex">Training set index</label>
+      <input type="number" id="ia-trainingsetindex" value="0" min="0" style="width:5rem"/>
+    </div>
+    <div class="scorer-row" style="margin-bottom:.4rem">
       <label for="ia-snapshot">Snapshot</label>
       <select id="ia-snapshot" style="flex:1"></select>
       <button class="btn-sm" id="ia-refresh-snapshots" title="Refresh">↺</button>

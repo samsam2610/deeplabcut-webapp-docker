@@ -86,10 +86,39 @@ def test_inline_analysis_js_does_not_hide_other_cards():
     )
 
 
+def test_shuffle_and_trainingsetindex_inputs_exist():
+    """Polish spec §1.3: full Analyze-card parity for the snapshot row."""
+    txt = (PARTIALS / "card_inline_analysis.html").read_text()
+    assert 'id="ia-shuffle"' in txt
+    assert 'id="ia-trainingsetindex"' in txt
+    assert 'id="ia-snapshot"' in txt
+    assert 'id="ia-refresh-snapshots"' in txt
+
+
+def test_inline_analysis_js_uses_latest_rel_path_and_iter_format():
+    """The snapshot picker must mirror analyze.js's format —
+    use data.latest_rel_path for the default and render
+    `<label> · iter N · shM` per option."""
+    js = (ROOT / "src" / "static" / "js" / "inline_analysis.js").read_text()
+    assert "latest_rel_path" in js, "must use the Latest-default pattern"
+    assert "iter" in js, "must format the iteration count in option text"
+    # Shuffle change reloads snapshots (indices are per-shuffle).
+    assert "ia-shuffle" in js
+
+
+def test_inline_analysis_js_sends_trainingsetindex_in_range():
+    """Polish spec §1.3 last bullet: /range POST body must include
+    shuffle + trainingsetindex from the new inputs."""
+    js = (ROOT / "src" / "static" / "js" / "inline_analysis.js").read_text()
+    assert "ia-trainingsetindex" in js
+    # Sanity: still sends shuffle (it did before, but now from the input).
+    assert "shuffle" in js
+
+
 def test_new_ids_are_unique_across_partials():
     new_ids = {
         "inline-analysis-card", "btn-close-inline-analysis", "btn-open-inline-analysis",
-        "ia-snapshot", "ia-batch-size",
+        "ia-snapshot", "ia-shuffle", "ia-trainingsetindex", "ia-batch-size",
         "ia-frames-per-click", "ia-keep-warm-seconds",
         "ia-warm-indicator", "ia-btn-analyze-range", "ia-last-run-status",
         "ia-file-browser-pane", "ia-hide-no-h5",
