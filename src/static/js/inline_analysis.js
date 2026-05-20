@@ -117,26 +117,53 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
     hideNoH5.addEventListener("change", () => picker.refresh && picker.refresh());
   }
 
-  // ── Snapshot picker ────────────────────────────────────────────────────
+  // ── Snapshot picker (mirrors analyze.js:_avLoadSnapshots) ──────────────
   async function refreshSnapshots() {
     if (!snapshotSel) return;
-    snapshotSel.innerHTML = "";
     try {
-      // Reuse the same endpoint the analyze card uses to enumerate snapshots.
+      // No shuffle filter — the route auto-derives shuffle from snapshot path.
       const r = await fetch("/dlc/project/snapshots");
       if (!r.ok) return;
       const data = await r.json();
-      // /dlc/project/snapshots returns { snapshots: [{label, iteration,
-      // shuffle, index, rel_path}, ...] }. Use rel_path (project-relative).
+      if (data.error) return;
+      snapshotSel.innerHTML = "";
+
+      // "Latest" default — use actual path so shuffle is auto-derived.
+      const latestOpt = document.createElement("option");
+      latestOpt.value = data.latest_rel_path || "-1";
+      if (data.latest_label) {
+        const iterStr = data.latest_iteration != null
+          ? `  ·  iter ${data.latest_iteration.toLocaleString()}`
+          : "";
+        const shStr = data.latest_shuffle != null
+          ? `  ·  sh${data.latest_shuffle}`
+          : "";
+        latestOpt.textContent = `Latest — ${data.latest_label}${iterStr}${shStr}`;
+      } else {
+        latestOpt.textContent = "Latest (from config)";
+      }
+      snapshotSel.appendChild(latestOpt);
+
+      // Individual snapshots (ascending by iteration).
       (data.snapshots || []).forEach(s => {
         const opt = document.createElement("option");
         opt.value = s.rel_path;
-        opt.textContent = s.label || s.rel_path;
+        const iterStr = s.iteration != null
+          ? `  ·  iter ${s.iteration.toLocaleString()}`
+          : "";
+        const shStr = s.shuffle != null ? `  ·  sh${s.shuffle}` : "";
+        opt.textContent = `${s.label}${iterStr}${shStr}`;
         snapshotSel.appendChild(opt);
       });
-    } catch (e) { /* silent */ }
+    } catch (e) {
+      console.error("inline_analysis refreshSnapshots:", e);
+    }
   }
   if (refreshSnapBtn) refreshSnapBtn.addEventListener("click", refreshSnapshots);
+
+  // Reload snapshots when shuffle changes (indices are per-shuffle).
+  const shuffleEl = document.getElementById("ia-shuffle");
+  if (shuffleEl) shuffleEl.addEventListener("change", refreshSnapshots);
 
   // ── Session start + status polling ─────────────────────────────────────
   async function ensureSession() {
@@ -149,10 +176,11 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        snapshot_path: snapshot,
-        shuffle: 1,
-        ttl_seconds: parseInt(keepWarm.value, 10) || 300,
-        batch_size: parseInt(batchSize.value, 10) || 8,
+        snapshot_path:    snapshot,
+        shuffle:          parseInt(document.getElementById("ia-shuffle")?.value, 10) || 1,
+        trainingsetindex: parseInt(document.getElementById("ia-trainingsetindex")?.value, 10) || 0,
+        ttl_seconds:      parseInt(keepWarm.value, 10) || 300,
+        batch_size:       parseInt(batchSize.value, 10) || 8,
       }),
     });
     if (!r.ok) {
@@ -235,13 +263,15 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        snap_key:      sk,
-        video_path:    videoPath.value.trim(),
-        start_frame:   startFrame,
-        n_frames:      nFrames,
-        batch_size:    parseInt(batchSize.value, 10) || 8,
-        save_as_csv:   !!(saveCsv && saveCsv.checked),
-        snapshot_path: snapshotSel && snapshotSel.value || "",
+        snap_key:         sk,
+        video_path:       videoPath.value.trim(),
+        start_frame:      startFrame,
+        n_frames:         nFrames,
+        batch_size:       parseInt(batchSize.value, 10) || 8,
+        save_as_csv:      !!(saveCsv && saveCsv.checked),
+        snapshot_path:    snapshotSel && snapshotSel.value || "",
+        shuffle:          parseInt(document.getElementById("ia-shuffle")?.value, 10) || 1,
+        trainingsetindex: parseInt(document.getElementById("ia-trainingsetindex")?.value, 10) || 0,
       }),
     });
     const data = await r.json().catch(() => ({}));
