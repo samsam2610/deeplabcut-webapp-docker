@@ -140,6 +140,19 @@ def session_start():
         return jsonify({"error": "snapshot_path required"}), 400
 
     config_path = project["config_path"]
+
+    # /dlc/project/snapshots returns project-relative paths (rel_path).
+    # DLCLoader wants absolute. Resolve here so (a) we can validate before
+    # dispatch and (b) the snap_key is canonical regardless of whether the
+    # caller sent a relative or absolute path.
+    project_root = Path(config_path).parent
+    snap_abs = (project_root / snapshot_path).resolve()
+    if not snap_abs.is_file():
+        return jsonify({
+            "error": f"snapshot not found: {snapshot_path}"
+        }), 404
+    snapshot_path = str(snap_abs)
+
     snap_key = _snap_key(config_path, shuffle, snapshot_path)
     user_id = _user_id()
     session_key = f"inline:session:{user_id}:{snap_key}"
