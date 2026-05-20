@@ -2,6 +2,35 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> ## ⚠ SPEC OVERRIDES — read first
+>
+> The spec (`docs/superpowers/specs/2026-05-20-inline-analysis-design.md`) was
+> revised after this plan was first written. **Wherever this plan and the spec
+> conflict, the spec wins.** The following plan references are obsolete and
+> must be replaced when you encounter them:
+>
+> - `runner.scorer_name` / `runner.bodyparts` — these attributes do **not**
+>   exist on `PoseInferenceRunner` (verified against DLC 3.0.0rc14). Use
+>   `DLCLoader` instead: `loader.scorer(snapshot_path)` and
+>   `loader.model_cfg["metadata"]["bodyparts"]`. See spec §3.
+> - `_preds_to_df(...)` helper — replaced by DLC's canonical
+>   `create_df_from_prediction(predictions, dlc_scorer, multi_animal,
+>   model_cfg, output_path, output_prefix, save_as_csv)` (from
+>   `deeplabcut.pose_estimation_pytorch.apis.videos`). Reindex rows from
+>   `0..N-1` to the actual frame numbers after it returns. See spec §3.
+> - `_read_pytorch_config(config_path, shuffle)` helper — replaced by
+>   `DLCLoader(config=config_path, trainset_index=trainingsetindex,
+>   shuffle=shuffle)`. The loader owns `model_cfg`, `scorer(...)`, and
+>   `project_cfg`.
+> - Worker task signature now includes `trainingsetindex` alongside `shuffle`.
+> - DUPLICATION NOTICE header on `viewer.js` (Task 0.2 Step 4) — **dropped**.
+>   viewer.js stays byte-identical to main per spec §4. The notice on
+>   `analyzed_frame_player.js` alone is sufficient.
+>
+> Any other reference to `runner.scorer_name`, `runner.bodyparts`,
+> `_preds_to_df`, or `_read_pytorch_config` in this plan should be treated as
+> obsolete — substitute the DLCLoader-based pattern from spec §3.
+
 **Goal:** Add an "Inline Analysis" card that lets a user scrub a video, run N frames of DLC pose inference forward against a warm-in-memory PyTorch model held by a long-lived Celery task, and merge results into the canonical DLC `.h5` / `.csv` / `_meta.pickle` files.
 
 **Architecture:** A new `dlc_inline_analysis` Flask blueprint owns six thin endpoints (session start/status/stop, range submit/status, video probe) that drive a long-lived Celery task `tasks.dlc_inline_session` over Redis lists/hashes. Activity (idle TTL) is bumped server-side only when a range is submitted; the worker times out after `ttl_seconds` of no range submissions, regardless of whether the card is open. No client-side heartbeat endpoint — that's the Jobs-page pattern, not relevant here. The task boots a single `PoseInferenceRunner` once via DLC's own `utils.get_pose_inference_runner`, then BLPOP-loops range requests, decoding only the requested frames through a thin `_RangeVideoIterator(VideoIterator)` subclass and merging predictions into the canonical files via atomic `os.replace`. The card embeds a copy-then-deferred-migration of `viewer.js`'s player/overlay/curation core, packaged as `makeAnalyzedFramePlayer({...})` — `viewer.js` is untouched in this PR.
@@ -36,7 +65,7 @@
 | `src/templates/partials/card_dlc_project.html` | Insert `btn-open-inline-analysis` between `btn-open-analyze` and `btn-open-view-analyzed` (note: the existing `btn-open-postprocess` already sits below View-Analyzed, so the new button slots in above View-Analyzed, not below it — see §1 of the spec). |
 | `src/templates/index.html` | `{% include "partials/card_inline_analysis.html" %}` next to the other card includes. |
 | `src/static/js/main.js` | One `import './inline_analysis.js';` line, ordered after `viewer.js`. |
-| `src/dlc/tasks.py` | Append `tasks.dlc_inline_session` Celery task plus helpers (`_blpop`, `_publish_status`, `_publish_result`, `_bump_activity`, `_control_says_stop`, `_idle_budget`, `_run_range`, `_RangeVideoIterator`, `_filter_skip_already_done`, `_atomic_write_h5`, `_atomic_write_csv`, `_update_meta_pickle`, `_resolve_h5_path`, `_preds_to_df`, `_read_pytorch_config`). |
+| `src/dlc/tasks.py` | Append `tasks.dlc_inline_session` Celery task plus helpers (`_blpop`, `_publish_status`, `_publish_result`, `_bump_activity`, `_control_says_stop`, `_idle_budget`, `_run_range`, `_RangeVideoIterator`, `_filter_skip_already_done`, `_atomic_write_h5`, `_atomic_write_csv`, `_update_meta_pickle`, `_resolve_h5_path`, `_resolve_meta_path`). DLC metadata access goes through `DLCLoader` (no custom `_read_pytorch_config`); DataFrame construction goes through `create_df_from_prediction` (no custom `_preds_to_df`). |
 | `src/app.py` | Register `dlc_inline_analysis` blueprint alongside `_dlc_inference_bp` (lines ~181–195). |
 | `src/static/js/viewer.js` | **One change only:** add the DUPLICATION-NOTICE header comment at the top per §4 of the spec. No behavior changes. |
 | `docs/policies/file-browser-component.md` | Add a one-paragraph "Related: analyzed-frame-player factory" pointer; broaden the doc's framing slightly to introduce shared frontend factories (lays the groundwork for the deferred rename to `shared-components.md`). |
@@ -421,49 +450,11 @@ export function makeAnalyzedFramePlayer(options) {
 Run: `python -m pytest tests/test_analyzed_frame_player_factory.py -v`
 Expected: `test_canonical_factory_exists` PASS, `test_factory_exports_make_analyzed_frame_player` PASS, `test_consumer_count_soft` SKIP.
 
-- [ ] **Step 4: Add the DUPLICATION-NOTICE header to viewer.js**
+- [ ] **Step 4: (DROPPED) — do NOT touch viewer.js**
 
-Open `src/static/js/viewer.js`. The file currently starts with `"use strict";`. **Above** the `"use strict";` directive, insert the header comment (so the directive remains the first executable statement, which JS engines require):
+The original plan called for a 10-line DUPLICATION NOTICE header at the top of `viewer.js`. That step is **removed** per the spec's hard constraint that `viewer.js` is byte-identical to `main` for this PR. The duplication notice on `analyzed_frame_player.js` alone is sufficient; the spec's "Known tech debt" section references it from there. If a future contributor needs to find the counterpart, they grep for `DUPLICATION NOTICE` and land on the factory.
 
-```javascript
-// ⚠ DUPLICATION NOTICE
-//   This file and ./components/analyzed_frame_player.js currently maintain
-//   duplicate player/overlay/curation logic. Bug fixes in one must be
-//   manually mirrored to the other until viewer.js is migrated to the
-//   factory.
-//
-//   See docs/superpowers/specs/2026-05-20-inline-analysis-design.md
-//   (§4 and "Known tech debt") for the planned migration.
-//   Follow-up PR title prefix:
-//     refactor(viewer): migrate to analyzed_frame_player factory
-"use strict";
-import { state } from './state.js';
-import { makeFileBrowser } from './components/file_browser.js';
-```
-
-This is a **comment-only change** to viewer.js — no behavior change.
-
-- [ ] **Step 5: Smoke-load the page to confirm viewer.js still parses**
-
-Restart flask (if running) and open `http://localhost:5000/?token=deeplabcut`. The View Analyzed card must still open and load a frame — same as before this PR.
-
-If the dev server is not running locally, skip the manual step but verify the file parses by importing it in a headless Playwright check:
-
-```python
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    b = p.chromium.launch(headless=True)
-    pg = b.new_page(); errs = []
-    pg.on("pageerror", lambda e: errs.append(str(e)))
-    pg.goto("http://localhost:5000/?token=deeplabcut")
-    pg.wait_for_load_state("networkidle")
-    print("errors:", errs)
-    b.close()
-```
-
-Expected: `errors: []`.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/static/js/components/analyzed_frame_player.js src/static/js/viewer.js
@@ -472,10 +463,11 @@ feat(static): port viewer.js player core to analyzed_frame_player factory
 
 Ports the player/overlay/marker-adjustment/dataset-curation regions of
 viewer.js into a parameterised makeAnalyzedFramePlayer({prefix, frameUrlFn,
-poseUrlFn, onCsvSaved}) factory. viewer.js gets only the DUPLICATION-NOTICE
-header — no behavior change. Per §4 of the spec, viewer.js stays in place
-and the new card will mount the factory; viewer.js's migration is a
-follow-up PR.
+poseUrlFn, onCsvSaved}) factory. viewer.js is NOT modified — the original
+plan's DUPLICATION-NOTICE header insertion was dropped per the spec's
+hard constraint that viewer.js stays byte-identical to main. Per §4 of
+the spec, viewer.js stays in place and the new card will mount the
+factory; viewer.js's migration is a follow-up PR.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -488,7 +480,7 @@ EOF
 
 - `tests/test_analyzed_frame_player_factory.py` — 2 PASS, 1 SKIP (consumer not yet present)
 - `src/static/js/viewer.js` — opens and plays a video in the browser exactly as before
-- `git diff main -- src/static/js/viewer.js` — only the header comment changes; zero behavior changes
+- `git diff main -- src/static/js/viewer.js` returns **empty** — viewer.js byte-identical to main
 - No new runtime asset is shipped to users yet (the factory is loaded only when Phase 2's `inline_analysis.js` imports it)
 
 ---
@@ -518,37 +510,48 @@ EOF
 ```bash
 docker exec $(docker ps --filter "name=worker" --filter "name=^/.*worker$" -q | head -1) \
   python -c "
-from deeplabcut.pose_estimation_pytorch.apis import utils
-from deeplabcut.pose_estimation_pytorch.apis import VideoIterator, video_inference
-print('get_pose_inference_runner :', hasattr(utils, 'get_pose_inference_runner'))
-print('VideoIterator             :', VideoIterator)
-print('video_inference           :', video_inference)
+from deeplabcut.pose_estimation_pytorch.apis import utils, VideoIterator, video_inference
+from deeplabcut.pose_estimation_pytorch.apis.videos import create_df_from_prediction
+from deeplabcut.pose_estimation_pytorch.data import DLCLoader
+from deeplabcut.pose_estimation_pytorch.runners.inference import PoseInferenceRunner
 import inspect
-sig = inspect.signature(utils.get_pose_inference_runner)
-print('runner signature          :', sig)
+print('get_pose_inference_runner :', inspect.signature(utils.get_pose_inference_runner))
+print('VideoIterator             :', inspect.signature(VideoIterator.__init__))
+print('video_inference           :', inspect.signature(video_inference))
+print('create_df_from_prediction :', inspect.signature(create_df_from_prediction))
+print('DLCLoader                 :', inspect.signature(DLCLoader.__init__))
+print('DLCLoader public          :', [m for m in dir(DLCLoader) if not m.startswith('_')])
+print('PoseInferenceRunner public:', [a for a in dir(PoseInferenceRunner) if not a.startswith('_')])
 "
 ```
 
-Expected: all three resolve. The `runner signature` line must include at minimum `model_config`, `snapshot_path`, `batch_size`, `device` (names may differ slightly — record the actual names).
+Expected against DLC 3.0.0rc14 (already verified on 2026-05-20):
+
+- `get_pose_inference_runner(model_config, snapshot_path, batch_size, device, ...)`
+- `VideoIterator(video_path, context, cropping)`
+- `video_inference(video, pose_runner, detector_runner, ...)`
+- `create_df_from_prediction(predictions, dlc_scorer, multi_animal, model_cfg, output_path, output_prefix, save_as_csv)`
+- `DLCLoader(config, trainset_index, shuffle, modelprefix)` — public methods include `scorer`, `model_cfg` (attribute), `project_cfg` (attribute), `snapshots`, `get_dataset_parameters`
+- `PoseInferenceRunner` public surface is `['inference', 'load_snapshot', 'predict']` — **does NOT** expose `scorer_name` or `bodyparts`
 
 - [ ] **Step 2: Decision point**
 
-If any symbol is missing or the signature names differ materially:
+Anything missing or with a materially different signature:
 
 - **Stop. Do not proceed with Phase 1.**
-- Surface the divergence to the parent session in your phase summary. Specifically: "DLC version X.Y.Z exposes `<actual>` instead of `<spec>` — spec needs to be amended before the worker is written."
+- Surface to the parent session in your phase summary, e.g.: "DLC version X.Y.Z exposes `<actual>` instead of `<expected>` — spec must be amended before the worker is written."
 
-If everything resolves: proceed.
+If everything resolves as documented above: proceed. The spec already encodes these signatures correctly.
 
-- [ ] **Step 3: Record the actual signature for downstream tasks**
+- [ ] **Step 3: (No-op) — signatures are recorded in the spec**
 
-Note the exact `runner.scorer_name`, `runner.bodyparts` attribute names by inspecting the returned runner once instantiated (no model load needed — just `inspect.signature` and a `dir()`). Subsequent tasks will need them.
+The spec's §3 worker code is the source of truth for which DLC symbols to call and how. Subsequent tasks copy from §3, not from this probe's output.
 
 (No commit — this is a discovery step.)
 
 ---
 
-## Task 1.1: Pure helpers — `_filter_skip_already_done`, `_RangeVideoIterator`, `_atomic_write_*`, `_preds_to_df`, `_resolve_h5_path`, `_update_meta_pickle`
+## Task 1.1: Pure helpers — `_filter_skip_already_done`, `_RangeVideoIterator`, `_atomic_write_*`, `_resolve_h5_path`, `_resolve_meta_path`, `_update_meta_pickle`
 
 **Files:**
 - Modify: `src/dlc/tasks.py` (append at end)
@@ -861,47 +864,15 @@ def _update_meta_pickle(meta_path, df, snapshot):
     _ia_os.replace(str(tmp), str(meta_path))
 
 
-def _preds_to_df(predictions, frame_indices, bodyparts, scorer_name):
-    """Convert a list of per-frame predictions into a DLC MultiIndex DataFrame.
-
-    `predictions`: list[dict[bodypart -> (x, y, likelihood)]] in the same
-    order as `frame_indices`.
-    """
-    cols = pd.MultiIndex.from_product(
-        [[scorer_name], bodyparts, ["x", "y", "likelihood"]],
-        names=["scorer", "bodyparts", "coords"],
-    )
-    rows = []
-    for pred in predictions:
-        row = []
-        for bp in bodyparts:
-            xyl = pred.get(bp, (float("nan"), float("nan"), 0.0))
-            row.extend(xyl)
-        rows.append(row)
-    return pd.DataFrame(rows, index=list(frame_indices), columns=cols)
-
-
-def _read_pytorch_config(config_path, shuffle):
-    """Locate the pytorch_config.yaml for the given DLC project + shuffle.
-
-    Returns the loaded YAML dict. Worker passes this to
-    utils.get_pose_inference_runner.
-    """
-    import yaml as _yaml
-    proj = _IAPath(config_path).parent
-    # DLC's PyTorch shuffles live under dlc-models-pytorch/iteration-N/...-shuffle<N>/train/
-    # Locate by glob since iteration index varies.
-    matches = list(proj.glob(
-        f"dlc-models-pytorch/iteration-*/" f"*shuffle{shuffle}/train/pytorch_config.yaml"
-    ))
-    if not matches:
-        raise FileNotFoundError(
-            f"No pytorch_config.yaml for shuffle {shuffle} under {proj}"
-        )
-    # Newest by mtime wins (handles re-trained shuffles).
-    matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    with open(str(matches[0])) as f:
-        return _yaml.safe_load(f)
+# Lazy module-level handles for DLC primitives — replaced in tests via
+# patch.object. The worker imports them inside _dlc_inline_session_inner;
+# we just need NAMES that tests can patch (real values are set at first
+# use; tests never let the real imports run).
+_dlc_loader_cls            = None   # → deeplabcut.pose_estimation_pytorch.data.DLCLoader
+_dlc_apis_utils            = None   # → deeplabcut.pose_estimation_pytorch.apis.utils
+_dlc_create_df_from_prediction = None   # → ...apis.videos.create_df_from_prediction
+# (No _preds_to_df, no _read_pytorch_config — DLCLoader and
+#  create_df_from_prediction handle those concerns; see spec §3.)
 ```
 
 Note: `pandas as pd` is already imported elsewhere in `tasks.py` — verify with `grep -n "^import pandas\|^from pandas" src/dlc/tasks.py` before this step and add the import only if it's missing.
@@ -920,9 +891,9 @@ feat(dlc): inline-analysis pure helpers (skip-already-done, atomic write, meta)
 
 Pure-logic helpers added to src/dlc/tasks.py with full unit coverage:
 _filter_skip_already_done, _RangeVideoIterator, _atomic_write_h5/_csv,
-_update_meta_pickle, _resolve_h5_path, _resolve_meta_path, _preds_to_df,
-_read_pytorch_config. No Celery task yet, no Flask routes yet, no DLC
-imports executed at import time.
+_update_meta_pickle, _resolve_h5_path, _resolve_meta_path. No Celery task
+yet, no Flask routes yet, no DLC imports executed at import time. DLC
+metadata access (scorer/model_cfg) is delegated to DLCLoader in Task 1.3.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -1177,41 +1148,54 @@ EOF
 Append to `tests/test_inline_analysis_worker.py`:
 
 ```python
+# Helper: build the kwargs _run_range now takes (scorer/model_cfg/multi_animal
+# come from DLCLoader at session boot, not from the runner).
+def _run_range_kw(scorer="SCORER", multi_animal=False):
+    return dict(scorer=scorer, model_cfg={"metadata": {"bodyparts": ["nose"]}},
+                multi_animal=multi_animal)
+
+
+def _stub_create_df(predictions, dlc_scorer, multi_animal, model_cfg,
+                    output_path, output_prefix, save_as_csv):
+    """Stub that returns a DataFrame with the same row count as predictions
+    and a minimal MultiIndex column set, indexed 0..N-1 (matches the real
+    create_df_from_prediction's contract for _run_range's reindex step)."""
+    n = len(predictions)
+    cols = pd.MultiIndex.from_product([[dlc_scorer], ["nose"], ["x", "y", "likelihood"]],
+                                      names=["scorer", "bodyparts", "coords"])
+    return pd.DataFrame(0.0, index=range(n), columns=cols)
+
+
 class TestRunRange:
     def test_run_range_writes_h5_and_csv(self, tmp_path):
         video_path = tmp_path / "v.mp4"; video_path.write_bytes(b"")
         runner = MagicMock()
-        runner.scorer_name = "SCORER"
-        runner.bodyparts = ["nose", "tail"]
-
-        # Mock video_inference to return 3 predictions (one per frame).
+        # Three predictions (one per analyzed frame).
         def fake_video_inference(vit, pose_runner):
-            return [
-                {"nose": (1.0, 2.0, 0.9), "tail": (3.0, 4.0, 0.8)},
-                {"nose": (5.0, 6.0, 0.9), "tail": (7.0, 8.0, 0.8)},
-                {"nose": (9.0, 10.0, 0.9), "tail": (11.0, 12.0, 0.8)},
-            ]
+            return [{}, {}, {}]
         with patch.object(dlc_tasks, "video_inference", fake_video_inference), \
-             patch.object(dlc_tasks, "_RangeVideoIterator", lambda p, indices: iter([None] * len(indices))):
+             patch.object(dlc_tasks, "_dlc_create_df_from_prediction", _stub_create_df), \
+             patch.object(dlc_tasks, "_RangeVideoIterator",
+                          lambda p, indices: iter([None] * len(indices))):
             req = {
                 "req_id": "r1", "video_path": str(video_path),
                 "start_frame": 100, "n_frames": 3, "batch_size": 8,
                 "save_as_csv": True, "snapshot_path": "snap.pt",
             }
-            n_analyzed, n_skipped = dlc_tasks._run_range(runner, req)
+            n_analyzed, n_skipped = dlc_tasks._run_range(runner, req=req, **_run_range_kw())
         assert n_analyzed == 3
         assert n_skipped == 0
         h5_path = dlc_tasks._resolve_h5_path(str(video_path), "SCORER")
         csv_path = h5_path.with_suffix(".csv")
         assert h5_path.is_file()
         assert csv_path.is_file()
+        # Verify rows were reindexed 100..102 (not 0..2).
+        df_out = pd.read_hdf(str(h5_path))
+        assert list(df_out.index) == [100, 101, 102]
 
     def test_run_range_skips_already_done(self, tmp_path):
         video_path = tmp_path / "v.mp4"; video_path.write_bytes(b"")
         runner = MagicMock()
-        runner.scorer_name = "S"
-        runner.bodyparts = ["nose"]
-        # Pre-seed existing h5 with frames 100, 101.
         h5_path = dlc_tasks._resolve_h5_path(str(video_path), "S")
         df_seed = _df_with_index([100, 101])
         dlc_tasks._atomic_write_h5(h5_path, df_seed)
@@ -1219,23 +1203,23 @@ class TestRunRange:
         called_with = []
         def fake_video_inference(vit, pose_runner):
             called_with.append(list(vit))   # capture iterated frames
-            return [{"nose": (0.0, 0.0, 0.5)}]   # one prediction (frame 102 only)
+            return [{}]                     # one prediction (frame 102 only)
         with patch.object(dlc_tasks, "video_inference", fake_video_inference), \
-             patch.object(dlc_tasks, "_RangeVideoIterator", lambda p, indices: iter([None] * len(indices))):
+             patch.object(dlc_tasks, "_dlc_create_df_from_prediction", _stub_create_df), \
+             patch.object(dlc_tasks, "_RangeVideoIterator",
+                          lambda p, indices: iter([None] * len(indices))):
             req = {
                 "req_id": "r1", "video_path": str(video_path),
                 "start_frame": 100, "n_frames": 3, "batch_size": 8,
                 "save_as_csv": False, "snapshot_path": "snap.pt",
             }
-            n_analyzed, n_skipped = dlc_tasks._run_range(runner, req)
+            n_analyzed, n_skipped = dlc_tasks._run_range(runner, req=req, **_run_range_kw(scorer="S"))
         assert n_analyzed == 1
         assert n_skipped == 2
 
     def test_run_range_no_op_when_everything_done(self, tmp_path):
         video_path = tmp_path / "v.mp4"; video_path.write_bytes(b"")
         runner = MagicMock()
-        runner.scorer_name = "S"
-        runner.bodyparts = ["nose"]
         h5_path = dlc_tasks._resolve_h5_path(str(video_path), "S")
         df_seed = _df_with_index([100, 101, 102])
         dlc_tasks._atomic_write_h5(h5_path, df_seed)
@@ -1244,10 +1228,12 @@ class TestRunRange:
             "start_frame": 100, "n_frames": 3, "batch_size": 8,
             "save_as_csv": False, "snapshot_path": "snap.pt",
         }
-        # video_inference must NOT be called.
+        # video_inference and create_df_from_prediction must NOT be called.
         with patch.object(dlc_tasks, "video_inference",
+                          side_effect=AssertionError("must not be called")), \
+             patch.object(dlc_tasks, "_dlc_create_df_from_prediction",
                           side_effect=AssertionError("must not be called")):
-            n_analyzed, n_skipped = dlc_tasks._run_range(runner, req)
+            n_analyzed, n_skipped = dlc_tasks._run_range(runner, req=req, **_run_range_kw(scorer="S"))
         assert n_analyzed == 0
         assert n_skipped == 3
 
@@ -1255,10 +1241,18 @@ class TestRunRange:
 class TestInlineSessionTask:
     def test_session_exits_on_ttl_with_no_work(self, fake_redis, tmp_path):
         # Worker called with TTL=1, no queue items → should exit within ~1s.
-        runner_factory = MagicMock(return_value=MagicMock(scorer_name="S", bodyparts=["nose"]))
-        with patch.object(dlc_tasks, "_dlc_apis_utils",
-                          MagicMock(get_pose_inference_runner=runner_factory)), \
-             patch.object(dlc_tasks, "_read_pytorch_config", return_value={}):
+        # The session loop builds a DLCLoader at boot (for scorer/model_cfg/
+        # multianimal); patch the loader class to a no-op stub.
+        def _fake_loader(**kwargs):
+            m = MagicMock()
+            m.scorer.return_value = "S"
+            m.model_cfg = {"metadata": {"bodyparts": ["nose"]}}
+            m.project_cfg = {"multianimalproject": False}
+            return m
+        runner_factory = MagicMock(return_value=MagicMock())
+        with patch.object(dlc_tasks, "_dlc_loader_cls", _fake_loader), \
+             patch.object(dlc_tasks, "_dlc_apis_utils",
+                          MagicMock(get_pose_inference_runner=runner_factory)):
             t0 = _ia_time_now()
             dlc_tasks._dlc_inline_session_inner(
                 fake_redis,
@@ -1267,6 +1261,7 @@ class TestInlineSessionTask:
                 snap_key="k1",
                 snapshot_path="snap.pt",
                 shuffle=1,
+                trainingsetindex=0,
                 batch_size=8,
                 ttl=1,
             )
@@ -1276,15 +1271,21 @@ class TestInlineSessionTask:
         assert h["status"] == "expired"
 
     def test_session_exits_on_control_stop(self, fake_redis, tmp_path):
-        runner_factory = MagicMock(return_value=MagicMock(scorer_name="S", bodyparts=["nose"]))
+        def _fake_loader(**kwargs):
+            m = MagicMock()
+            m.scorer.return_value = "S"
+            m.model_cfg = {"metadata": {"bodyparts": ["nose"]}}
+            m.project_cfg = {"multianimalproject": False}
+            return m
+        runner_factory = MagicMock(return_value=MagicMock())
         fake_redis.set("inline:control:u1:k1", "stop")
-        with patch.object(dlc_tasks, "_dlc_apis_utils",
-                          MagicMock(get_pose_inference_runner=runner_factory)), \
-             patch.object(dlc_tasks, "_read_pytorch_config", return_value={}):
+        with patch.object(dlc_tasks, "_dlc_loader_cls", _fake_loader), \
+             patch.object(dlc_tasks, "_dlc_apis_utils",
+                          MagicMock(get_pose_inference_runner=runner_factory)):
             dlc_tasks._dlc_inline_session_inner(
                 fake_redis, user_id="u1", config_path="cfg",
                 snap_key="k1", snapshot_path="snap.pt",
-                shuffle=1, batch_size=8, ttl=60,
+                shuffle=1, trainingsetindex=0, batch_size=8, ttl=60,
             )
         h = fake_redis._hstore[f"inline:session:u1:k1"]
         assert h["status"] == "stopped"
@@ -1297,19 +1298,24 @@ class TestInlineSessionTask:
             "save_as_csv": False, "snapshot_path": "snap.pt",
         }
         fake_redis.lpush("inline:queue:u1:k1", _ia_json.dumps(req))
-        runner = MagicMock(scorer_name="S", bodyparts=["nose"])
-        runner_factory = MagicMock(return_value=runner)
-        with patch.object(dlc_tasks, "_dlc_apis_utils",
+        def _fake_loader(**kwargs):
+            m = MagicMock()
+            m.scorer.return_value = "S"
+            m.model_cfg = {"metadata": {"bodyparts": ["nose"]}}
+            m.project_cfg = {"multianimalproject": False}
+            return m
+        runner_factory = MagicMock(return_value=MagicMock())
+        with patch.object(dlc_tasks, "_dlc_loader_cls", _fake_loader), \
+             patch.object(dlc_tasks, "_dlc_apis_utils",
                           MagicMock(get_pose_inference_runner=runner_factory)), \
-             patch.object(dlc_tasks, "_read_pytorch_config", return_value={}), \
-             patch.object(dlc_tasks, "video_inference",
-                          return_value=[{"nose": (1.0, 2.0, 0.9)}]), \
+             patch.object(dlc_tasks, "video_inference", return_value=[{}]), \
+             patch.object(dlc_tasks, "_dlc_create_df_from_prediction", _stub_create_df), \
              patch.object(dlc_tasks, "_RangeVideoIterator",
                           lambda p, indices: iter([None] * len(indices))):
             dlc_tasks._dlc_inline_session_inner(
                 fake_redis, user_id="u1", config_path="cfg",
                 snap_key="k1", snapshot_path="snap.pt",
-                shuffle=1, batch_size=8, ttl=2,
+                shuffle=1, trainingsetindex=0, batch_size=8, ttl=2,
             )
         r = fake_redis._hstore["inline:result:r1"]
         assert r["status"] == "done"
@@ -1324,13 +1330,17 @@ Expected: AttributeError on `_run_range`, `_dlc_inline_session_inner`.
 - [ ] **Step 3: Append `_run_range` + the Celery task to `src/dlc/tasks.py`**
 
 ```python
-def _run_range(runner, req):
+def _run_range(runner, *, scorer, model_cfg, multi_animal, req):
     """Inference + merge for one range request.
+
+    Uses DLC's canonical create_df_from_prediction to build the DataFrame
+    (then reindexes 0..N-1 → actual frame numbers), so the result has the
+    same MultiIndex shape as analyze_videos' output.
 
     Returns (n_analyzed, n_skipped). Raises on hard failure (caught by the
     task loop, which publishes status=error).
     """
-    h5_path  = _resolve_h5_path(req["video_path"], runner.scorer_name)
+    h5_path  = _resolve_h5_path(req["video_path"], scorer)
     existing = pd.read_hdf(str(h5_path)) if h5_path.exists() else None
 
     target     = list(range(req["start_frame"], req["start_frame"] + req["n_frames"]))
@@ -1342,8 +1352,24 @@ def _run_range(runner, req):
     vit = _RangeVideoIterator(req["video_path"], indices=to_analyze)
     predictions = video_inference(vit, pose_runner=runner)
 
-    df_new   = _preds_to_df(predictions, to_analyze, runner.bodyparts, runner.scorer_name)
-    df_merge = df_new if existing is None else df_new.combine_first(existing)
+    # Build the DataFrame via DLC's canonical helper. It writes its own h5
+    # to a temp output dir; we use the DataFrame it returns and discard the
+    # scratch file.
+    import tempfile
+    with tempfile.TemporaryDirectory() as scratch:
+        df_range = _dlc_create_df_from_prediction(
+            predictions=predictions,
+            dlc_scorer=scorer,
+            multi_animal=multi_animal,
+            model_cfg=model_cfg,
+            output_path=scratch,
+            output_prefix=f"range_{req['req_id']}",
+            save_as_csv=False,
+        )
+    # create_df_from_prediction indexes rows 0..N-1. Re-key to absolute frames.
+    df_range.index = pd.Index(to_analyze, name=df_range.index.name)
+
+    df_merge = df_range if existing is None else df_range.combine_first(existing)
     _atomic_write_h5(h5_path, df_merge)
     if req.get("save_as_csv"):
         _atomic_write_csv(h5_path.with_suffix(".csv"), df_merge)
@@ -1353,11 +1379,12 @@ def _run_range(runner, req):
 
 
 def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
-                              snapshot_path, shuffle, batch_size, ttl):
+                              snapshot_path, shuffle, trainingsetindex,
+                              batch_size, ttl):
     """Pure-function body of the warm-worker task, testable without Celery.
 
-    Boots the runner once, then BLPOP-loops range requests until TTL elapses
-    or a control:stop signal is received.
+    Boots a DLCLoader + PoseInferenceRunner once, then BLPOP-loops range
+    requests until TTL elapses or a control:stop signal is received.
     """
     queue_key   = _queue_key(user_id, snap_key)
     control_key = _control_key(user_id, snap_key)   # noqa: F841 - consumed inside helper
@@ -1366,9 +1393,18 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
                     snapshot_path=snapshot_path, project=str(_IAPath(config_path).parent.name),
                     started_at=str(_ia_time.time()))
     try:
-        model_config = _read_pytorch_config(config_path, shuffle)
+        # DLCLoader is the canonical metadata accessor; PoseInferenceRunner
+        # does NOT expose scorer_name / bodyparts. See spec §3.
+        loader = _dlc_loader_cls(
+            config=config_path,
+            trainset_index=trainingsetindex,
+            shuffle=shuffle,
+        )
+        scorer       = loader.scorer(snapshot_path)
+        model_cfg    = loader.model_cfg
+        multi_animal = bool(loader.project_cfg.get("multianimalproject", False))
         runner = _dlc_apis_utils.get_pose_inference_runner(
-            model_config, snapshot_path,
+            model_config=model_cfg, snapshot_path=snapshot_path,
             batch_size=batch_size, device=None,
         )
     except Exception as exc:
@@ -1398,7 +1434,7 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
         if req.get("batch_size") and req["batch_size"] != cached_batch_size:
             try:
                 runner = _dlc_apis_utils.get_pose_inference_runner(
-                    model_config, snapshot_path,
+                    model_config=model_cfg, snapshot_path=snapshot_path,
                     batch_size=req["batch_size"], device=None,
                 )
                 cached_batch_size = req["batch_size"]
@@ -1407,7 +1443,10 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
                 continue
 
         try:
-            n_analyzed, n_skipped = _run_range(runner, req)
+            n_analyzed, n_skipped = _run_range(
+                runner, scorer=scorer, model_cfg=model_cfg,
+                multi_animal=multi_animal, req=req,
+            )
             _publish_result(redis_, req["req_id"], "done",
                             n_analyzed=n_analyzed, n_skipped=n_skipped)
         except Exception as exc:
@@ -1419,7 +1458,7 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
 
 @celery.task(bind=True, name="tasks.dlc_inline_session", acks_late=False)
 def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
-                       shuffle, batch_size, ttl):
+                       shuffle, trainingsetindex, batch_size, ttl):
     """Long-lived warm-worker session for one (user, project, snapshot) triple.
 
     acks_late=False — we don't want this task redelivered on broker restart;
@@ -1430,7 +1469,7 @@ def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
     redis_ = _redis_client_from_celery_app(self)
     _dlc_inline_session_inner(
         redis_, user_id, config_path, snap_key, snapshot_path,
-        shuffle, batch_size, ttl,
+        shuffle, trainingsetindex, batch_size, ttl,
     )
 
 
@@ -2115,18 +2154,28 @@ def test_concurrent_range_requests_serialise_via_queue(ia_client):
     assert {p["n_frames"] for p in parsed} == {10, 20}
 
 
+def _fake_loader_factory():
+    """Shared fake DLCLoader for session-lifecycle tests."""
+    def _make(**kwargs):
+        m = MagicMock()
+        m.scorer.return_value = "S"
+        m.model_cfg = {"metadata": {"bodyparts": ["nose"]}}
+        m.project_cfg = {"multianimalproject": False}
+        return m
+    return _make
+
+
 def test_idle_ttl_exit_publishes_expired_status(ia_client, tmp_path):
     """When the worker loop exhausts its TTL, the session hash status = 'expired'."""
     from dlc import tasks as dlc_tasks
     _, _app, redis, _project = ia_client
-    runner = MagicMock(scorer_name="S", bodyparts=["nose"])
-    with patch.object(dlc_tasks, "_dlc_apis_utils",
-                      MagicMock(get_pose_inference_runner=MagicMock(return_value=runner))), \
-         patch.object(dlc_tasks, "_read_pytorch_config", return_value={}):
+    with patch.object(dlc_tasks, "_dlc_loader_cls", _fake_loader_factory()), \
+         patch.object(dlc_tasks, "_dlc_apis_utils",
+                      MagicMock(get_pose_inference_runner=MagicMock(return_value=MagicMock()))):
         dlc_tasks._dlc_inline_session_inner(
             redis, user_id="u1", config_path="cfg",
             snap_key="sk-ttl", snapshot_path="snap.pt",
-            shuffle=1, batch_size=8, ttl=1,
+            shuffle=1, trainingsetindex=0, batch_size=8, ttl=1,
         )
     h = redis._hstore["inline:session:u1:sk-ttl"]
     assert h["status"] == "expired"
@@ -2137,22 +2186,21 @@ def test_control_stop_takes_priority_over_pending_queue(ia_client, tmp_path):
     from dlc import tasks as dlc_tasks
     _, _app, redis, _project = ia_client
     redis.set("inline:control:u1:sk-stop", "stop")
-    # Queue one item that, if processed, would call our SHOULD-NOT-BE-CALLED runner.
+    # Queue one item that, if processed, would call our SHOULD-NOT-BE-CALLED video_inference.
     redis.lpush("inline:queue:u1:sk-stop", json.dumps({
         "req_id": "r1", "video_path": str(tmp_path / "v.mp4"),
         "start_frame": 0, "n_frames": 1, "batch_size": 8,
         "save_as_csv": False, "snapshot_path": "snap.pt",
     }))
-    runner = MagicMock(scorer_name="S", bodyparts=["nose"])
-    with patch.object(dlc_tasks, "_dlc_apis_utils",
-                      MagicMock(get_pose_inference_runner=MagicMock(return_value=runner))), \
-         patch.object(dlc_tasks, "_read_pytorch_config", return_value={}), \
+    with patch.object(dlc_tasks, "_dlc_loader_cls", _fake_loader_factory()), \
+         patch.object(dlc_tasks, "_dlc_apis_utils",
+                      MagicMock(get_pose_inference_runner=MagicMock(return_value=MagicMock()))), \
          patch.object(dlc_tasks, "video_inference",
                       side_effect=AssertionError("must not run after control:stop")):
         dlc_tasks._dlc_inline_session_inner(
             redis, user_id="u1", config_path="cfg",
             snap_key="sk-stop", snapshot_path="snap.pt",
-            shuffle=1, batch_size=8, ttl=60,
+            shuffle=1, trainingsetindex=0, batch_size=8, ttl=60,
         )
     h = redis._hstore["inline:session:u1:sk-stop"]
     assert h["status"] == "stopped"
@@ -3333,7 +3381,7 @@ If a task tempts you toward any of the above, stop and surface it back to the pa
 **Type / name consistency:**
 
 - `snap_key` everywhere (never `session_id` in storage; `session_id` is only the API-response alias).
-- Worker function names: `_filter_skip_already_done`, `_RangeVideoIterator`, `_atomic_write_h5`, `_atomic_write_csv`, `_update_meta_pickle`, `_resolve_h5_path`, `_resolve_meta_path`, `_preds_to_df`, `_read_pytorch_config`, `_run_range`, `_publish_status`, `_publish_result`, `_bump_activity`, `_control_says_stop`, `_idle_budget`, `_blpop`, `_dlc_inline_session_inner` — used consistently across T1.1–1.5.
+- Worker function names: `_filter_skip_already_done`, `_RangeVideoIterator`, `_atomic_write_h5`, `_atomic_write_csv`, `_update_meta_pickle`, `_resolve_h5_path`, `_resolve_meta_path`, `_run_range`, `_publish_status`, `_publish_result`, `_bump_activity`, `_control_says_stop`, `_idle_budget`, `_blpop`, `_dlc_inline_session_inner` — used consistently across T1.1–1.5. (DLC primitives — `_dlc_loader_cls`, `_dlc_apis_utils`, `_dlc_create_df_from_prediction` — are module-level handles tests patch; they replace the obsolete `_preds_to_df` and `_read_pytorch_config` from the original draft.)
 - Route paths: all under `/dlc/project/inline-analysis/`. Consistent in T1.4 (definition) and T2.2 (consumption).
 - DOM prefix: `ia-` for the new card. Consistent in T2.1 (markup) and T2.2 (factory `prefix: "ia"` and JS `getElementById` calls).
 - Redis key shapes: `inline:session:{user_id}:{snap_key}`, `inline:queue:{user_id}:{snap_key}`, `inline:control:{user_id}:{snap_key}`, `inline:result:{req_id}` — match spec §2 verbatim. Used consistently across T1.2/T1.3/T1.4.

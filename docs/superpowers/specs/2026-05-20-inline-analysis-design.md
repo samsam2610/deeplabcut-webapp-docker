@@ -196,18 +196,37 @@ Lives in the existing `worker-1` container (PyTorch). One subprocess per session
 ```python
 @celery.task(bind=True, name="tasks.dlc_inline_session", acks_late=False)
 def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
-                       shuffle, batch_size, ttl):
+                       shuffle, trainingsetindex, batch_size, ttl):
     from deeplabcut.pose_estimation_pytorch.apis import (
         utils, VideoIterator, video_inference,
     )
+    from deeplabcut.pose_estimation_pytorch.apis.videos import create_df_from_prediction
+    from deeplabcut.pose_estimation_pytorch.data import DLCLoader
+
     queue_key   = f"inline:queue:{user_id}:{snap_key}"
     control_key = f"inline:control:{user_id}:{snap_key}"
     session_key = f"inline:session:{user_id}:{snap_key}"
 
     # Boot — model weights load ONCE.
-    model_config = _read_pytorch_config(config_path, shuffle)
+    # DLCLoader is the canonical project-metadata accessor that
+    # analyze_videos itself uses; it owns scorer/model_cfg/multi_animal.
+    # (PoseInferenceRunner's public surface is `inference / load_snapshot /
+    #  predict` — it does NOT expose `scorer_name` or `bodyparts`, despite
+    #  what an earlier spec draft assumed.)
+    loader = DLCLoader(
+        config=config_path,
+        trainset_index=trainingsetindex,
+        shuffle=shuffle,
+    )
+    scorer       = loader.scorer(snapshot_path)
+    model_cfg    = loader.model_cfg
+    multi_animal = bool(loader.project_cfg.get("multianimalproject", False))
+    # multi_animal is always False here — the route gate already rejected
+    # multi-animal projects. We still pass the flag through so
+    # create_df_from_prediction picks the right column shape.
+
     runner = utils.get_pose_inference_runner(
-        model_config, snapshot_path,
+        model_config=model_cfg, snapshot_path=snapshot_path,
         batch_size=batch_size,
         device=None,                # honors CUDA_VISIBLE_DEVICES
     )
@@ -224,13 +243,16 @@ def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
         # Rebuild runner if batch_size changed — model weights stay in GPU.
         if req["batch_size"] != cached_batch_size:
             runner = utils.get_pose_inference_runner(
-                model_config, snapshot_path,
+                model_config=model_cfg, snapshot_path=snapshot_path,
                 batch_size=req["batch_size"], device=None,
             )
             cached_batch_size = req["batch_size"]
 
         try:
-            n_analyzed, n_skipped = _run_range(runner, req)
+            n_analyzed, n_skipped = _run_range(
+                runner, scorer=scorer, model_cfg=model_cfg,
+                multi_animal=multi_animal, req=req,
+            )
             _publish_result(req["req_id"], "done",
                             n_analyzed=n_analyzed, n_skipped=n_skipped)
         except Exception as e:
@@ -240,11 +262,11 @@ def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
     _publish_status(snap_key, "expired")
 ```
 
-`_run_range` is a thin wrapper around DLC primitives:
+`_run_range` builds the result DataFrame via DLC's own `create_df_from_prediction` (the helper `analyze_videos` itself uses), reindexes from `0..len-1` to the actual frame numbers, then merges into the canonical h5:
 
 ```python
-def _run_range(runner, req):
-    h5_path  = _resolve_h5_path(req["video_path"], runner.scorer_name)
+def _run_range(runner, *, scorer, model_cfg, multi_animal, req):
+    h5_path  = _resolve_h5_path(req["video_path"], scorer)
     existing = pd.read_hdf(h5_path) if h5_path.exists() else None
 
     target     = list(range(req["start_frame"], req["start_frame"] + req["n_frames"]))
@@ -255,10 +277,23 @@ def _run_range(runner, req):
 
     vit = _RangeVideoIterator(req["video_path"], indices=to_analyze)
     predictions = video_inference(vit, pose_runner=runner)
+    # predictions: list[dict[str, np.ndarray]] — one entry per analyzed
+    # frame, in the same order as `to_analyze`.
 
-    df_new   = _preds_to_df(predictions, to_analyze,
-                            runner.bodyparts, runner.scorer_name)
-    df_merge = df_new if existing is None else df_new.combine_first(existing)
+    with _scratch_dir() as scratch:
+        df_range = create_df_from_prediction(
+            predictions=predictions,
+            dlc_scorer=scorer,
+            multi_animal=multi_animal,
+            model_cfg=model_cfg,
+            output_path=scratch,                   # short-lived tmp; we use the returned df
+            output_prefix=f"range_{req['req_id']}",
+            save_as_csv=False,
+        )
+    # create_df_from_prediction indexes rows 0..N-1. Re-key to absolute frames.
+    df_range.index = pd.Index(to_analyze, name=df_range.index.name)
+
+    df_merge = df_range if existing is None else df_range.combine_first(existing)
     _atomic_write_h5(h5_path, df_merge)
     if req["save_as_csv"]:
         _atomic_write_csv(h5_path.with_suffix(".csv"), df_merge)
@@ -268,15 +303,19 @@ def _run_range(runner, req):
 
 `_RangeVideoIterator` is a ~15-line subclass of `deeplabcut.pose_estimation_pytorch.apis.VideoIterator` that yields only the requested indices (handles non-contiguous skip lists).
 
+`_scratch_dir()` is a `tempfile.TemporaryDirectory` context manager. The scratch h5 that `create_df_from_prediction` writes is short-lived and never persisted; we only need the in-memory DataFrame it returns.
+
 ### Why DLC primitives, not a custom inference loop
 
-DLC exposes the right warm-worker primitive directly:
+DLC exposes the right warm-worker primitives directly. We use them — not just analogues. Verified against DLC 3.0.0rc14 in the worker container on 2026-05-20:
 
-- `utils.get_pose_inference_runner(model_config, snapshot_path, batch_size, device)` → `PoseInferenceRunner`. This is what `analyze_videos` itself uses internally.
-- `video_inference(video, pose_runner)` → list of per-frame predictions. Same call site as `analyze_videos`.
-- `VideoIterator` provides `set_to_frame`, `read_frame`, `reset` — DLC's native video abstraction.
+- `DLCLoader(config, shuffle, trainset_index)` → project-metadata accessor. Owns `model_cfg`, `scorer(snapshot)`, and `project_cfg`. This is what `analyze_videos` uses internally to look up scorer and multi-animal flags.
+- `utils.get_pose_inference_runner(model_config, snapshot_path, batch_size, device)` → `PoseInferenceRunner`. Public surface: `inference / load_snapshot / predict` — does **not** carry metadata; use `DLCLoader` for that.
+- `VideoIterator(video_path)` provides `set_to_frame`, `read_frame`, `reset` — DLC's native video abstraction.
+- `video_inference(video, pose_runner)` → `list[dict[str, np.ndarray]]` — same call site as `analyze_videos`.
+- `create_df_from_prediction(predictions, dlc_scorer, multi_animal, model_cfg, output_path, output_prefix, save_as_csv)` → `pd.DataFrame` with the canonical MultiIndex columns. Same helper `analyze_videos` uses to build its DataFrame.
 
-Using these means we don't duplicate DLC's batching, padding, or device-management logic, and we adapt at the same call sites that `analyze_videos` does if DLC's internals change.
+Using these means we don't duplicate DLC's batching, padding, device-management, or DataFrame-column logic, and we adapt at the same call sites that `analyze_videos` does if DLC's internals change.
 
 ## §4 — Player Code Reuse (Option B)
 
