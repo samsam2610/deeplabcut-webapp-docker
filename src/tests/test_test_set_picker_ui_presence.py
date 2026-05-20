@@ -122,3 +122,13 @@ def test_picker_js_calls_splits_endpoint():
     assert "_loadInspectSplits" in text, (
         "picker JS should have a _loadInspectSplits helper"
     )
+
+
+def test_picker_js_renders_folder_counter():
+    text = (SRC / "static" / "js" / "test_set_picker.js").read_text()
+    assert "_stemOptionLabel" in text, (
+        "picker JS should have a _stemOptionLabel helper that builds 'stem — xx/yy' option text"
+    )
+    assert "_refreshStemOptionLabel" in text, (
+        "picker JS should have a _refreshStemOptionLabel helper to update one option in place after a toggle"
+    )

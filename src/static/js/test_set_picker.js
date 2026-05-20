@@ -44,6 +44,20 @@ function _buildPalette(bps) {
   return out;
 }
 
+function _stemOptionLabel(stem, totalFrames) {
+  const marked = (_tsMarks[stem] || new Set()).size;
+  return `${stem} — ${marked}/${totalFrames}`;
+}
+
+function _refreshStemOptionLabel(stem) {
+  if (!tsStemSelect) return;
+  const opt = tsStemSelect.querySelector(`option[value="${CSS.escape(stem)}"]`);
+  if (!opt) return;
+  const found = _tsStems.find(s => (s.video_stem || s) === stem);
+  const total = (found && found.frames) ? found.frames.length : 0;
+  opt.textContent = _stemOptionLabel(stem, total);
+}
+
 async function _fetchJson(url, opts) {
   const rv = await fetch(url, opts);
   if (!rv.ok) throw new Error(await rv.text());
@@ -56,9 +70,11 @@ async function _loadStems() {
   _tsStems = body.video_stems || body.frames || (Array.isArray(body) ? body : []);
   tsStemSelect.innerHTML = '<option value="">— select video —</option>';
   for (const s of _tsStems) {
-    const stem = s.video_stem || s;
-    const opt = document.createElement("option");
-    opt.value = stem; opt.textContent = stem;
+    const stem  = s.video_stem || s;
+    const total = (s.frames || []).length;
+    const opt   = document.createElement("option");
+    opt.value       = stem;
+    opt.textContent = _stemOptionLabel(stem, total);
     tsStemSelect.appendChild(opt);
   }
 }
@@ -192,6 +208,7 @@ async function _toggleCurrentMark() {
   else _tsMarks[_tsStem]?.delete(name);
   _updateToggleButton();
   _updateCounters({});
+  _refreshStemOptionLabel(_tsStem);
   try {
     await _fetchJson(
       `/dlc/project/test-set/marks/${encodeURIComponent(_tsStem)}/${encodeURIComponent(name)}`,
@@ -204,6 +221,7 @@ async function _toggleCurrentMark() {
     else (_tsMarks[_tsStem] ||= new Set()).add(name);
     _updateToggleButton();
     _updateCounters({});
+    _refreshStemOptionLabel(_tsStem);
     console.error("toggle failed:", e);
   }
 }
@@ -221,7 +239,9 @@ async function _setMode(mode) {
 
 async function _openPicker() {
   if (tsCard) tsCard.classList.remove("hidden");
-  await Promise.all([_loadBodyparts(), _loadStems(), _loadMarks()]);
+  // Marks first, so _loadStems can render per-folder counters from _tsMarks.
+  await _loadMarks();
+  await Promise.all([_loadBodyparts(), _loadStems()]);
 }
 function _closePicker() {
   if (tsCard) tsCard.classList.add("hidden");
@@ -279,6 +299,12 @@ if (tsShowNames) tsShowNames.addEventListener("change", _draw);
 if (tsCleanStale) tsCleanStale.addEventListener("click", async () => {
   await _fetchJson("/dlc/project/test-set/marks/clean-stale", { method: "POST" });
   await _loadMarks();
+  // Refresh every visible stem option since several may have been affected.
+  if (tsStemSelect) {
+    for (const opt of tsStemSelect.querySelectorAll('option[value]')) {
+      if (opt.value) _refreshStemOptionLabel(opt.value);
+    }
+  }
   _updateCounters({});
 });
 document.querySelectorAll('input[name="ts-mode"]').forEach(el => {
