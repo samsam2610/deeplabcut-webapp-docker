@@ -64,10 +64,19 @@
   <!-- Frame player (mirrors viewer.js DOM with `ia-` prefix) -->
   <div id="ia-player-section">
     <div id="ia-video-wrap" style="position:relative">
-      <img id="ia-frame-img" alt="" style="max-width:100%;display:block"/>
-      <canvas id="ia-overlay-canvas" style="position:absolute;left:0;top:0;pointer-events:auto"></canvas>
+      <!-- width:100% (not max-width) so the factory's zoom can override
+           it to 200% etc. max-width:100% clamps inline style.width. -->
+      <img id="ia-frame-img" alt="" style="width:100%;display:block;height:auto"/>
+      <!-- pointer-events:none so the canvas doesn't eat clicks meant for
+           the seek slider / buttons / curation panel beneath. width/height
+           100% keeps the canvas tight to the displayed image — without it,
+           the canvas grows to its intrinsic pixel size (e.g. 800x600) and
+           overflows the video container. Matches viewer.js's pattern. -->
+      <canvas id="ia-overlay-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></canvas>
       <div id="ia-frame-spinner" class="hidden">Loading…</div>
     </div>
+    <!-- Seek slider — ABOVE the controls row (standard video-player layout). -->
+    <input type="range" id="ia-seek" min="0" max="0" value="0" step="1" style="width:100%;margin-top:.3rem"/>
     <div style="display:flex;align-items:center;gap:.45rem;margin-top:.3rem">
       <button class="btn-sm" id="ia-btn-prev">◀</button>
       <button class="btn-sm" id="ia-btn-play">▶</button>
@@ -80,7 +89,6 @@
         <span id="ia-zoom-val">100 %</span>
       </label>
     </div>
-    <input type="range" id="ia-seek" min="0" max="0" value="0" step="1" style="width:100%;margin-top:.2rem"/>
   </div>
 
   <!-- Kinematic markers (single-layer; auto-mounts the just-produced h5) -->

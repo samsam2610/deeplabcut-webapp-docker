@@ -302,7 +302,18 @@ export function makeAnalyzedFramePlayer(options) {
     const step = (skipN && parseInt(skipN.value, 10)) || 1;
     setCurrentFrame(_currentFrame + step);
   });
-  _on(seek, "input", () => { _seekDragging = true; });
+  // Real-feel scrub: live counter feedback during drag, frame fetch on release.
+  // (input alone isn't enough — we need to know the user has the thumb held
+  // down so _updateDisplay() doesn't snap the slider's visible value back.)
+  _on(seek, "mousedown",  () => { _seekDragging = true; });
+  _on(seek, "touchstart", () => { _seekDragging = true; });
+  _on(seek, "input", () => {
+    _seekDragging = true;
+    if (!seek) return;
+    const max = Math.max(_frameCount - 1, 0);
+    _currentFrame = Math.max(0, Math.min(parseInt(seek.value, 10) || 0, max));
+    _updateDisplay();
+  });
   _on(seek, "change", () => {
     _seekDragging = false;
     if (seek) setCurrentFrame(parseInt(seek.value, 10) || 0);

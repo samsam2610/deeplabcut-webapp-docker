@@ -216,3 +216,59 @@ def test_frameUrlFn_uses_canonical_annotate_video_frame_endpoint():
     assert "/annotate/video-frame/" in js, (
         "must use canonical /annotate/video-frame/<n>?path=... endpoint"
     )
+
+
+def test_overlay_canvas_does_not_intercept_pointer_events():
+    """Regression guard: the inline card's overlay canvas must declare
+    pointer-events:none AND size to width/height 100% of its wrap.
+
+    A prior draft set pointer-events:auto with no width/height — the
+    canvas then grew to its intrinsic 800x600 pixel size and covered the
+    slider + prev/next/play buttons, eating every click. Symptoms were
+    "the timeline is nonresponsive" and the transport buttons doing
+    nothing. See systematic-debugging session 2026-05-20.
+    """
+    html = (PARTIALS / "card_inline_analysis.html").read_text()
+    m = re.search(r'<canvas[^>]*id="ia-overlay-canvas"[^>]*>', html)
+    assert m, "ia-overlay-canvas element must exist"
+    tag = m.group(0)
+    assert "pointer-events:none" in tag, (
+        "overlay canvas must declare pointer-events:none "
+        "(otherwise it eats clicks meant for the slider + transport buttons)"
+    )
+    assert "width:100%" in tag and "height:100%" in tag, (
+        "overlay canvas must size to width:100%;height:100% of its wrap "
+        "(otherwise it grows to intrinsic 800x600 px and overflows)"
+    )
+
+
+def test_seek_slider_sits_above_controls_row_in_markup():
+    """Regression guard: the seek slider must appear in the partial
+    BEFORE the controls row (prev/play/next/...) — standard video-player
+    layout. The first draft put the slider below the buttons.
+    """
+    html = (PARTIALS / "card_inline_analysis.html").read_text()
+    i_seek = html.find('id="ia-seek"')
+    i_prev = html.find('id="ia-btn-prev"')
+    assert i_seek > 0 and i_prev > 0, "expected both ia-seek and ia-btn-prev"
+    assert i_seek < i_prev, (
+        "ia-seek must appear before ia-btn-prev in the partial markup "
+        "(slider above controls is the canonical video-player layout)"
+    )
+
+
+def test_frame_img_uses_width_not_max_width_so_zoom_works():
+    """Regression guard: the frame img must use `width:100%`, NOT
+    `max-width:100%`. The factory's zoom handler sets `img.style.width
+    = "${zoom}%"`. With `max-width:100%`, the inline width is clamped
+    and zoom does nothing.
+    """
+    html = (PARTIALS / "card_inline_analysis.html").read_text()
+    m = re.search(r'<img[^>]*id="ia-frame-img"[^>]*>', html)
+    assert m, "ia-frame-img must exist"
+    tag = m.group(0)
+    assert "width:100%" in tag, "ia-frame-img must declare width:100%"
+    assert "max-width:100%" not in tag, (
+        "ia-frame-img must NOT declare max-width:100% — it clamps the "
+        "factory's zoom handler"
+    )
