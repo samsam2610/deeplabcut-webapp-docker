@@ -17,7 +17,7 @@ Browser (src/static/js/inline_analysis.js)
     │  POST /dlc/project/inline-analysis/session/start
     │  POST /dlc/project/inline-analysis/range
     │  GET  /dlc/project/inline-analysis/{session,range}/status
-    │  POST /dlc/project/inline-analysis/session/{heartbeat,stop}
+    │  POST /dlc/project/inline-analysis/session/stop
     ▼
 Flask (src/dlc/inline_analysis.py)
     │  Redis list  inline:queue:{user_id}:{snap_key}
@@ -174,7 +174,6 @@ No persistent state outside the canonical DLC files on disk. Redis flush → wor
 |---|---|---|---|---|
 | POST | `/dlc/project/inline-analysis/session/start` | `{snapshot_path, shuffle, ttl_seconds}` | `202 {session_id, snap_key, status}` | Dispatch warm worker (or return existing). |
 | GET | `/dlc/project/inline-analysis/session/status` | `?snap_key=…` | `{status, idle_remaining_s, last_error?}` | Polled while card open. |
-| POST | `/dlc/project/inline-analysis/session/heartbeat` | `{snap_key}` | `204` | Resets `last_activity`. |
 | POST | `/dlc/project/inline-analysis/session/stop` | `{snap_key}` | `204` | Manual stop or `beforeunload`. |
 | POST | `/dlc/project/inline-analysis/range` | `{snap_key, video_path, start_frame, n_frames, batch_size, save_as_csv}` | `202 {req_id}` | Push to worker queue. |
 | GET | `/dlc/project/inline-analysis/range/status` | `?req_id=…` | `{status, n_analyzed?, n_skipped?, error?}` | Polled every 500 ms during run. |
