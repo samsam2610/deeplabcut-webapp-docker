@@ -73,3 +73,25 @@ def test_main_js_sends_split_mode():
     text = (SRC / "static" / "main.js").read_text()
     assert "split_mode" in text
     assert "ctd-split-mode" in text
+
+
+def test_frame_overlay_exports_default_palette():
+    text = (SRC / "static" / "js" / "frame_overlay.js").read_text()
+    assert "export const DEFAULT_PALETTE" in text, (
+        "frame_overlay.js should export a DEFAULT_PALETTE shared with the picker"
+    )
+    # Palette is napari-inspired; cross-check a few canonical entries
+    for hex_color in ("#f87171", "#fb923c", "#fbbf24"):
+        assert hex_color in text, f"missing {hex_color} from DEFAULT_PALETTE"
+
+
+def test_picker_js_imports_default_palette():
+    text = (SRC / "static" / "js" / "test_set_picker.js").read_text()
+    assert "DEFAULT_PALETTE" in text, (
+        "test_set_picker.js should import DEFAULT_PALETTE from frame_overlay.js"
+    )
+    # And should NOT keep the old TS_DEFAULT_PALETTE local array
+    assert "TS_DEFAULT_PALETTE" not in text, (
+        "TS_DEFAULT_PALETTE local array should have been removed in favor of "
+        "the shared DEFAULT_PALETTE"
+    )

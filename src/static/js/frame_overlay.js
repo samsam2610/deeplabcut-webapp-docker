@@ -13,6 +13,18 @@
  */
 
 /**
+ * Canonical napari-inspired bodypart color palette.
+ * The Frame Labeler defines its own private FL_COLORS array with identical
+ * values; if either changes, the picker is the canonical consumer of this
+ * constant.
+ */
+export const DEFAULT_PALETTE = [
+    "#f87171", "#fb923c", "#fbbf24", "#a3e635", "#34d399",
+    "#22d3ee", "#818cf8", "#e879f9", "#f43f5e", "#10b981",
+    "#3b82f6", "#ec4899", "#f59e0b", "#84cc16", "#06b6d4",
+];
+
+/**
  * Paint an image into a canvas, sized to fit the canvas's pixel dimensions.
  *
  * Returns an object describing where the image was drawn:
