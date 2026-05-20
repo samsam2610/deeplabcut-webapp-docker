@@ -3911,7 +3911,11 @@
         const res  = await fetch("/dlc/project/create-training-dataset", {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ num_shuffles: numShuffles, freeze_split: freezeSplit }),
+          body:    JSON.stringify({
+            num_shuffles: numShuffles,
+            freeze_split: freezeSplit,
+            split_mode: (document.querySelector('input[name="ctd-split-mode"]:checked')?.value) || "random",
+          }),
         });
         const data = await res.json();
         if (!res.ok) {

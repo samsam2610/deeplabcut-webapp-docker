@@ -8,6 +8,19 @@
       </div>
       <p class="subtitle">Run <code style="font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:.05rem .3rem">deeplabcut.create_training_dataset()</code> to generate the training splits and network config files.</p>
 
+      <!-- Split mode (test-set picker integration) -->
+      <div style="margin-bottom:.65rem">
+        <label style="display:block;font-size:.78rem;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.3rem">Split mode</label>
+        <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+          <label><input type="radio" name="ctd-split-mode" value="random" checked> Random (default)</label>
+          <label><input type="radio" name="ctd-split-mode" value="hybrid"> Hybrid (marks first, fill remainder)</label>
+          <label><input type="radio" name="ctd-split-mode" value="manual"> Full manual (marks only)</label>
+        </div>
+        <p style="font-size:.72rem;color:var(--text-dim);margin-top:.25rem;line-height:1.5">
+          Hybrid and Manual use frames marked in the <strong>Test-set Picker</strong>.
+        </p>
+      </div>
+
       <!-- Num shuffles -->
       <div class="scorer-row" style="margin-bottom:.9rem">
         <label for="ctd-num-shuffles">Num shuffles</label>
