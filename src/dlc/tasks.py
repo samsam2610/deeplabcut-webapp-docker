@@ -153,14 +153,28 @@ def _sanitize_all_pytorch_configs(project_path: str | Path) -> int:
 
 # ── DLC Create Training Dataset ───────────────────────────────────
 @celery.task(bind=True, name="tasks.dlc_create_training_dataset")
-def dlc_create_training_dataset(self, config_path: str, num_shuffles: int = 1, freeze_split: bool = True):
+def dlc_create_training_dataset(
+    self,
+    config_path: str,
+    num_shuffles: int = 1,
+    freeze_split: bool = True,
+    split_mode: str = "random",
+    marks: list | None = None,
+):
     """Run deeplabcut.create_training_dataset() for the given DLC config.yaml.
 
-    freeze_split is accepted for API compatibility but ignored — it was previously
-    used to call mergeandsplit() before create_training_dataset(), but that reads
-    stale H5 files (H5 is only refreshed *inside* create_training_dataset) and
-    silently excludes any frames added since the last dataset creation.
-    DLC's create_training_dataset handles the split internally on fresh data.
+    freeze_split is accepted for API compatibility but ignored — see prior comment.
+
+    split_mode (new):
+      - "random"  → existing behavior; do not pass trainIndices/testIndices to DLC.
+      - "manual"  → user-marked frames are the entire test set. trainIndices/testIndices
+                    are derived via dlc.test_set_split.build_indices and broadcast across
+                    all shuffles.
+      - "hybrid"  → user marks ⊆ test set; remainder is filled by deterministic random
+                    selection to honor cfg.TrainingFraction[0]. Overflow is honored.
+
+    marks (new): list of [video_stem, image_name] pairs snapshotted at the route layer.
+    Empty/None for random mode.
     """
     import io as _io
     import sys as _sys
@@ -180,24 +194,67 @@ def dlc_create_training_dataset(self, config_path: str, num_shuffles: int = 1, f
         if not os.path.isfile(config_path):
             raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
 
-        # Fix any ruamel.yaml-written multi-line plain-scalar keys before DLC reads the config
         _sanitize_dlc_config_yaml(config_path)
+
+        # Resolve (trainIndices, testIndices) if a non-random mode is requested.
+        train_idx_list = None
+        test_idx_list = None
+        if split_mode in ("hybrid", "manual"):
+            from dlc.test_set_split import build_indices
+            from deeplabcut.utils import auxiliaryfunctions
+            cfg = auxiliaryfunctions.read_config(config_path)
+            train_fraction = float(cfg.get("TrainingFraction", [0.8])[0])
+            try:
+                result = build_indices(
+                    config_path=config_path,
+                    marks=[(m[0], m[1]) for m in (marks or [])],
+                    mode=split_mode,
+                    train_fraction=train_fraction,
+                )
+            except ValueError as exc:
+                raise RuntimeError(f"split_mode={split_mode}: {exc}")
+            if result is not None:
+                train_inds, test_inds, stats = result
+                train_idx_list = [list(train_inds)] * num_shuffles
+                test_idx_list = [list(test_inds)] * num_shuffles
+                self.update_state(
+                    state="PROGRESS",
+                    meta={
+                        "progress": 8,
+                        "stage": (
+                            f"Split prepared (mode={split_mode}, "
+                            f"train={len(train_inds)}, test={len(test_inds)}, "
+                            f"dropped_marks={stats['dropped_marks']})"
+                        ),
+                        "log": "",
+                    },
+                )
 
         self.update_state(
             state="PROGRESS",
             meta={
                 "progress": 10,
                 "stage": "Running deeplabcut.create_training_dataset…",
-                "log": f"config_path: {config_path}\nnum_shuffles: {num_shuffles}\n",
+                "log": (
+                    f"config_path: {config_path}\n"
+                    f"num_shuffles: {num_shuffles}\n"
+                    f"split_mode: {split_mode}\n"
+                ),
             },
         )
 
-        dlc.create_training_dataset(config_path, num_shuffles=num_shuffles, userfeedback=False)
+        ctd_kwargs = {"num_shuffles": num_shuffles, "userfeedback": False}
+        if train_idx_list is not None:
+            ctd_kwargs["trainIndices"] = train_idx_list
+            ctd_kwargs["testIndices"] = test_idx_list
+
+        dlc.create_training_dataset(config_path, **ctd_kwargs)
 
         final_log = _log_buf.getvalue()[-5000:]
         return {
             "status":    "complete",
             "operation": "create_training_dataset",
+            "split_mode": split_mode,
             "log":       final_log or f"Training dataset created.\nconfig: {config_path}",
         }
 
