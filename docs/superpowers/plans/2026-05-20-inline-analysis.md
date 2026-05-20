@@ -4,7 +4,7 @@
 
 **Goal:** Add an "Inline Analysis" card that lets a user scrub a video, run N frames of DLC pose inference forward against a warm-in-memory PyTorch model held by a long-lived Celery task, and merge results into the canonical DLC `.h5` / `.csv` / `_meta.pickle` files.
 
-**Architecture:** A new `dlc_inline_analysis` Flask blueprint owns five thin endpoints (session start/status/heartbeat/stop, range submit/status, video probe) that drive a long-lived Celery task `tasks.dlc_inline_session` over Redis lists/hashes. The task boots a single `PoseInferenceRunner` once via DLC's own `utils.get_pose_inference_runner`, then BLPOP-loops range requests, decoding only the requested frames through a thin `_RangeVideoIterator(VideoIterator)` subclass and merging predictions into the canonical files via atomic `os.replace`. The card embeds a copy-then-deferred-migration of `viewer.js`'s player/overlay/curation core, packaged as `makeAnalyzedFramePlayer({...})` — `viewer.js` is untouched in this PR.
+**Architecture:** A new `dlc_inline_analysis` Flask blueprint owns six thin endpoints (session start/status/stop, range submit/status, video probe) that drive a long-lived Celery task `tasks.dlc_inline_session` over Redis lists/hashes. Activity (idle TTL) is bumped server-side only when a range is submitted; the worker times out after `ttl_seconds` of no range submissions, regardless of whether the card is open. No client-side heartbeat endpoint — that's the Jobs-page pattern, not relevant here. The task boots a single `PoseInferenceRunner` once via DLC's own `utils.get_pose_inference_runner`, then BLPOP-loops range requests, decoding only the requested frames through a thin `_RangeVideoIterator(VideoIterator)` subclass and merging predictions into the canonical files via atomic `os.replace`. The card embeds a copy-then-deferred-migration of `viewer.js`'s player/overlay/curation core, packaged as `makeAnalyzedFramePlayer({...})` — `viewer.js` is untouched in this PR.
 
 **Tech Stack:** Flask blueprint, Celery (pytorch worker), Redis (FakeRedis in tests), pandas + DeepLabCut's `pose_estimation_pytorch.apis` (`utils.get_pose_inference_runner`, `VideoIterator`, `video_inference`), vanilla JS frontend (ES module sharing `state.js` + `components/file_browser.js`).
 
@@ -18,7 +18,7 @@
 
 | Path | Responsibility |
 |---|---|
-| `src/dlc/inline_analysis.py` | Flask blueprint with 7 routes (`/session/start`, `/session/status`, `/session/heartbeat`, `/session/stop`, `/range`, `/range/status`, `/video-info`). Computes `snap_key`, validates project type/engine, dispatches the warm-worker Celery task, serialises range requests via Redis lists, owns the disable-banner reasons. |
+| `src/dlc/inline_analysis.py` | Flask blueprint with 6 routes (`/session/start`, `/session/status`, `/session/stop`, `/range`, `/range/status`, `/video-info`). Computes `snap_key`, validates project type/engine, dispatches the warm-worker Celery task, serialises range requests via Redis lists, owns the disable-banner reasons. Activity TTL is bumped on every range submit and every `/session/status` poll. |
 | `src/static/js/components/analyzed_frame_player.js` | `makeAnalyzedFramePlayer({prefix, frameUrlFn, poseUrlFn, onCsvSaved})` factory — copy-and-parameterise of `viewer.js`'s player/overlay/marker-adjustment/dataset-curation core. No consumer of `viewer.js` is touched. |
 | `src/static/js/inline_analysis.js` | DOM controller — file picker (via canonical `makeFileBrowser`), analysis-params block, snapshot picker, warm-indicator polling, range submit/poll, mounts the new player factory. |
 | `src/templates/partials/card_inline_analysis.html` | Card markup. |
@@ -1470,7 +1470,7 @@ EOF
 
 ---
 
-## Task 1.4: Flask blueprint `src/dlc/inline_analysis.py` + 7 routes
+## Task 1.4: Flask blueprint `src/dlc/inline_analysis.py` + 6 routes
 
 **Files:**
 - Create: `src/dlc/inline_analysis.py`
@@ -1682,12 +1682,16 @@ Expected: ImportError (`No module named dlc.inline_analysis`).
 
 Routes (all under /dlc/project/inline-analysis/):
   POST /session/start
-  GET  /session/status
-  POST /session/heartbeat
+  GET  /session/status   (read-only; does not bump activity)
   POST /session/stop
-  POST /range
+  POST /range            (bumps activity)
   GET  /range/status
   GET  /video-info
+
+Activity (idle TTL) is bumped ONLY on /range submit. The worker
+times out after `ttl_seconds` of no range submission, regardless
+of whether the card is open. No client-side heartbeat — that's
+the Jobs-page pattern and isn't needed here.
 
 See docs/superpowers/specs/2026-05-20-inline-analysis-design.md.
 """
@@ -1862,18 +1866,6 @@ def session_status():
     return jsonify(out)
 
 
-@bp.route("/dlc/project/inline-analysis/session/heartbeat", methods=["POST"])
-def session_heartbeat():
-    body = request.get_json(silent=True) or {}
-    snap_key = (body.get("snap_key") or "").strip()
-    if not snap_key:
-        return jsonify({"error": "snap_key required"}), 400
-    redis = _ctx.redis_client()
-    redis.hset(f"inline:session:{_user_id()}:{snap_key}",
-               "last_activity", str(time.time()))
-    return ("", 204)
-
-
 @bp.route("/dlc/project/inline-analysis/session/stop", methods=["POST"])
 def session_stop():
     body = request.get_json(silent=True) or {}
@@ -2002,9 +1994,9 @@ Both should pass.
 ```bash
 git add src/dlc/inline_analysis.py tests/test_inline_analysis_routes.py src/app.py tests/conftest.py
 git commit -m "$(cat <<'EOF'
-feat(dlc): inline-analysis Flask blueprint with 7 routes
+feat(dlc): inline-analysis Flask blueprint with 6 routes
 
-Adds src/dlc/inline_analysis.py with session start/status/heartbeat/stop,
+Adds src/dlc/inline_analysis.py with session start/status/stop,
 range submit/status, and video-info routes. Validates active project,
 returns disable banners for multi-animal / TF, computes snap_key as
 sha1(config_path|shuffle|snapshot_path). Registered in src/app.py
@@ -3313,7 +3305,7 @@ If a task tempts you toward any of the above, stop and surface it back to the pa
 | §1 Disable banners (multi-animal / TF) | T1.4 (409 + message) + T2.2 (frontend renders) |
 | §2 Data flow & lifecycle events | T1.3 + T1.4 + T1.5 |
 | §2 Redis keys (session/queue/result/control) | T1.2 (helpers) + T1.3 (worker uses them) + T1.4 (routes use them) |
-| §3 HTTP endpoints (7 routes) | T1.4 |
+| §3 HTTP endpoints (6 routes) | T1.4 |
 | §3 Worker `dlc_inline_session` + `_run_range` | T1.3 |
 | §3 Reuse DLC primitives (`utils.get_pose_inference_runner`, `VideoIterator`, `video_inference`) | T1.0 (probe) + T1.1 (subclass) + T1.3 (use) |
 | §4 Player code reuse (Option B copy-then-deferred-migration) | T0.1 + T0.2 (factory) + T4.1 (policy doc) |
