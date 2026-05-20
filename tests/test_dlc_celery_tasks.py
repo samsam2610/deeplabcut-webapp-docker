@@ -196,6 +196,12 @@ class TestDlcConvertLabelsToH5:
         df.to_csv(str(csv_path))
         return csv_path
 
+    # to_hdf uses PyTables, which has a numpy ABI mismatch on host Python.
+    # Mock it in all task-level tests — we're testing task logic, not pandas HDF5 I/O.
+    @staticmethod
+    def _mock_to_hdf():
+        return patch("pandas.DataFrame.to_hdf")
+
     def test_converts_csv_to_h5(self, tmp_path, tasks_mod, mock_dlc):
         project_dir = tmp_path / "dlc_h5_test"
         config_path = _make_minimal_config(project_dir)
@@ -209,7 +215,8 @@ class TestDlcConvertLabelsToH5:
             cfg = yaml.safe_load(f)
         mock_dlc.auxiliaryfunctions.read_config.return_value = cfg
 
-        result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
+        with self._mock_to_hdf():
+            result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
 
         assert result["status"] == "complete"
         assert result["operation"] == "convert_labels_to_h5"
@@ -219,7 +226,6 @@ class TestDlcConvertLabelsToH5:
     def test_no_csv_means_folder_skipped(self, tmp_path, tasks_mod, mock_dlc):
         project_dir = tmp_path / "dlc_no_csv"
         config_path = _make_minimal_config(project_dir)
-        # labeled-data/test_video_001 exists but has no CSV
         labeled_dir = project_dir / "labeled-data"
         (labeled_dir / "test_video_001").mkdir(exist_ok=True)
 
@@ -228,8 +234,63 @@ class TestDlcConvertLabelsToH5:
             cfg = yaml.safe_load(f)
         mock_dlc.auxiliaryfunctions.read_config.return_value = cfg
 
-        result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
+        with self._mock_to_hdf():
+            result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
         assert "test_video_001" in result["skipped"]
+
+    def test_converts_csv_for_tensorflow_engine_project(self, tmp_path, tasks_mod, mock_dlc):
+        """Task is pure pandas — must succeed regardless of engine field in config."""
+        project_dir = tmp_path / "dlc_h5_tf"
+        config_path = _make_minimal_config(project_dir)
+        text = config_path.read_text().replace("engine: pytorch", "engine: tensorflow")
+        config_path.write_text(text)
+
+        labeled_dir = project_dir / "labeled-data"
+        self._write_labeled_data_csv(labeled_dir, "test_video_001", "TestScorer")
+
+        import yaml
+        with open(str(config_path)) as f:
+            cfg = yaml.safe_load(f)
+        mock_dlc.auxiliaryfunctions.read_config.return_value = cfg
+
+        with self._mock_to_hdf():
+            result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
+
+        assert result["status"] == "complete"
+        assert "test_video_001" in result["converted"]
+
+    def test_multiple_stems_all_converted(self, tmp_path, tasks_mod, mock_dlc):
+        """All stems in video_sets get a corresponding H5 file."""
+        import yaml
+
+        project_dir = tmp_path / "dlc_h5_multi"
+        labeled_dir = project_dir / "labeled-data"
+        labeled_dir.mkdir(parents=True)
+        videos_dir = project_dir / "videos"
+        videos_dir.mkdir()
+
+        stems = ["vid_a", "vid_b", "vid_c"]
+        for stem in stems:
+            self._write_labeled_data_csv(labeled_dir, stem, "TestScorer")
+
+        video_sets = {f"{videos_dir}/{s}.mp4": {"crop": "0, 640, 0, 480"} for s in stems}
+        config = {
+            "Task": "T", "scorer": "TestScorer", "project_path": str(project_dir),
+            "date": "Jan2026", "engine": "pytorch",
+            "TrainingFraction": [0.8], "bodyparts": ["Snout", "Wrist"],
+            "video_sets": video_sets,
+        }
+        config_path = project_dir / "config.yaml"
+        with open(str(config_path), "w") as f:
+            yaml.dump(config, f)
+        mock_dlc.auxiliaryfunctions.read_config.return_value = config
+
+        with self._mock_to_hdf():
+            result = tasks_mod.dlc_convert_labels_to_h5.run(str(config_path))
+
+        assert result["status"] == "complete"
+        assert set(result["converted"]) == set(stems)
+        assert result["skipped"] == []
 
 
 # ── dlc_create_training_dataset ───────────────────────────────────────────────
@@ -403,3 +464,79 @@ class TestDlcTrainNetworkGpuRouting:
             assert "5090" in result.stdout or "RTX" in result.stdout, \
                 f"Expected RTX 5090 on GPU 0, got: {result.stdout.strip()}"
         vram_cleanup_check()
+
+
+# ── dlc_postprocess_run (Task 11) ─────────────────────────────────────────────
+
+def test_dlc_postprocess_run_dispatches_to_drivers(tmp_path, monkeypatch):
+    """The task must call the right driver for each tool/action and write a sidecar."""
+    from pathlib import Path
+
+    from dlc import tasks as dlc_tasks
+    from dlc import postprocess as pp
+
+    src = tmp_path / "videoDLC_resnet50_shuffle1_50000.h5"
+    src.write_bytes(b"")
+
+    calls = []
+
+    def fake_filter(*, config_path, input_path, output_dir, params):
+        calls.append(("filter", Path(input_path).name))
+        out_path = Path(output_dir) / (Path(input_path).stem + "_filtered.h5")
+        out_path.write_bytes(b"")
+        return {"status": "success", "output": out_path, "error": None}
+
+    monkeypatch.setattr("dlc.postprocess_dlc.run_filterpredictions", fake_filter)
+    monkeypatch.setattr(pp, "_now_stamp", lambda: "20260501-120000")
+
+    result = dlc_tasks.dlc_postprocess_run.apply(kwargs={
+        "config_path": str(tmp_path / "config.yaml"),
+        "tool": "deeplabcut",
+        "action": "filterpredictions",
+        "params": {"filtertype": "median", "windowlength": 5, "save_as_csv": False},
+        "inputs": [str(src)],
+    }).get()
+
+    assert result["status"] == "success"
+    assert calls == [("filter", src.name)]
+    sidecar = tmp_path / "postproc" / "20260501-120000_filterpredictions" / "run.json"
+    assert sidecar.is_file()
+
+
+def test_dlc_postprocess_run_partial_on_per_file_failure(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from dlc import tasks as dlc_tasks
+    from dlc import postprocess as pp
+
+    s1 = tmp_path / "aDLC_resnet50.h5"
+    s2 = tmp_path / "bDLC_resnet50.h5"
+    s1.write_bytes(b"")
+    s2.write_bytes(b"")
+
+    def driver(*, config_path, input_path, output_dir, params):
+        if Path(input_path).name.startswith("a"):
+            return {"status": "success",
+                    "output": Path(output_dir) / "a_filtered.h5",
+                    "error": None}
+        return {"status": "failed", "output": None, "error": "boom"}
+
+    monkeypatch.setattr("dlc.postprocess_dlc.run_filterpredictions", driver)
+
+    counter = {"n": 0}
+    def stamp():
+        counter["n"] += 1
+        return f"20260501-12000{counter['n']}"
+    monkeypatch.setattr(pp, "_now_stamp", stamp)
+
+    result = dlc_tasks.dlc_postprocess_run.apply(kwargs={
+        "config_path": str(tmp_path / "config.yaml"),
+        "tool": "deeplabcut",
+        "action": "filterpredictions",
+        "params": {},
+        "inputs": [str(s1), str(s2)],
+    }).get()
+
+    assert result["status"] == "partial"
+    assert len(result["inputs"]) == 2
+    assert {i["status"] for i in result["inputs"]} == {"success", "failed"}

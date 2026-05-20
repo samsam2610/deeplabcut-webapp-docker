@@ -42,7 +42,9 @@ from __future__ import annotations
 
 import collections as _collections
 import colorsys as _colorsys
+import datetime as _dt
 import json as _json
+import re as _re
 import threading as _threading
 import uuid
 
@@ -57,10 +59,15 @@ from dlc.utils import _dlc_project_security_check
 bp = Blueprint("dlc_viewer", __name__)
 
 
-# ── Per-path h5 DataFrame cache (LRU, max 5 files in memory) ─────────────────
-_VIEWER_H5_CACHE_MAX = 5
+# ── Per-path h5 DataFrame cache (LRU) ────────────────────────────────────────
+# Bumped from 5 to 12 to support multi-layer overlay sessions (primary + up to
+# 3 comparison layers without continuous eviction).
+_VIEWER_H5_CACHE_MAX = 12
 _viewer_h5_cache: _collections.OrderedDict = _collections.OrderedDict()
 _viewer_h5_lock = _threading.Lock()
+
+# ── Browse-list video extensions (used by /dlc/viewer/dir-with-h5) ───────────
+_VIEWER_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".mpg", ".mpeg"}
 
 # ── Per-session VideoCapture cache (separate from dlc/videos.py) ─────────────
 _VIEWER_VCAP_MAX = 10
@@ -481,6 +488,280 @@ def viewer_h5_find():
         "method":      "prefix",
         "all_matches": [str(c) for c in candidates],
     })
+
+
+# ── /dlc/viewer/h5-variants — discover all h5 layers around a video ──────────
+
+# tool_tag → human-readable label/type
+_LABEL_BY_TYPE = {
+    "raw":              "Raw",
+    "filtered":         "filtered",
+    "refine_pipeline":  "refine_pipeline",
+    "refine_lh":        "refine_lh",
+    "refine_outliers":  "refine_outliers",
+    "refine_interp":    "refine_interp",
+    "refine_smooth":    "refine_smooth",
+}
+
+
+_RUN_DIR_RE = _re.compile(r"^(?P<ts>\d{8}-\d{6})_(?P<tag>.+)$")
+
+
+def _parse_run_dirname(dirname: str) -> tuple[str | None, str | None]:
+    """`20260502-113642_filterpredictions` → ('20260502-113642', 'filterpredictions')."""
+    m = _RUN_DIR_RE.match(dirname)
+    if not m:
+        return None, None
+    return m.group("ts"), m.group("tag")
+
+
+def _ts_to_iso(ts: str | None) -> str | None:
+    """`20260502-113642` → `2026-05-02T11:36:42Z`."""
+    if not ts:
+        return None
+    try:
+        d = _dt.datetime.strptime(ts, "%Y%m%d-%H%M%S")
+    except ValueError:
+        return None
+    return d.replace(tzinfo=_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _label_for_variant(*, type_: str, ts: str | None, all_ts: set[str]) -> str:
+    """`filtered @ 11:36:42`. Adds the date when two variants share HH:MM:SS."""
+    head = _LABEL_BY_TYPE.get(type_, type_)
+    if not ts:
+        return head
+    base = ts[9:11] + ":" + ts[11:13] + ":" + ts[13:15]  # HH:MM:SS
+    same_clock = sum(1 for t in all_ts if t and t[9:] == ts[9:])
+    if same_clock > 1:
+        date = ts[:4] + "-" + ts[4:6] + "-" + ts[6:8]
+        return f"{head} @ {date} {base}"
+    return f"{head} @ {base}"
+
+
+def _read_run_status(run_dir: Path) -> str | None:
+    sidecar = run_dir / "run.json"
+    if not sidecar.is_file():
+        return None
+    try:
+        data = _json.loads(sidecar.read_text())
+    except (OSError, _json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data.get("status")
+
+
+def _h5_variants_for_video(video: Path) -> list[dict]:
+    """Pure helper. Returns the variants list (no allowlist, no Flask)."""
+    parent = video.parent
+    stem = video.stem
+
+    out: list[dict] = []
+
+    # 1. Companion h5(s) in the parent dir whose name starts with the stem,
+    #    excludes filtered/refined.
+    if parent.is_dir():
+        for cand in sorted(parent.glob(f"{stem}*.h5")):
+            n = cand.name.lower()
+            if "_filtered" in n or "_refined" in n:
+                continue
+            out.append({
+                "path":     str(cand),
+                "label":    f"Raw — {cand.name}",
+                "type":     "raw",
+                "run_id":   None,
+                "tool_tag": None,
+                "ts":       None,
+                "status":   None,
+                "disabled": False,
+            })
+
+    # 2. postproc/<ts>_<tag>/<stem>...h5
+    pp_root = parent / "postproc"
+    if pp_root.is_dir():
+        # First pass: collect to compute date-collision labels.
+        collected: list[tuple[Path, str, str | None, str | None]] = []  # (h5, type, ts, status)
+        for run_dir in sorted(pp_root.iterdir()):
+            if not run_dir.is_dir():
+                continue
+            ts, tag = _parse_run_dirname(run_dir.name)
+            type_ = (
+                "refine_pipeline"  if tag == "refine_pipeline"  else
+                "refine_lh"        if tag == "refine_lh"        else
+                "refine_outliers"  if tag == "refine_outliers"  else
+                "refine_interp"    if tag == "refine_interp"    else
+                "refine_smooth"    if tag == "refine_smooth"    else
+                "filtered"
+            )
+            status = _read_run_status(run_dir)
+            for h5 in sorted(run_dir.glob(f"{stem}*.h5")):
+                collected.append((h5, type_, ts, status))
+
+        all_ts = {t for _h, _ty, t, _s in collected if t}
+        for h5, type_, ts, status in collected:
+            run_match = _RUN_DIR_RE.match(h5.parent.name)
+            out.append({
+                "path":     str(h5),
+                "label":    _label_for_variant(type_=type_, ts=ts, all_ts=all_ts),
+                "type":     type_,
+                "run_id":   h5.parent.name,
+                "tool_tag": run_match.group("tag") if run_match else None,
+                "ts":       _ts_to_iso(ts),
+                "status":   status,
+                "disabled": status == "failed",
+            })
+
+    return out
+
+
+@bp.route("/dlc/viewer/h5-variants")
+def viewer_h5_variants():
+    """List every analyzable h5 near the loaded video.
+
+    Query: ?video=<abs-path>
+    """
+    video_arg = request.args.get("video", "").strip()
+    if not video_arg:
+        return jsonify({"error": "video parameter required."}), 400
+
+    p = Path(video_arg)
+    if not p.parent.is_dir():
+        return jsonify({"error": f"Video parent dir not found: {p.parent}"}), 404
+    if not _viewer_sec_check(p.parent):
+        return jsonify({"error": "Access denied."}), 403
+
+    return jsonify({
+        "video":    str(p),
+        "variants": _h5_variants_for_video(p),
+    })
+
+
+def _viewer_dir_mtime(d: Path) -> float:
+    """Composite mtime that captures any change affecting the dir's listing.
+
+    Captures: dir itself (new/deleted videos), postproc/ root (new run dirs),
+    and each postproc/<ts>_*/ run dir (sidecar updates).
+    """
+    candidates = [d.stat().st_mtime]
+    pp = d / "postproc"
+    if pp.is_dir():
+        try:
+            candidates.append(pp.stat().st_mtime)
+        except OSError:
+            pass
+        try:
+            for child in pp.iterdir():
+                if child.is_dir():
+                    try:
+                        candidates.append(child.stat().st_mtime)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    return max(candidates)
+
+
+def _build_dir_with_h5(d: Path, mtime: float) -> dict:
+    """Walk a single directory and annotate videos with h5 counts.
+
+    Pure-filesystem; no Redis, no Flask. Caller is responsible for caching.
+    """
+    parent = str(d.parent) if d.parent != d else None
+    dirs: list[dict] = []
+    videos: list[dict] = []
+    h5_stems_by_video: dict[str, list[str]] = {}
+
+    def _record_h5(h5_path: Path):
+        # Companion convention: <video_stem>DLC_<scorer>...{_filtered|_refined}?.h5
+        # The h5 stem starts with the video stem. First match wins.
+        for vstem in list(h5_stems_by_video.keys()):
+            if h5_path.stem.startswith(vstem):
+                h5_stems_by_video[vstem].append(str(h5_path))
+                return
+
+    # Pass 1: dirs + videos in <d>.
+    for entry in sorted(d.iterdir()):
+        if entry.is_dir():
+            if entry.name == "postproc":
+                continue
+            dirs.append({"name": entry.name})
+        elif entry.is_file() and entry.suffix.lower() in _VIEWER_VIDEO_EXTS:
+            h5_stems_by_video[entry.stem] = []
+            videos.append({"name": entry.name, "stem": entry.stem})
+
+    # Pass 2: companion h5 in <d> (excludes _filtered/_refined).
+    for entry in d.iterdir():
+        if entry.is_file() and entry.suffix.lower() == ".h5":
+            n = entry.name.lower()
+            if "_filtered" in n or "_refined" in n:
+                continue
+            _record_h5(entry)
+
+    # Pass 3: postproc/<ts>_<tag>/<vstem>...h5
+    pp = d / "postproc"
+    if pp.is_dir():
+        for run_dir in pp.iterdir():
+            if not run_dir.is_dir():
+                continue
+            for h5 in run_dir.glob("*.h5"):
+                _record_h5(h5)
+
+    for v in videos:
+        h5s = h5_stems_by_video.get(v["stem"], [])
+        v["has_h5"]   = bool(h5s)
+        v["h5_count"] = len(h5s)
+        v.pop("stem", None)
+
+    return {
+        "path":   str(d),
+        "parent": parent,
+        "dirs":   dirs,
+        "videos": videos,
+        "mtime":  mtime,
+    }
+
+
+@bp.route("/dlc/viewer/dir-with-h5")
+def viewer_dir_with_h5():
+    """Browse-list helper: every video in <dir> annotated with h5 count.
+
+    Query: ?path=<abs-dir>
+    Cached in Redis at viewer:dir_h5:<abs-dir> with composite-mtime invalidation.
+    """
+    raw = request.args.get("path", "").strip()
+    if not raw:
+        return jsonify({"error": "path required"}), 400
+    d = Path(raw)
+    if not d.is_dir():
+        return jsonify({"error": f"not a dir: {raw}"}), 404
+    if not _viewer_sec_check(d):
+        return jsonify({"error": "Access denied."}), 403
+
+    cur_mtime = _viewer_dir_mtime(d)
+    redis_key = f"viewer:dir_h5:{d}"
+    try:
+        redis = _ctx.redis_client()
+    except Exception:
+        redis = None
+
+    if redis is not None:
+        try:
+            raw_cached = redis.get(redis_key)
+            if raw_cached:
+                cached = _json.loads(raw_cached)
+                if cached.get("mtime") == cur_mtime:
+                    return jsonify(cached)
+        except Exception:
+            pass  # fall through and rebuild
+
+    payload = _build_dir_with_h5(d, cur_mtime)
+    if redis is not None:
+        try:
+            redis.setex(redis_key, 86400, _json.dumps(payload))
+        except Exception:
+            pass  # cache write best-effort
+    return jsonify(payload)
 
 
 @bp.route("/dlc/viewer/h5-info")

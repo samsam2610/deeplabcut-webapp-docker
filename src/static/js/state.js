@@ -9,4 +9,5 @@ export const state = {
   dataDir: null,
   currentProjectId: "",
   pollTimer: null,
+  vaBrowseHideNoH5: true,
 };

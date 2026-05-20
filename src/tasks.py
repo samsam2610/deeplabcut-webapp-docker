@@ -29,4 +29,5 @@ from dlc.tasks import (  # noqa: F401
     dlc_machine_label_frames,
     dlc_machine_label_reapply,
     run_processing,
+    dlc_postprocess_run,
 )

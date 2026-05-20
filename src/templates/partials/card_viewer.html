@@ -27,6 +27,11 @@
 
       <!-- Tab: Browse Folders -->
       <div id="va-tab-browse-panel" class="hidden">
+        <label style="display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--text-dim);margin-bottom:.3rem;cursor:pointer">
+          <input type="checkbox" id="va-browse-hide-no-h5" checked
+                 style="accent-color:var(--accent);width:13px;height:13px"/>
+          Hide videos without h5
+        </label>
         <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem">
           <input id="va-browse-breadcrumb" type="text" spellcheck="false" autocomplete="off"
             placeholder="/paste/a/path/here"
@@ -80,19 +85,56 @@
           <!-- Controls (hidden until toggled on) -->
           <div id="va-overlay-controls" class="hidden" style="margin-top:.5rem">
 
-            <!-- h5 file row -->
+            <!-- ── Primary layer picker ─────────────────────────────── -->
             <div style="margin-bottom:.45rem">
-              <label style="display:block;font-size:.73rem;color:var(--text-dim);margin-bottom:.25rem">Analysis file (.h5)</label>
+              <label style="display:block;font-size:.73rem;color:var(--text-dim);margin-bottom:.25rem">Primary layer (.h5)</label>
               <div style="display:flex;gap:.35rem;align-items:center">
-                <input type="text" id="va-overlay-h5-path" readonly placeholder="auto-detected or browse…"
-                  style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;padding:.28rem .45rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
-                <button class="btn-sm" id="va-overlay-h5-auto" title="Auto-detect h5 from video folder">Auto</button>
-                <button class="btn-sm" id="va-overlay-h5-browse" title="Browse for h5 file">Browse</button>
+                <select id="va-overlay-primary-select"
+                  style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;padding:.28rem .45rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text)">
+                  <option value="">(no h5 detected — use Browse)</option>
+                </select>
+                <button class="btn-sm" id="va-overlay-h5-browse" title="Browse for any h5">Browse</button>
                 <button class="btn-sm" id="va-overlay-h5-clear" style="opacity:.7" title="Clear">✕</button>
               </div>
-              <!-- h5 file browser -->
+              <input type="text" id="va-overlay-h5-path" readonly
+                style="margin-top:.25rem;width:100%;font-family:var(--mono);font-size:.7rem;padding:.2rem .4rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text-dim)" />
               <div id="va-overlay-h5-browser" class="hidden"
                 style="margin-top:.4rem;max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.3rem .4rem;font-size:.75rem"></div>
+            </div>
+
+            <!-- ── Comparison layers ────────────────────────────────── -->
+            <div id="va-overlay-compare-block" style="margin-bottom:.45rem">
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--text-dim);margin-bottom:.25rem">
+                Comparison layers
+                <select id="va-overlay-add-compare"
+                  style="margin-left:auto;font-size:.72rem;padding:.18rem .35rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text)">
+                  <option value="">+ add comparison…</option>
+                </select>
+                <span id="va-overlay-add-compare-empty-hint" class="hidden"
+                      style="margin-left:auto;font-size:.7rem;color:var(--text-dim);font-style:italic">
+                  no other variants for this video
+                </span>
+              </label>
+              <div id="va-overlay-primary-row"
+                   style="display:flex;align-items:center;gap:.35rem;font-size:.74rem;padding:.15rem .25rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;margin-bottom:.25rem">
+                <input type="checkbox" id="va-overlay-primary-visible" checked
+                       style="accent-color:var(--accent);width:12px;height:12px;flex-shrink:0"/>
+                <span id="va-overlay-primary-shape"
+                      style="font-family:var(--mono);width:1.1rem;text-align:center;flex-shrink:0">●</span>
+                <span style="font-size:.7rem;color:var(--text-dim);flex-shrink:0">Primary</span>
+                <span id="va-overlay-primary-label"
+                      style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+              </div>
+              <div id="va-overlay-compare-list" style="display:flex;flex-direction:column;gap:.2rem"></div>
+              <span id="va-overlay-edit-disabled-banner" class="hidden" style="display:inline-block;margin-top:.25rem;font-size:.72rem;color:var(--text-dim);font-style:italic">⚠ Edit disabled while comparing layers — remove comparisons to edit.</span>
+            </div>
+
+            <!-- ── Customize per layer threshold toggle ─────────────── -->
+            <div style="margin-bottom:.45rem">
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--text-dim);cursor:pointer">
+                <input type="checkbox" id="va-overlay-customize-thresholds" style="accent-color:var(--accent);width:13px;height:13px"/>
+                Customize threshold per layer
+              </label>
             </div>
 
             <!-- Likelihood threshold -->
@@ -161,6 +203,18 @@
           <button id="va-btn-next" class="btn-sm fe-ctrl-btn" title="Next frame (→)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/><line x1="15" y1="6" x2="15" y2="18"/></svg>
           </button>
+          <label style="display:flex;align-items:center;gap:.3rem;font-size:.75rem;color:var(--text-dim);white-space:nowrap"
+                 title="Playback rate (frames per wall-clock second)">
+            fps
+            <input type="number" id="va-play-fps" value="5" min="1" max="120" step="1"
+                   style="width:46px;text-align:center;font-family:var(--mono);font-size:.78rem;padding:.18rem .3rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)">
+          </label>
+          <label style="display:flex;align-items:center;gap:.3rem;font-size:.75rem;color:var(--text-dim);white-space:nowrap"
+                 title="Play every N frames (1 = every frame, 2 = every other, …)">
+            step
+            <input type="number" id="va-play-step" value="1" min="1" max="100" step="1"
+                   style="width:46px;text-align:center;font-family:var(--mono);font-size:.78rem;padding:.18rem .3rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)">
+          </label>
           <!-- Multi-frame skip -->
           <button id="va-btn-skip-back" class="btn-sm fe-ctrl-btn" title="Skip backward N frames (Ctrl+←)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="19 18 13 12 19 6"/><polyline points="13 18 7 12 13 6"/></svg>
@@ -185,11 +239,18 @@
         <!-- ── Dataset Curation Panel ──────────────────────────────── -->
         <div id="va-curation-panel" style="margin-top:.65rem;padding:.5rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
 
-          <!-- Header -->
-          <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.45rem">
-            <span style="font-size:.8rem;font-weight:600;color:var(--text)">Dataset Curation</span>
+          <!-- Toggle row (master kill-switch for the curation tools) -->
+          <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:.45rem;font-size:.8rem;font-weight:500;cursor:pointer;user-select:none">
+              <input type="checkbox" id="va-curation-toggle"
+                     style="accent-color:var(--accent);width:14px;height:14px"/>
+              Dataset Curation
+            </label>
             <span id="va-curation-status" class="fe-extract-status" style="font-size:.73rem;flex:1;min-width:0"></span>
           </div>
+
+          <!-- Existing inner rows wrapped in a hidden-by-default div -->
+          <div id="va-curation-controls" class="hidden" style="margin-top:.5rem">
 
           <!-- Row 1: Quick-extract + Add to Dataset -->
           <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.4rem">
@@ -303,6 +364,8 @@
               </button>
             </div>
           </div>
+          </div>
+          <!-- end va-curation-controls -->
         </div>
         <!-- ── end Dataset Curation Panel ──────────────────────────── -->
 

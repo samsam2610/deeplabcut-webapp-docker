@@ -139,11 +139,22 @@ import { state } from './state.js';
       gmBadge.style.borderColor = busy ? "var(--accent)" : "";
     }
 
-    // ── Live log viewer (SSE) ──────────────────────────────────
-    let _gmLogEventSource = null;
+    // ── Live log viewer (shared SSE via window.logStream) ──────
+    // Uses the shared single-EventSource module so opening this overlay does
+    // not pin a second gunicorn worker on top of the one held by jobs.js.
+    // On onDemoted (some other consumer took the SSE for a different task)
+    // we transparently fall back to short polling. See log_stream.js + spec
+    // docs/superpowers/specs/2026-05-19-jobs-sse-heartbeat-hybrid-design.md.
+    let _gmUnsubscribeLog   = null;
+    let _gmStopPollFallback = null;
+
+    function _gmTeardownLog() {
+      if (_gmUnsubscribeLog)   { try { _gmUnsubscribeLog(); }   catch (_) {} _gmUnsubscribeLog   = null; }
+      if (_gmStopPollFallback) { try { _gmStopPollFallback(); } catch (_) {} _gmStopPollFallback = null; }
+    }
 
     function _gmOpenLogStream(taskId) {
-      if (_gmLogEventSource) { _gmLogEventSource.close(); _gmLogEventSource = null; }
+      _gmTeardownLog();
 
       const overlay = document.createElement("div");
       overlay.id = "gm-log-overlay";
@@ -170,22 +181,37 @@ import { state } from './state.js';
       const pre = overlay.querySelector("#gm-log-pre");
 
       overlay.querySelector("#gm-log-close").addEventListener("click", () => {
-        if (_gmLogEventSource) { _gmLogEventSource.close(); _gmLogEventSource = null; }
+        _gmTeardownLog();
         overlay.remove();
       });
 
-      _gmLogEventSource = new EventSource(`/dlc/task/${taskId}/log-stream`);
-      _gmLogEventSource.onmessage = (e) => {
-        pre.textContent += e.data + "\n";
-        pre.scrollTop = pre.scrollHeight;
+      const appendLine = (line) => {
+        pre.textContent += line + "\n";
+        pre.scrollTop   = pre.scrollHeight;
       };
-      _gmLogEventSource.addEventListener("done", () => {
-        _gmLogEventSource.close(); _gmLogEventSource = null;
-        pre.textContent += "\n── stream ended ──\n";
+
+      const ls = window.logStream;
+      if (!ls) {
+        pre.textContent += "[error] log_stream.js not loaded — cannot stream logs.\n";
+        console.error("[gpu_monitor] window.logStream missing");
+        return;
+      }
+
+      _gmUnsubscribeLog = ls.subscribe(taskId, {
+        onLine: appendLine,
+        onDone: () => {
+          pre.textContent += "\n── stream ended ──\n";
+          _gmTeardownLog();
+        },
+        onDemoted: () => {
+          // Another consumer claimed the shared SSE — fall back to polling.
+          if (_gmStopPollFallback) { try { _gmStopPollFallback(); } catch (_) {} }
+          _gmStopPollFallback = ls.pollTail(taskId, {
+            intervalMs: 60000,
+            onLines: (newLines) => newLines.forEach(appendLine),
+          });
+        },
       });
-      _gmLogEventSource.onerror = () => {
-        if (_gmLogEventSource) { _gmLogEventSource.close(); _gmLogEventSource = null; }
-      };
     }
 
     // ── Control actions ───────────────────────────────────────

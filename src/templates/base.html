@@ -38,6 +38,12 @@
       <span>Pose Processing Pipeline</span>
     </div>
     <span class="badge">v1.0</span>
+    <nav style="margin-left:auto;display:flex;gap:.6rem;align-items:center">
+      <a href="/" style="font-size:.78rem;color:var(--text-dim);text-decoration:none;padding:.2rem .55rem;border-radius:5px;border:1px solid transparent;transition:all .15s" onmouseover="this.style.borderColor='var(--border)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='transparent';this.style.color='var(--text-dim)'">Dashboard</a>
+      <a href="/vlm/refiner" style="font-size:.78rem;color:var(--text-dim);text-decoration:none;padding:.2rem .55rem;border-radius:5px;border:1px solid transparent;transition:all .15s" onmouseover="this.style.borderColor='var(--border)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='transparent';this.style.color='var(--text-dim)'">VLM Refiner</a>
+      <a href="/dlc-3d/" style="font-size:.78rem;color:var(--text-dim);text-decoration:none;padding:.2rem .55rem;border-radius:5px;border:1px solid transparent;transition:all .15s" onmouseover="this.style.borderColor='var(--border)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='transparent';this.style.color='var(--text-dim)'">3D Extractor</a>
+      <a href="/jobs" style="font-size:.78rem;color:var(--text-dim);text-decoration:none;padding:.2rem .55rem;border-radius:5px;border:1px solid transparent;transition:all .15s" onmouseover="this.style.borderColor='var(--border)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='transparent';this.style.color='var(--text-dim)'">Jobs</a>
+    </nav>
   </header>
 
   {% block content %}{% endblock %}

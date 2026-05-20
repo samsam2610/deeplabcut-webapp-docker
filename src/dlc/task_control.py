@@ -20,7 +20,7 @@ import os
 import signal
 import time
 
-from flask import Blueprint, Response, jsonify, stream_with_context
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from . import ctx as _ctx
 
@@ -33,6 +33,12 @@ _STOP_PREFIXES  = ("dlc_train_stop:",  "dlc_analyze_stop:")
 _PAUSE_PREFIXES = ("dlc_train_pause:", "dlc_analyze_pause:")
 
 _TERMINAL_STATUSES = {"complete", "failed", "stopped", "dead"}
+
+# Periodic SSE comment frame (": heartbeat\n\n") to keep idle connections warm
+# through intermediate proxies (nginx) and let clients detect dead sockets even
+# during quiet periods (e.g. between training epochs). See
+# docs/superpowers/specs/2026-05-19-jobs-sse-heartbeat-hybrid-design.md.
+HEARTBEAT_SECONDS = 60
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -204,6 +210,7 @@ def task_log_stream(task_id: str):
     def _generate():
         cursor = 0
         idle_after_terminal = 0
+        last_send_at = time.monotonic()
 
         while True:
             # Read all log lines since last cursor position
@@ -213,6 +220,7 @@ def task_log_stream(task_id: str):
                 for line in new_lines:
                     yield f"data: {line}\n\n"
                 cursor += len(new_lines)
+                last_send_at = time.monotonic()
 
             # Check terminal state
             status = None
@@ -228,6 +236,17 @@ def task_log_stream(task_id: str):
                     yield "event: done\ndata: {}\n\n"
                     return
 
+            # Heartbeat: keep idle SSE warm so nginx-style proxies don't close
+            # the connection and the client can detect a dead socket during
+            # quiet periods. Only emitted when this iteration had no real
+            # data; real frames update last_send_at above so this is a no-op
+            # while logs are actively flowing.
+            if not new_lines and (
+                time.monotonic() - last_send_at >= HEARTBEAT_SECONDS
+            ):
+                yield ": heartbeat\n\n"
+                last_send_at = time.monotonic()
+
             time.sleep(1)
 
     return Response(
@@ -238,3 +257,21 @@ def task_log_stream(task_id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@bp.route("/dlc/task/<task_id>/log-tail")
+def task_log_tail(task_id: str):
+    """Return the last N log lines for a task — backfill for the /jobs page.
+
+    Read-only, idempotent, no session state. Used by jobs.js to populate the
+    terminal pane before opening the SSE stream.
+    """
+    try:
+        n = int(request.args.get("n", 2000))
+    except (TypeError, ValueError):
+        n = 2000
+    n = max(1, min(n, 10000))
+    r = _ctx.redis_client()
+    log_key = f"dlc_task:{task_id}:log"
+    lines = r.lrange(log_key, -n, -1)
+    return jsonify({"lines": lines, "total": r.llen(log_key)})

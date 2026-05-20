@@ -1,5 +1,6 @@
 "use strict";
 import { state } from './state.js';
+import { makeFileBrowser } from './components/file_browser.js';
 
     const anvCard           = document.getElementById("annotate-video-card");
     const anvOpenBtn        = document.getElementById("btn-open-annotate-video");
@@ -601,77 +602,24 @@ import { state } from './state.js';
     }
     anvRefreshCsvBtn.addEventListener("click", _anvRefreshCsv);
 
-    // ── File browser ─────────────────────────────────────────────
+    // ── File browser (canonical file-browser component) ──────────
+    // Video picker. Default fileFilter accepts video+image extensions;
+    // override here to include .mpg/.mpeg (the annotator's original set).
     const _anvVideoExts = new Set([".mp4", ".avi", ".mov", ".mkv", ".mpg", ".mpeg"]);
-    function _anvIsVideo(name) { return _anvVideoExts.has(name.slice(name.lastIndexOf(".")).toLowerCase()); }
-
-    async function _anvBrowseDir(dirPath) {
-      anvBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
-      try {
-        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
-        const data = await res.json();
-        if (data.error) { anvBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">${data.error}</span>`; return; }
-        anvBrowser.innerHTML = "";
-
-        // Header: path + Up button
-        const header = document.createElement("div");
-        header.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.15rem .2rem .3rem;border-bottom:1px solid var(--border);margin-bottom:.2rem;min-width:0";
-        const pathLabel = document.createElement("span");
-        pathLabel.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.7rem;color:var(--text-dim)";
-        pathLabel.textContent = data.path;
-        pathLabel.title = data.path;
-        header.appendChild(pathLabel);
-        if (data.parent) {
-          const upBtn = document.createElement("button");
-          upBtn.className = "btn-sm";
-          upBtn.style.cssText = "padding:.12rem .45rem;font-size:.7rem;flex-shrink:0";
-          upBtn.textContent = "↑ Up";
-          upBtn.addEventListener("click", e => { e.stopPropagation(); _anvBrowseDir(data.parent); });
-          header.appendChild(upBtn);
-        }
-        anvBrowser.appendChild(header);
-
-        const visible = data.entries.filter(e => e.type === "dir" || (e.type === "file" && _anvIsVideo(e.name)));
-        if (!visible.length) {
-          const empty = document.createElement("span");
-          empty.style.cssText = "font-size:.75rem;color:var(--text-dim);padding:.25rem;display:block";
-          empty.textContent = "(no video files here)";
-          anvBrowser.appendChild(empty);
-        } else {
-          visible.forEach(e => {
-            const row = document.createElement("div");
-            row.style.cssText = "display:flex;align-items:center;gap:.35rem;padding:.18rem .3rem;border-radius:4px;cursor:pointer;font-size:.77rem";
-            const icon = e.type === "dir"
-              ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;color:var(--text-dim)"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`
-              : `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;color:var(--text-dim)"><rect x="2" y="2" width="20" height="20" rx="3"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg>`;
-            row.innerHTML = `${icon}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">${e.name}</span>`;
-            row.addEventListener("mouseenter", () => { row.style.background = "var(--surface-3,#2a2a2a)"; });
-            row.addEventListener("mouseleave", () => { row.style.background = ""; });
-            const fullPath = data.path.replace(/\/+$/, "") + "/" + e.name;
-            if (e.type === "dir") {
-              row.addEventListener("click", () => _anvBrowseDir(fullPath));
-            } else {
-              row.addEventListener("click", () => {
-                anvVideoPath.value = fullPath;
-                anvBrowser.classList.add("hidden");
-              });
-            }
-            anvBrowser.appendChild(row);
-          });
-        }
-      } catch (err) {
-        anvBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">Error: ${err.message}</span>`;
-      }
-    }
+    const anvPicker = makeFileBrowser({
+      inputEl: anvVideoPath,
+      paneEl:  anvBrowser,
+      fileFilter: (name) => {
+        const i = name.lastIndexOf(".");
+        if (i < 0) return false;
+        return _anvVideoExts.has(name.slice(i).toLowerCase());
+      },
+      onPick:  (path) => { _anvVideoPath = path; anvVideoPath.value = path; },
+    });
 
     anvBrowseBtn.addEventListener("click", () => {
-      if (anvBrowser.classList.contains("hidden")) {
-        anvBrowser.classList.remove("hidden");
-        const startPath = state.userDataDir || "/";
-        _anvBrowseDir(startPath);
-      } else {
-        anvBrowser.classList.add("hidden");
-      }
+      const startPath = state.userDataDir || "/";
+      anvPicker.openAt(startPath);
     });
 
     // ── Open / close card ────────────────────────────────────────
@@ -686,83 +634,22 @@ import { state } from './state.js';
       anvBrowser.classList.add("hidden");
     });
 
-    // ── Clip extractor dir browser ───────────────────────────────
-    async function _anvClipBrowseDir(dirPath) {
-      anvClipBrowser.innerHTML = `<span style="font-size:.8rem;color:var(--text-dim)">Loading…</span>`;
-      try {
-        const res  = await fetch(`/fs/ls?path=${encodeURIComponent(dirPath)}`);
-        const data = await res.json();
-        if (data.error) {
-          anvClipBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">${data.error}</span>`;
-          return;
-        }
-        anvClipBrowser.innerHTML = "";
-
-        // Header: current path + Up button
-        const header = document.createElement("div");
-        header.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.15rem .2rem .3rem;border-bottom:1px solid var(--border);margin-bottom:.2rem;min-width:0";
-        const pathLabel = document.createElement("span");
-        pathLabel.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:.7rem;color:var(--text-dim)";
-        pathLabel.textContent = data.path;
-        pathLabel.title = data.path;
-        header.appendChild(pathLabel);
-        if (data.parent) {
-          const upBtn = document.createElement("button");
-          upBtn.className = "btn-sm";
-          upBtn.style.cssText = "padding:.12rem .45rem;font-size:.7rem;flex-shrink:0";
-          upBtn.textContent = "↑ Up";
-          upBtn.addEventListener("click", e => { e.stopPropagation(); _anvClipBrowseDir(data.parent); });
-          header.appendChild(upBtn);
-        }
-        anvClipBrowser.appendChild(header);
-
-        // "Use this folder" row for the current directory
-        const useRow = document.createElement("div");
-        useRow.style.cssText = "display:flex;align-items:center;gap:.35rem;padding:.18rem .3rem;border-radius:4px;cursor:pointer;font-size:.77rem;color:var(--accent)";
-        useRow.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>Use this folder</span>`;
-        useRow.addEventListener("mouseenter", () => { useRow.style.background = "var(--surface-3,#2a2a2a)"; });
-        useRow.addEventListener("mouseleave", () => { useRow.style.background = ""; });
-        useRow.addEventListener("click", () => {
-          anvClipOutdir.value = data.path;
-          anvClipBrowser.classList.add("hidden");
-        });
-        anvClipBrowser.appendChild(useRow);
-
-        const dirs = data.entries.filter(e => e.type === "dir");
-        if (!dirs.length) {
-          const empty = document.createElement("span");
-          empty.style.cssText = "font-size:.75rem;color:var(--text-dim);padding:.25rem;display:block";
-          empty.textContent = "(no subdirectories)";
-          anvClipBrowser.appendChild(empty);
-        } else {
-          dirs.forEach(e => {
-            const row = document.createElement("div");
-            row.style.cssText = "display:flex;align-items:center;gap:.35rem;padding:.18rem .3rem;border-radius:4px;cursor:pointer;font-size:.77rem";
-            const icon = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;color:var(--text-dim)"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
-            row.innerHTML = `${icon}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">${e.name}</span>`;
-            row.addEventListener("mouseenter", () => { row.style.background = "var(--surface-3,#2a2a2a)"; });
-            row.addEventListener("mouseleave", () => { row.style.background = ""; });
-            const fullPath = data.path.replace(/\/+$/, "") + "/" + e.name;
-            row.addEventListener("click", () => _anvClipBrowseDir(fullPath));
-            anvClipBrowser.appendChild(row);
-          });
-        }
-      } catch (err) {
-        anvClipBrowser.innerHTML = `<span style="font-size:.78rem;color:var(--text-dim)">Error: ${err.message}</span>`;
-      }
-    }
+    // ── Clip extractor dir browser (canonical file-browser, dir-only)
+    // The component's single-click on a directory writes its path to
+    // inputEl AND expands it inline — so "use this folder" is implicit:
+    // whichever folder the user last clicked is what anvClipOutdir holds.
+    const anvClipPicker = makeFileBrowser({
+      inputEl: anvClipOutdir,
+      paneEl:  anvClipBrowser,
+      dirOnly: true,
+    });
 
     anvClipBrowseBtn.addEventListener("click", () => {
-      if (anvClipBrowser.classList.contains("hidden")) {
-        anvClipBrowser.classList.remove("hidden");
-        // Start browser at current video's directory if possible, else user data dir
-        const startPath = _anvVideoPath
-          ? _anvVideoPath.substring(0, _anvVideoPath.lastIndexOf("/")) || "/"
-          : (state.userDataDir || "/");
-        _anvClipBrowseDir(startPath);
-      } else {
-        anvClipBrowser.classList.add("hidden");
-      }
+      // Start browser at current video's directory if possible, else user data dir
+      const startPath = _anvVideoPath
+        ? _anvVideoPath.substring(0, _anvVideoPath.lastIndexOf("/")) || "/"
+        : (state.userDataDir || "/");
+      anvClipPicker.openAt(startPath);
     });
 
     // ── Crop video ───────────────────────────────────────────────

@@ -5,6 +5,7 @@ redis==5.*
 toml
 pyyaml
 numpy
+scipy
 pandas
 opencv-python-headless
 tables
