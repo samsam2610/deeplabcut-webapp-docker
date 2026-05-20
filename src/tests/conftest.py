@@ -31,6 +31,10 @@ os.environ.setdefault("DATA_DIR", _SESSION_DATA_DIR)
 os.environ.setdefault("USER_DATA_DIR", _SESSION_USER_DIR)
 os.environ.setdefault("CELERY_BROKER_URL", "redis://localhost:6379/0")
 os.environ.setdefault("FLASK_SECRET_KEY", "testkey1234567890abcdef12345678")
+# The webapp gained a Jupyter-style token auth wall in app.py's @before_request
+# hook. Tests don't carry a token, so every request 302s to login unless the
+# wall is disabled. AUTH_DISABLED=1 makes the hook a no-op.
+os.environ.setdefault("AUTH_DISABLED", "1")
 
 # ── GPU Routing (Constraint #1) ────────────────────────────────────────────────
 # GPU 0 = RTX 5090  → DLC processes
