@@ -1,0 +1,228 @@
+"""Unit tests for tasks.dlc_inline_session and its pure helpers.
+
+DLC + GPU are fully mocked — these tests run on the host without CUDA.
+
+Mirrors the pattern in test_tf_dlc_snapshot_index_fix.py: dlc.tasks does
+`import deeplabcut as dlc` at module level, so we stub sys.modules
+before importing dlc.tasks.
+"""
+from __future__ import annotations
+
+import os
+import pickle
+import sys
+import time as _time
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pandas as pd
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+
+def _load_dlc_tasks():
+    """Stub deeplabcut + DLCLoader + apis modules before importing dlc.tasks."""
+    _stub = MagicMock()
+    _patches = {
+        "deeplabcut": _stub,
+        "deeplabcut.pose_estimation_pytorch": MagicMock(),
+        "deeplabcut.pose_estimation_pytorch.apis": MagicMock(),
+        "deeplabcut.pose_estimation_pytorch.apis.videos": MagicMock(),
+        "deeplabcut.pose_estimation_pytorch.data": MagicMock(),
+    }
+    with patch.dict(sys.modules, _patches):
+        for key in list(sys.modules):
+            if key == "dlc.tasks" or key.startswith("dlc.tasks."):
+                del sys.modules[key]
+        from dlc import tasks as _mod
+        return _mod
+
+
+dlc_tasks = _load_dlc_tasks()
+
+
+def _ia_time_now():
+    return _time.time()
+
+
+# ── helpers ──────────────────────────────────────────────────────────────
+
+def _df_with_index(frames, all_nan_rows=None):
+    all_nan_rows = all_nan_rows or set()
+    cols = pd.MultiIndex.from_tuples(
+        [("scorer", "nose", "x"), ("scorer", "nose", "y"), ("scorer", "nose", "likelihood")],
+        names=["scorer", "bodyparts", "coords"],
+    )
+    data = np.ones((len(frames), 3))
+    for i, f in enumerate(frames):
+        if f in all_nan_rows:
+            data[i, :] = np.nan
+    return pd.DataFrame(data, index=list(frames), columns=cols)
+
+
+# ── _filter_skip_already_done ─────────────────────────────────────────────
+
+class TestFilterSkipAlreadyDone:
+    def test_empty_existing_returns_all_target(self):
+        result = dlc_tasks._filter_skip_already_done(list(range(5)), existing_df=None)
+        assert result == [0, 1, 2, 3, 4]
+
+    def test_target_subset_of_existing_returns_empty(self):
+        df = _df_with_index([0, 1, 2, 3, 4])
+        assert dlc_tasks._filter_skip_already_done([1, 2, 3], df) == []
+
+    def test_nan_all_rows_are_re_analyzed(self):
+        df = _df_with_index([0, 1, 2], all_nan_rows={1})
+        result = dlc_tasks._filter_skip_already_done([0, 1, 2], df)
+        assert 1 in result
+        assert 0 not in result
+        assert 2 not in result
+
+    def test_non_contiguous_target_preserves_order(self):
+        df = _df_with_index([2, 4])
+        result = dlc_tasks._filter_skip_already_done([1, 2, 3, 4, 5], df)
+        assert result == [1, 3, 5]
+
+
+# ── _RangeVideoIterator ───────────────────────────────────────────────────
+
+class TestRangeVideoIterator:
+    def test_yields_only_requested_indices(self, tmp_path):
+        video_path = tmp_path / "fake.mp4"
+        video_path.write_bytes(b"")
+        seeks = []
+        reads = 0
+
+        class _ParentStub:
+            def __init__(self, *a, **kw):
+                pass
+
+            def set_to_frame(self, n):
+                seeks.append(n)
+
+            def read_frame(self):
+                nonlocal reads
+                reads += 1
+                return np.zeros((4, 4, 3), dtype=np.uint8)
+
+            def reset(self):
+                pass
+
+        with patch.object(dlc_tasks, "VideoIterator", _ParentStub):
+            it = dlc_tasks._RangeVideoIterator(str(video_path), indices=[3, 5, 9])
+            collected = [f for f in it]
+        assert seeks == [3, 5, 9]
+        assert reads == 3
+        assert len(collected) == 3
+
+    def test_non_contiguous_skip_list_preserves_order(self, tmp_path):
+        video_path = tmp_path / "fake.mp4"
+        video_path.write_bytes(b"")
+        seeks = []
+
+        class _ParentStub:
+            def __init__(self, *a, **kw):
+                pass
+
+            def set_to_frame(self, n):
+                seeks.append(n)
+
+            def read_frame(self):
+                return np.zeros((1, 1, 3), dtype=np.uint8)
+
+            def reset(self):
+                pass
+
+        with patch.object(dlc_tasks, "VideoIterator", _ParentStub):
+            list(dlc_tasks._RangeVideoIterator(str(video_path), indices=[100, 7, 42]))
+        assert seeks == [100, 7, 42], "iterator must preserve caller-supplied order"
+
+
+# ── _atomic_write_h5 + _atomic_write_csv ──────────────────────────────────
+#
+# Host Python has a PyTables / numpy ABI mismatch that prevents real
+# `to_hdf` calls (only works inside the worker container). We mock to_hdf
+# to write a placeholder byte to the tmp path so the .tmp + os.replace
+# atomicity is verifiable on the host. See test_dlc_celery_tasks.py for
+# the established pattern.
+
+def _mock_to_hdf_writes_bytes():
+    """Replace pandas.DataFrame.to_hdf with a stub that writes 'h5\\n' to the
+    target path (the first positional arg). Lets atomicity tests run on host."""
+    def _stub(self_df, path_or_buf, *args, **kwargs):
+        with open(str(path_or_buf), "wb") as f:
+            f.write(b"h5\n")
+    return patch("pandas.DataFrame.to_hdf", new=_stub)
+
+
+class TestAtomicWrite:
+    def test_atomic_write_h5_uses_temp_then_replace(self, tmp_path):
+        path = tmp_path / "out.h5"
+        df = _df_with_index([0, 1, 2])
+        with _mock_to_hdf_writes_bytes():
+            dlc_tasks._atomic_write_h5(path, df)
+        assert path.is_file()
+        # No leftover .tmp
+        assert not (tmp_path / "out.h5.tmp").exists()
+
+    def test_atomic_write_h5_failure_leaves_original_intact(self, tmp_path):
+        path = tmp_path / "out.h5"
+        df = _df_with_index([0, 1, 2])
+        with _mock_to_hdf_writes_bytes():
+            dlc_tasks._atomic_write_h5(path, df)
+        original = path.read_bytes()
+
+        with patch("pandas.DataFrame.to_hdf", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError):
+                dlc_tasks._atomic_write_h5(path, df)
+        assert path.read_bytes() == original, "canonical file must be untouched on failure"
+
+    def test_atomic_write_csv_round_trip(self, tmp_path):
+        path = tmp_path / "out.csv"
+        df = _df_with_index([0, 1, 2])
+        dlc_tasks._atomic_write_csv(path, df)
+        assert path.is_file()
+
+
+# ── _update_meta_pickle ───────────────────────────────────────────────────
+
+class TestMetaPickleUpdate:
+    def test_records_snapshot_in_inline_analysis_snapshots_set(self, tmp_path):
+        meta_path = tmp_path / "video_meta.pickle"
+        with open(meta_path, "wb") as f:
+            pickle.dump({"existing_field": 1}, f)
+        df = _df_with_index([0, 1])
+        dlc_tasks._update_meta_pickle(meta_path, df, snapshot="snapshot-200000.pt")
+        with open(meta_path, "rb") as f:
+            meta = pickle.load(f)
+        assert meta["existing_field"] == 1
+        assert "inline_analysis_snapshots" in meta
+        assert "snapshot-200000.pt" in meta["inline_analysis_snapshots"]
+
+    def test_creates_meta_when_missing(self, tmp_path):
+        meta_path = tmp_path / "video_meta.pickle"
+        df = _df_with_index([0])
+        dlc_tasks._update_meta_pickle(meta_path, df, snapshot="snap.pt")
+        assert meta_path.is_file()
+        with open(meta_path, "rb") as f:
+            meta = pickle.load(f)
+        assert "snap.pt" in meta["inline_analysis_snapshots"]
+
+
+# ── _resolve_h5_path ──────────────────────────────────────────────────────
+
+class TestResolveH5Path:
+    def test_companion_path_uses_scorer_name(self):
+        result = dlc_tasks._resolve_h5_path(
+            "/data/videos/m3-cam1.mp4",
+            scorer_name="DLC_resnet50_DREADD-AlishuffleN_snapshot-200000",
+        )
+        assert str(result) == (
+            "/data/videos/m3-cam1DLC_resnet50_DREADD-AlishuffleN_snapshot-200000.h5"
+        )
+
+    def test_works_with_arbitrary_extension(self):
+        result = dlc_tasks._resolve_h5_path("/x/y/video.avi", scorer_name="SCORER")
+        assert result.name == "videoSCORER.h5"

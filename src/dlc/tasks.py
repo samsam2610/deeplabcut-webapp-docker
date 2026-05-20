@@ -2675,3 +2675,142 @@ def dlc_postprocess_run(
 def _utc_now_iso():
     import datetime as _dt
     return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+# ── Inline Analysis: helpers ──────────────────────────────────────────────
+# Lives at the bottom of tasks.py alongside dlc_inline_session.
+# See docs/superpowers/specs/2026-05-20-inline-analysis-design.md.
+
+import json as _ia_json
+import os as _ia_os
+import pandas as _ia_pd
+import pickle as _ia_pickle
+import time as _ia_time
+from pathlib import Path as _IAPath
+
+# Lazy DLC primitives — kept at module level so tests can patch the names.
+# At test-time on the host (and in production), these are populated only
+# when actually called (the bare names below are sentinels patched in tests).
+try:
+    from deeplabcut.pose_estimation_pytorch.apis import (  # type: ignore
+        VideoIterator as _DLC_VideoIterator,
+        video_inference as _dlc_video_inference,
+    )
+    from deeplabcut.pose_estimation_pytorch.apis import utils as _dlc_apis_utils_mod
+    from deeplabcut.pose_estimation_pytorch.apis.videos import (  # type: ignore
+        create_df_from_prediction as _dlc_create_df_from_prediction_fn,
+    )
+    from deeplabcut.pose_estimation_pytorch.data import (  # type: ignore
+        DLCLoader as _DLCLoaderCls,
+    )
+    VideoIterator = _DLC_VideoIterator
+    video_inference = _dlc_video_inference
+    _dlc_apis_utils = _dlc_apis_utils_mod
+    _dlc_create_df_from_prediction = _dlc_create_df_from_prediction_fn
+    _dlc_loader_cls = _DLCLoaderCls
+except ImportError:
+    VideoIterator = None
+    video_inference = None
+    _dlc_apis_utils = None
+    _dlc_create_df_from_prediction = None
+    _dlc_loader_cls = None
+
+
+def _filter_skip_already_done(target_frames, existing_df):
+    """Return the subset of target_frames that need re-analysis.
+
+    A frame needs re-analysis if it's missing from existing_df or if every
+    value in its row is NaN (matches DLC's own dynamic-cropping semantics).
+    """
+    if existing_df is None:
+        return list(target_frames)
+    have = existing_df.index
+    return [
+        f for f in target_frames
+        if f not in have or existing_df.loc[f].isna().all()
+    ]
+
+
+class _RangeVideoIterator:
+    """Iterate over a video at *non-contiguous* frame indices.
+
+    Wraps DLC's VideoIterator so successive __next__ calls jump to the
+    next requested index via set_to_frame + read_frame. Order is preserved
+    from the caller-supplied indices list.
+    """
+    def __init__(self, video_path, indices):
+        # Resolve VideoIterator from THIS module's globals at call time
+        # (tests patch tasks.VideoIterator after the module is imported).
+        _cls = globals().get("VideoIterator")
+        if _cls is None:
+            raise RuntimeError(
+                "deeplabcut not installed — VideoIterator unavailable"
+            )
+        self._inner = _cls(video_path)
+        self._indices = list(indices)
+        self._pos = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._pos >= len(self._indices):
+            raise StopIteration
+        idx = self._indices[self._pos]
+        self._pos += 1
+        self._inner.set_to_frame(idx)
+        return self._inner.read_frame()
+
+
+def _atomic_write_h5(path, df):
+    """Write df to <path> atomically via .tmp + os.replace."""
+    path = _IAPath(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    df.to_hdf(str(tmp), key="df_with_missing", mode="w", format="table")
+    _ia_os.replace(str(tmp), str(path))
+
+
+def _atomic_write_csv(path, df):
+    """Write df.to_csv(path) atomically via .tmp + os.replace."""
+    path = _IAPath(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    df.to_csv(str(tmp))
+    _ia_os.replace(str(tmp), str(path))
+
+
+def _resolve_h5_path(video_path, scorer_name):
+    """Compute the canonical companion .h5 path for (video, scorer)."""
+    p = _IAPath(video_path)
+    return p.with_name(p.stem + scorer_name + ".h5")
+
+
+def _resolve_meta_path(h5_path):
+    """Map a DLC analyzed .h5 to its sibling _meta.pickle path."""
+    h5_path = _IAPath(h5_path)
+    return h5_path.with_name(h5_path.stem + "_meta.pickle")
+
+
+def _update_meta_pickle(meta_path, df, snapshot):
+    """Write/update meta.pickle, recording the contributing snapshot.
+
+    Adds the snapshot name to `inline_analysis_snapshots: set[str]` (created
+    if missing). Older DLC tools ignore unknown fields.
+    """
+    meta_path = _IAPath(meta_path)
+    if meta_path.is_file():
+        try:
+            with open(str(meta_path), "rb") as f:
+                meta = _ia_pickle.load(f)
+        except (OSError, _ia_pickle.UnpicklingError, EOFError):
+            meta = {}
+    else:
+        meta = {}
+    snaps = meta.get("inline_analysis_snapshots")
+    if not isinstance(snaps, set):
+        snaps = set(snaps or ())
+    snaps.add(snapshot)
+    meta["inline_analysis_snapshots"] = snaps
+    tmp = meta_path.with_suffix(meta_path.suffix + ".tmp")
+    with open(str(tmp), "wb") as f:
+        _ia_pickle.dump(meta, f)
+    _ia_os.replace(str(tmp), str(meta_path))
