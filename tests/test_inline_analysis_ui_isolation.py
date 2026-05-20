@@ -199,3 +199,20 @@ def test_new_ids_are_unique_across_partials():
         assert seen.get(nid, 0) == 1, (
             f"id {nid!r} appears {seen.get(nid, 0)} times across partials"
         )
+
+
+def test_frameUrlFn_uses_canonical_annotate_video_frame_endpoint():
+    """Regression guard: inline_analysis.js must point the player at
+    /annotate/video-frame/<n>?path=... (the canonical browse-mode frame
+    endpoint used by frame_labeler / annotator). An earlier draft used a
+    made-up /annotate/frame?path=...&frame=N — that route doesn't exist
+    and 404'd every frame fetch, leaving the player blank and the seek
+    slider visually inert. See systematic-debugging session 2026-05-20.
+    """
+    js = (ROOT / "src" / "static" / "js" / "inline_analysis.js").read_text()
+    assert "/annotate/frame?" not in js, (
+        "broken /annotate/frame?path=...&frame=... endpoint must not appear"
+    )
+    assert "/annotate/video-frame/" in js, (
+        "must use canonical /annotate/video-frame/<n>?path=... endpoint"
+    )

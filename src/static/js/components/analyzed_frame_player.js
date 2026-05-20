@@ -14,7 +14,7 @@
 //   import { makeAnalyzedFramePlayer } from "./components/analyzed_frame_player.js";
 //   const player = makeAnalyzedFramePlayer({
 //     prefix: "ia",                            // DOM id prefix (ia-frame-img, ia-overlay-canvas, …)
-//     frameUrlFn: (n) => `/annotate/frame?path=${path}&frame=${n}`,
+//     frameUrlFn: (n) => `/annotate/video-frame/${n}?path=${path}`,
 //     poseUrlFn:  (layer, n) => `/dlc/viewer/h5-pose-window?h5=${layer.path}&start=${n}&n=1`,
 //     onCsvSaved: () => { /* card refresh hook */ },
 //   });
