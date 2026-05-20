@@ -268,3 +268,126 @@ document.addEventListener("keydown", (ev) => {
     case "Escape": _closePicker(); break;
   }
 });
+
+// ── Inspect mode ────────────────────────────────────────────────
+const tsInspectDialog = document.getElementById("ts-inspect-dialog");
+const tsInspectIter   = document.getElementById("ts-inspect-iter");
+const tsInspectShuffle= document.getElementById("ts-inspect-shuffle");
+const tsInspectCancel = document.getElementById("ts-inspect-cancel");
+const tsInspectGo     = document.getElementById("ts-inspect-go");
+const tsInspectBanner = document.getElementById("ts-inspect-banner");
+const tsInspectBannerTxt = document.getElementById("ts-inspect-banner-text");
+const tsInspectExit   = document.getElementById("ts-inspect-exit");
+
+let _tsInspect = null;  // null = picker mode; otherwise { iteration, shuffle, trainSet, testSet, trainFraction }
+
+function _openInspectDialog() {
+  if (tsInspectDialog) tsInspectDialog.classList.remove("hidden");
+}
+function _closeInspectDialog() {
+  if (tsInspectDialog) tsInspectDialog.classList.add("hidden");
+}
+
+async function _runInspect() {
+  const iter = parseInt(tsInspectIter.value || "0");
+  const shuffle = parseInt(tsInspectShuffle.value || "1");
+  try {
+    const body = await _fetchJson(
+      `/dlc/project/training-dataset/inspect?iteration=${iter}&shuffle=${shuffle}`,
+    );
+    const ds = (body.datasets || []).find(d => d.shuffle === shuffle)
+            || (body.datasets || [])[0];
+    if (!ds) {
+      alert(`No frozen split found for iteration ${iter} / shuffle ${shuffle}.`);
+      return;
+    }
+    const trainSet = new Set(ds.train.map(d => `${d.video_stem}|${d.image_name}`));
+    const testSet  = new Set(ds.test.map(d  => `${d.video_stem}|${d.image_name}`));
+    _tsInspect = {
+      iteration: iter, shuffle, trainSet, testSet,
+      trainFraction: ds.train_fraction,
+    };
+    if (tsInspectBanner) tsInspectBanner.classList.remove("hidden");
+    if (tsInspectBannerTxt) tsInspectBannerTxt.textContent =
+      `Inspecting iteration-${iter} / shuffle-${shuffle} ` +
+      `(trainset${Math.round(ds.train_fraction * 100)}) — read-only`;
+    _closeInspectDialog();
+    _renderFrameInspectAware();
+  } catch (e) {
+    alert(`Inspect failed: ${e.message || e}`);
+  }
+}
+
+function _exitInspect() {
+  _tsInspect = null;
+  if (tsInspectBanner) tsInspectBanner.classList.add("hidden");
+  // Re-enable the toggle button (it was disabled in inspect mode)
+  if (tsToggleBtn) tsToggleBtn.disabled = false;
+  _renderFrameInspectAware();
+}
+
+function _updateToggleButtonInspectAware() {
+  if (!_tsInspect) {
+    // Picker mode — use the normal toggle rendering
+    _updateToggleButton();
+    if (tsToggleBtn) tsToggleBtn.disabled = false;
+    return;
+  }
+  if (!tsMarkLabel) return;
+  const key = `${_tsStem}|${_currentFrameName()}`;
+  const inTrain = _tsInspect.trainSet.has(key);
+  const inTest  = _tsInspect.testSet.has(key);
+  if (inTest) {
+    tsMarkLabel.textContent = "TEST";
+    tsToggleBtn.style.background = "rgba(255,170,40,0.18)";
+    tsToggleBtn.style.borderColor = "rgba(255,170,40,0.7)";
+  } else if (inTrain) {
+    tsMarkLabel.textContent = "TRAIN";
+    tsToggleBtn.style.background = "rgba(80,200,255,0.14)";
+    tsToggleBtn.style.borderColor = "rgba(80,200,255,0.6)";
+  } else {
+    tsMarkLabel.textContent = "—";
+    tsToggleBtn.style.background = "";
+    tsToggleBtn.style.borderColor = "";
+  }
+  if (tsToggleBtn) tsToggleBtn.disabled = true;
+}
+
+function _renderFrameInspectAware() {
+  _renderFrame();
+  _updateToggleButtonInspectAware();
+}
+
+// Wire up inspect buttons
+if (tsInspectBtn)    tsInspectBtn.addEventListener("click", _openInspectDialog);
+if (tsInspectCancel) tsInspectCancel.addEventListener("click", _closeInspectDialog);
+if (tsInspectGo)     tsInspectGo.addEventListener("click", _runInspect);
+if (tsInspectExit)   tsInspectExit.addEventListener("click", _exitInspect);
+
+// Replace nav-button click handlers so they call the inspect-aware update too.
+// We do this by adding a SECOND listener — the original picker-mode handler
+// (added in Task 7) still runs first and updates _tsIdx + redraws. Our new
+// listener then patches the toggle-button render.
+if (tsBtnPrev) tsBtnPrev.addEventListener("click", _updateToggleButtonInspectAware);
+if (tsBtnNext) tsBtnNext.addEventListener("click", _updateToggleButtonInspectAware);
+if (tsStemSelect) tsStemSelect.addEventListener("change", _updateToggleButtonInspectAware);
+
+// In picker mode, the keyboard handler also calls _renderFrame via _next/_prev/etc.
+// Patch the keyboard handler at the document level: after any key fires that
+// changed the frame, re-run inspect-aware rendering. We attach a CAPTURING
+// listener that runs AFTER the existing one (which uses default bubble phase
+// at line ~250 of this file).
+document.addEventListener("keyup", (ev) => {
+  if (!tsCard || tsCard.classList.contains("hidden")) return;
+  if (ev.target && /input|textarea|select/i.test(ev.target.tagName)) return;
+  if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) {
+    _updateToggleButtonInspectAware();
+  }
+});
+
+// Suppress mark-toggling in inspect mode by intercepting the toggle button click.
+if (tsToggleBtn) {
+  tsToggleBtn.addEventListener("click", (ev) => {
+    if (_tsInspect) ev.stopImmediatePropagation();
+  }, true /* capture: run before the toggle handler */);
+}

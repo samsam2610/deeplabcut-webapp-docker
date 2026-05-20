@@ -45,3 +45,17 @@ def test_picker_js_loaded_somewhere():
         if main_js.exists() and "test_set_picker" in main_js.read_text():
             found = True
     assert found, "test_set_picker.js is not loaded by any template"
+
+
+def test_inspect_dialog_present():
+    text = (SRC / "templates" / "partials" / "card_test_set_picker.html").read_text()
+    assert "ts-inspect-dialog" in text
+    assert "ts-inspect-iter" in text
+    assert "ts-inspect-shuffle" in text
+    assert "ts-inspect-banner" in text
+
+
+def test_picker_js_has_inspect_logic():
+    text = (SRC / "static" / "js" / "test_set_picker.js").read_text()
+    assert "/dlc/project/training-dataset/inspect" in text
+    assert "_tsInspect" in text
