@@ -37,8 +37,8 @@ Celery worker (long-lived task: tasks.dlc_inline_session)
 Key shape decisions (settled during brainstorm):
 
 - **Scope per warm worker** = one `(user, project, snapshot)` triple. Snapshot change tears down and rewarms.
-- **Engine** = PyTorch only in v1. `/session/start` returns 400 for TF projects.
-- **Project type** = single-animal only in v1. `/session/start` returns 400 for multi-animal projects.
+- **Engine** = PyTorch only in v1. `/session/start` returns 409 for TF projects.
+- **Project type** = single-animal only in v1. `/session/start` returns 409 for multi-animal projects.
 - **Source media** = videos only.
 - **Live progress** = no streaming markers; player refreshes on completion.
 - **Merge policy** = overwrite-by-snapshot is automatic (different snapshot → different file); within the same h5, frames already analyzed are silently skipped and the user is told the count.
@@ -107,10 +107,12 @@ No client-side preflight, no banner UI, no new field on `/dlc/project`. The new 
 cfg = yaml.safe_load((Path(project["project_path"]) / "config.yaml").read_text())
 if cfg.get("multianimalproject"):
     return jsonify({"error": "Inline Analysis is single-animal only in v1. "
-                              "Use the Analyze Video/Frames card."}), 400
+                              "Use the Analyze Video/Frames card."}), 409
 if (cfg.get("engine") or "pytorch").lower() != "pytorch":
-    return jsonify({"error": "Inline Analysis requires the PyTorch engine."}), 400
+    return jsonify({"error": "Inline Analysis requires the PyTorch engine."}), 409
 ```
+
+(409 Conflict — the request is well-formed; the server's project state is what makes it impossible. The implementation and tests both use 409.)
 
 The browser shows the response error in the existing "Last run" status line. No separate banner element.
 
@@ -496,8 +498,8 @@ Decorator skips automatically when `CUDA_VISIBLE_DEVICES` is unset or `nvidia-sm
 
 Explicit non-goals for v1:
 
-- Multi-animal projects (`/session/start` refuses with 400).
-- TensorFlow engine (`/session/start` refuses with 400).
+- Multi-animal projects (`/session/start` refuses with 409).
+- TensorFlow engine (`/session/start` refuses with 409).
 - Image folders as analysis target (videos only).
 - Live streaming markers during a run (wait until done).
 - Shared frame decode cache between worker and Flask.
