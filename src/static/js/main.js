@@ -9,6 +9,7 @@ import './training.js';
 import './frame_labeler.js';
 import './analyze.js';
 import './viewer.js';
+import './inline_analysis.js';
 import './postprocess.js';
 import './annotator.js';
 import './log_stream.js';     // shared SSE/poll-tail; must load before gpu_monitor.js
