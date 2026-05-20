@@ -18,11 +18,11 @@
 
 | Path | Responsibility |
 |---|---|
-| `src/dlc/inline_analysis.py` | Flask blueprint with 6 routes (`/session/start`, `/session/status`, `/session/stop`, `/range`, `/range/status`, `/video-info`). Computes `snap_key`, validates project type/engine, dispatches the warm-worker Celery task, serialises range requests via Redis lists, owns the disable-banner reasons. Activity TTL is bumped on every range submit and every `/session/status` poll. |
+| `src/dlc/inline_analysis.py` | Flask blueprint with 6 routes (`/session/start`, `/session/status`, `/session/stop`, `/range`, `/range/status`, `/video-info`). Computes `snap_key`, validates project type/engine by reading the active project's `config.yaml` directly (returns 400 for multi-animal or non-PyTorch), dispatches the warm-worker Celery task, serialises range requests via Redis lists. Activity TTL is bumped only on range submit. |
 | `src/static/js/components/analyzed_frame_player.js` | `makeAnalyzedFramePlayer({prefix, frameUrlFn, poseUrlFn, onCsvSaved})` factory — copy-and-parameterise of `viewer.js`'s player/overlay/marker-adjustment/dataset-curation core. No consumer of `viewer.js` is touched. |
 | `src/static/js/inline_analysis.js` | DOM controller — file picker (via canonical `makeFileBrowser`), analysis-params block, snapshot picker, warm-indicator polling, range submit/poll, mounts the new player factory. |
 | `src/templates/partials/card_inline_analysis.html` | Card markup. |
-| `tests/test_inline_analysis_routes.py` | HTTP-endpoint tests with FakeRedis + mocked Celery: 4xx validation, dispatch shape, status polling shape, disable banners for multi-animal / TF. |
+| `tests/test_inline_analysis_routes.py` | HTTP-endpoint tests with FakeRedis + mocked Celery: 4xx validation, dispatch shape, status polling shape, `/session/start` returns 400 with descriptive error when config.yaml says multi-animal or TF. |
 | `tests/test_inline_analysis_worker.py` | Pure-function tests for `_filter_skip_already_done`, `_RangeVideoIterator`, `_atomic_write_h5`, `_run_range` (with stubbed `video_inference`), session/control/result transitions, TTL exit. |
 | `tests/test_inline_analysis_session_lifecycle.py` | Snapshot-change tear-down, idle TTL, control-key stop, concurrent-request serialisation. |
 | `tests/test_analyzed_frame_player_factory.py` | Static-analysis: factory file exists, exports `makeAnalyzedFramePlayer`, `inline_analysis.js` imports it. Soft consumer-count check. |
@@ -68,7 +68,7 @@
 |---|---|---|---|
 | **0** | `analyzed_frame_player.js` factory — copy + parameterise viewer.js core; no consumer wiring | Yes (factory loads but is unused; static-analysis test passes) | None — viewer.js untouched, no runtime path changes |
 | **1** | Backend blueprint + warm-worker Celery task + Redis IPC scaffolding (all tests mocked) | Yes (routes 4xx-validate; dispatch mocked; worker exits cleanly) | DLC internal API symbol existence (smoke check in P1); Redis key shape |
-| **2** | `card_inline_analysis.html` + `inline_analysis.js` frontend wiring + open/close + entry-point button + disable banners | Yes (browser smoke: open card, scrub, see disable banners; backend already in place) | DOM-id collision with viewer card; `viewer.js` regression via main.js load order |
+| **2** | `card_inline_analysis.html` + `inline_analysis.js` frontend wiring + open/close + entry-point button | Yes (browser smoke: open card, scrub, click Analyze on a wrong-type project and see the 400 surface in the status line) | DOM-id collision with viewer card; `viewer.js` regression via main.js load order |
 | **3** | End-to-end smoke + opt-in GPU smoke + policy + static-analysis tests | Yes (whole feature passes) | GPU smoke disk-fill guard; warm-worker TTL race; multi-tab interaction |
 | **4** | Tech-debt notes (header comments, docs broadening, follow-up PR titles) | Yes (docs-only) | None |
 
@@ -1519,10 +1519,9 @@ def ia_client(flask_test_client, dlc_sandbox_project):
     redis.set(
         f"webapp:dlc_project:u1",
         json.dumps({
-            "config_path": str(cfg),
-            "engine":      "pytorch",
-            "project":     dest.name,
-            "multianimal": False,
+            "config_path":  str(cfg),
+            "project_path": str(dest),
+            "project":      dest.name,
         }),
     )
     yield client, app_module, redis, dest
@@ -1556,10 +1555,13 @@ class TestSessionStart:
         assert resp.status_code == 400
 
     def test_409_when_project_is_multianimal(self, ia_client):
-        client, _app, redis, project = ia_client
-        raw = json.loads(redis.get("webapp:dlc_project:u1"))
-        raw["multianimal"] = True
-        redis.set("webapp:dlc_project:u1", json.dumps(raw))
+        client, _app, _redis, project = ia_client
+        # Project-type check reads config.yaml directly — mutate the file, not Redis.
+        cfg = project / "config.yaml"
+        import yaml
+        data = yaml.safe_load(cfg.read_text()) or {}
+        data["multianimalproject"] = True
+        cfg.write_text(yaml.safe_dump(data))
         resp = client.post("/dlc/project/inline-analysis/session/start", json={
             "snapshot_path": "s", "shuffle": 1, "ttl_seconds": 300,
         })
@@ -1567,10 +1569,12 @@ class TestSessionStart:
         assert "single-animal" in resp.get_json()["error"]
 
     def test_409_when_engine_is_tensorflow(self, ia_client):
-        client, _app, redis, project = ia_client
-        raw = json.loads(redis.get("webapp:dlc_project:u1"))
-        raw["engine"] = "tensorflow"
-        redis.set("webapp:dlc_project:u1", json.dumps(raw))
+        client, _app, _redis, project = ia_client
+        cfg = project / "config.yaml"
+        import yaml
+        data = yaml.safe_load(cfg.read_text()) or {}
+        data["engine"] = "tensorflow"
+        cfg.write_text(yaml.safe_dump(data))
         resp = client.post("/dlc/project/inline-analysis/session/start", json={
             "snapshot_path": "s", "shuffle": 1, "ttl_seconds": 300,
         })
@@ -1743,13 +1747,25 @@ def _active_project() -> dict | None:
 
 
 def _disable_reason(project: dict) -> tuple[int, str] | None:
-    """Return (status_code, error) if the project can't run inline analysis."""
-    if project.get("multianimal"):
+    """Return (status_code, error) if the project can't run inline analysis.
+
+    Reads config.yaml on disk directly — no separate route exposes
+    multianimal/engine, so neither does the Redis-cached project state.
+    """
+    cfg_path = Path(project.get("config_path", ""))
+    if not cfg_path.is_file():
+        return 400, "Active project has no readable config.yaml."
+    try:
+        import yaml
+        cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    except Exception as exc:
+        return 400, f"Could not parse config.yaml: {exc}"
+    if cfg.get("multianimalproject"):
         return 409, (
             "Inline Analysis is single-animal only in v1. "
             "Use the Analyze Video/Frames card for multi-animal projects."
         )
-    if (project.get("engine") or "pytorch") != "pytorch":
+    if (cfg.get("engine") or "pytorch").lower() != "pytorch":
         return 409, "Inline Analysis requires the PyTorch engine."
     return None
 
@@ -1998,7 +2014,7 @@ feat(dlc): inline-analysis Flask blueprint with 6 routes
 
 Adds src/dlc/inline_analysis.py with session start/status/stop,
 range submit/status, and video-info routes. Validates active project,
-returns disable banners for multi-animal / TF, computes snap_key as
+returns 409 with descriptive error for multi-animal / TF (read from config.yaml), computes snap_key as
 sha1(config_path|shuffle|snapshot_path). Registered in src/app.py
 alongside the existing analyze blueprint.
 
@@ -2049,8 +2065,9 @@ def ia_client(flask_test_client, dlc_sandbox_project):
     shutil.copytree(str(dlc_sandbox_project), str(dest))
     cfg = dest / "config.yaml"
     redis.set("webapp:dlc_project:u1", json.dumps({
-        "config_path": str(cfg), "engine": "pytorch",
-        "project": dest.name, "multianimal": False,
+        "config_path":  str(cfg),
+        "project_path": str(dest),
+        "project":      dest.name,
     }))
     yield client, app_module, redis, dest
 
@@ -2178,7 +2195,7 @@ EOF
 
 **Phase goal:** The "Inline Analysis" button appears in the sidebar between Analyze and View-Analyzed. Clicking it opens a card that:
 - Picks a video via the canonical file browser (with "Hide videos without h5" UNCHECKED by default per §1)
-- Shows the params block (snapshot, batch size, frames-per-click, keep-warm) — or a disable banner for multi-animal / TF
+- Shows the params block (snapshot, batch size, frames-per-click, keep-warm). For multi-animal / TF projects, the user sees the server's 409 error in the existing "Last run" status line after clicking Analyze — no preflight banner
 - Updates the Analyze button label as the user scrubs
 - POSTs `/session/start` on first interaction, polls `/session/status`
 - POSTs `/range` on click, polls `/range/status`, calls `player.reloadH5()` on completion
@@ -2239,8 +2256,9 @@ def test_card_inline_analysis_partial_exists():
     assert 'id="ia-frames-per-click"' in txt
     assert 'id="ia-keep-warm-seconds"' in txt
     assert 'id="ia-btn-analyze-range"' in txt
-    # Disable banner container.
-    assert 'id="ia-disable-banner"' in txt
+    # No ia-disable-banner — project-type errors surface via the existing
+    # "Last run" status line, sourced from /session/start's 409 body.
+    assert 'id="ia-disable-banner"' not in txt
 
 
 def test_index_includes_inline_analysis_partial():
@@ -2281,7 +2299,7 @@ def test_no_create_labeled_controls_in_card():
 def test_new_ids_are_unique_across_partials():
     new_ids = {
         "inline-analysis-card", "btn-close-inline-analysis", "btn-open-inline-analysis",
-        "ia-disable-banner", "ia-snapshot", "ia-batch-size",
+        "ia-snapshot", "ia-batch-size",
         "ia-frames-per-click", "ia-keep-warm-seconds",
         "ia-warm-indicator", "ia-btn-analyze-range", "ia-last-run-status",
         "ia-file-browser-pane", "ia-hide-no-h5",
@@ -2322,9 +2340,6 @@ Create `src/templates/partials/card_inline_analysis.html`. Use `card_viewer.html
     </button>
   </div>
   <p class="subtitle">Scrub a video, run DLC on N frames forward against a warm-in-memory model, and merge into the canonical .h5/.csv.</p>
-
-  <!-- Disable banner (multi-animal / TF) — populated by JS. -->
-  <div id="ia-disable-banner" class="hidden" style="margin-bottom:.6rem;padding:.5rem .6rem;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;color:var(--text-dim);font-size:.78rem"></div>
 
   <!-- File picker -->
   <div style="margin-bottom:.6rem">
@@ -2469,7 +2484,7 @@ EOF
 
 ---
 
-## Task 2.2: `inline_analysis.js` controller — open/close + file picker + disable banners
+## Task 2.2: `inline_analysis.js` controller — open/close + file picker + range orchestration
 
 **Files:**
 - Create: `src/static/js/inline_analysis.js`
@@ -2487,8 +2502,9 @@ Create `src/static/js/inline_analysis.js`:
 // Owns:
 //   - Open/close + ESC + hide-other-cards orchestration
 //   - File picker (via makeFileBrowser) + hide-no-h5 toggle
-//   - Disable banner (multi-animal / TF)
 //   - Snapshot picker + batch + frames-per-click + keep-warm inputs
+//   - Project-type errors (multi-animal / TF) surface server-side as a
+//     409 from /session/start and render in the existing lastRun status line
 //   - Warm-indicator polling
 //   - Range submit + status polling, calls player.reloadH5() on done
 //   - Mounts makeAnalyzedFramePlayer({prefix: "ia", ...}) on first video load
@@ -2505,7 +2521,6 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
   const card        = document.getElementById("inline-analysis-card");
   const openBtn     = document.getElementById("btn-open-inline-analysis");
   const closeBtn    = document.getElementById("btn-close-inline-analysis");
-  const banner      = document.getElementById("ia-disable-banner");
   const videoPath   = document.getElementById("ia-video-path");
   const browserPane = document.getElementById("ia-file-browser-pane");
   const browseBtn   = document.getElementById("ia-browse-btn");
@@ -2538,7 +2553,6 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
   async function openCard() {
     hideAllOtherCards();
     card.classList.remove("hidden");
-    await refreshActiveProjectBanner();
     refreshSnapshots();
   }
 
@@ -2573,23 +2587,9 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
     }
   });
 
-  // ── Disable banner (multi-animal / TF) ─────────────────────────────────
-  async function refreshActiveProjectBanner() {
-    banner.classList.add("hidden");
-    try {
-      // /dlc/project/state already exposes engine + multianimal; reuse it.
-      const r = await fetch("/dlc/project/state");
-      if (!r.ok) return;
-      const proj = await r.json();
-      if (proj.multianimal) {
-        banner.classList.remove("hidden");
-        banner.textContent = "Inline Analysis is single-animal only in v1. Use the Analyze Video/Frames card for multi-animal projects.";
-      } else if ((proj.engine || "pytorch") !== "pytorch") {
-        banner.classList.remove("hidden");
-        banner.textContent = "Inline Analysis requires the PyTorch engine.";
-      }
-    } catch (e) { /* silent */ }
-  }
+  // (Project-type gating is purely server-side: /session/start reads
+  // config.yaml directly and returns 409 for multi-animal / TF. The error
+  // text from that response renders in `lastRun` — see `ensureSession`.)
 
   // ── File picker (canonical component) ──────────────────────────────────
   const picker = makeFileBrowser({
@@ -2646,8 +2646,9 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
     });
     if (!r.ok) {
       const data = await r.json().catch(() => ({}));
-      banner.classList.remove("hidden");
-      banner.textContent = data.error || `Could not start session (HTTP ${r.status})`;
+      lastRun.textContent =
+        data.error || `Could not start session (HTTP ${r.status})`;
+      lastRun.className = "fe-extract-status err";
       return null;
     }
     const data = await r.json();
@@ -2840,7 +2841,7 @@ git commit -m "$(cat <<'EOF'
 feat(static): inline-analysis card JS controller
 
 Adds src/static/js/inline_analysis.js: open/close + hide-other-cards
-orchestration, file picker via canonical makeFileBrowser, disable banner
+orchestration, file picker via canonical makeFileBrowser, server-side
 for multi-animal/TF, snapshot/batch/frames/keep-warm inputs, warm-
 indicator polling, range submit/poll, mounts makeAnalyzedFramePlayer
 ({prefix: "ia"}) on first video load. Registered in main.js after
@@ -2856,7 +2857,7 @@ EOF
 ## Phase 2 acceptance
 
 - `python -m pytest tests/test_inline_analysis_ui_isolation.py tests/test_analyzed_frame_player_factory.py tests/test_file_browser_policy.py -v` → all PASS
-- Browser smoke: open card → see disable banner OR (on a clean PyTorch single-animal project) see params block; pick a video → player loads frame 0; scrub → "Analyze N from K" updates live
+- Browser smoke: open card on a clean PyTorch single-animal project → params block visible (no banner); pick a video → player loads frame 0; scrub → "Analyze N from K" updates live. On a multi-animal or TF project, clicking Analyze surfaces the server's 409 error in the lastRun status line
 - `grep -c "section.card" src/templates/index.html` → includes count incremented by 1
 - No regression in `tests/test_postprocess_ui_isolation.py` or `tests/test_viewer_layers_ui_isolation.py` (the new card's IDs are namespaced under `ia-`/`inline-analysis-card`)
 
@@ -2892,7 +2893,7 @@ Runs against a live dev server (docker compose up flask) — skip if the
 server isn't reachable.
 
 Phases:
-  A. Open card → no console errors → disable banner OR params block visible
+  A. Open card on a single-animal PyTorch project → no console errors → params block visible (no banner). On a multi-animal/TF project, clicking Analyze shows the server 409 error text in the lastRun line.
   B. File-browser opens; hide-no-h5 toggles
   C. Scrubbing the seek bar updates the Analyze button label live
   D. (Stubbed worker) clicking Analyze → range/status returns done → player.reloadH5() called
@@ -3278,7 +3279,7 @@ Expected: empty.
 ## Explicit Non-Goals (do NOT drift into these — per spec §7)
 
 - Multi-animal projects (banner disables card).
-- TensorFlow engine (banner disables card).
+- TensorFlow engine (`/session/start` refuses with 409).
 - Image folders as analysis target (videos only).
 - Live streaming markers during a run (wait until done).
 - Shared frame decode cache between worker and Flask.
@@ -3302,7 +3303,7 @@ If a task tempts you toward any of the above, stop and surface it back to the pa
 | §1 Card layout — Analysis Parameters block | T2.1 |
 | §1 Card layout — frame player + marker overlay + marker-edit + curation | T0.2 (factory) + T2.1 (DOM) + T2.2 (mount) |
 | §1 Card layout — NO Create-labeled controls | T2.1 (test enforces absence) |
-| §1 Disable banners (multi-animal / TF) | T1.4 (409 + message) + T2.2 (frontend renders) |
+| §1 Project-type gating (multi-animal / TF) | T1.4 — `/session/start` reads `config.yaml`, returns 409 with descriptive error. T2.2 surfaces it in the lastRun status line. No client-side preflight. |
 | §2 Data flow & lifecycle events | T1.3 + T1.4 + T1.5 |
 | §2 Redis keys (session/queue/result/control) | T1.2 (helpers) + T1.3 (worker uses them) + T1.4 (routes use them) |
 | §3 HTTP endpoints (6 routes) | T1.4 |
@@ -3326,7 +3327,7 @@ If a task tempts you toward any of the above, stop and surface it back to the pa
 
 **Placeholder scan:** No "TBD"/"add error handling"/"similar to Task N" violations. Two areas where this plan instructs the engineer to inspect an existing API and substitute the actual name:
 
-- T2.2: `/dlc/project/snapshots` and `/dlc/project/state` — these are the conventional names; if the actual routes differ (`grep -rn "@bp.route" src/dlc/`), substitute. Reuse existing routes; do not add new ones.
+- T2.2: `/dlc/project/snapshots` is verified to exist at `src/dlc/training.py:88`. The project-type check uses no frontend route — it's purely server-side in T1.4 (`_disable_reason` reads `config.yaml` directly).
 - T1.4: `_celery_send_task` imports `from celery_app import celery` — confirm `celery_app.py` is the actual module name in this repo (the existing inference blueprint uses the same import pattern; copy it verbatim).
 
 **Type / name consistency:**
