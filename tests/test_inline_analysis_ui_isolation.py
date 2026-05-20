@@ -115,6 +115,27 @@ def test_inline_analysis_js_sends_trainingsetindex_in_range():
     assert "shuffle" in js
 
 
+def test_overlay_comparison_widgets_removed():
+    """Polish spec §1.4: drop the multi-h5 comparison UI; the card now
+    shows ONLY the just-produced h5."""
+    txt = (PARTIALS / "card_inline_analysis.html").read_text()
+    assert 'id="ia-overlay-primary-select"' not in txt, (
+        "primary-select dropdown must be removed per polish spec §1.4"
+    )
+    assert 'id="ia-overlay-add-compare"' not in txt
+    assert 'id="ia-overlay-compare-list"' not in txt
+    # Keep these — they remain useful in single-layer mode:
+    assert 'id="ia-overlay-toggle"' in txt
+    assert 'id="ia-overlay-threshold"' in txt
+    assert 'id="ia-overlay-marker-size"' in txt
+
+
+def test_bp_chips_container_present():
+    """Polish spec §1.4: body-part chips container is newly added."""
+    txt = (PARTIALS / "card_inline_analysis.html").read_text()
+    assert 'id="ia-bp-chips"' in txt
+
+
 def test_new_ids_are_unique_across_partials():
     new_ids = {
         "inline-analysis-card", "btn-close-inline-analysis", "btn-open-inline-analysis",
@@ -125,9 +146,9 @@ def test_new_ids_are_unique_across_partials():
         "ia-frame-img", "ia-overlay-canvas", "ia-btn-play",
         "ia-btn-prev", "ia-btn-next", "ia-seek", "ia-frame-counter",
         "ia-zoom", "ia-zoom-val", "ia-skip-n", "ia-frame-spinner",
-        "ia-overlay-toggle", "ia-overlay-primary-select",
-        "ia-overlay-add-compare", "ia-overlay-compare-list",
+        "ia-overlay-toggle",
         "ia-overlay-threshold", "ia-overlay-marker-size",
+        "ia-bp-list-wrap", "ia-bp-chips",
         "ia-marker-edit-banner",
     }
     seen: dict = {}

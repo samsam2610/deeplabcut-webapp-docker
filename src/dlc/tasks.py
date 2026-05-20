@@ -2858,13 +2858,19 @@ def _publish_status(redis_, user_id, snap_key, status, **fields):
         pass
 
 
-def _publish_result(redis_, req_id, status, n_analyzed=0, n_skipped=0, error=""):
-    """Set the result hash. Errors are truncated to 500 chars."""
+def _publish_result(redis_, req_id, status, n_analyzed=0, n_skipped=0, error="", scorer=""):
+    """Set the result hash. Errors are truncated to 500 chars.
+
+    `scorer` is included on success so the browser can construct the
+    canonical h5 path (video_stem + scorer + ".h5") without an extra
+    round-trip. See polish spec §1.4.
+    """
     mapping = {
         "status":     status,
         "n_analyzed": str(int(n_analyzed)),
         "n_skipped":  str(int(n_skipped)),
         "error":      str(error)[:500],
+        "scorer":     str(scorer or ""),
     }
     key = _result_key(req_id)
     redis_.hset(key, mapping=mapping)
@@ -3091,6 +3097,7 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
             _publish_result(
                 redis_, req["req_id"], "done",
                 n_analyzed=n_analyzed, n_skipped=n_skipped,
+                scorer=scorer,
             )
         except Exception as exc:
             _publish_result(
