@@ -49,17 +49,24 @@ services:
       - ./src/static:/app/static
       - ./src/dlc_tapnet_tracker.py:/app/dlc_tapnet_tracker.py
       - ./src/dlc_dataset_curator.py:/app/dlc_dataset_curator.py
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "977"   # host docker group GID — grants flask access to docker.sock
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DATA_DIR=/app/data
       - USER_DATA_DIR=/user-data
       - FLASK_APP=app.py
-      - FLASK_DEBUG=1
       - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-change-me-in-production}
       - APP_TOKEN=deeplabcut
-    # Use Flask dev server instead of gunicorn for auto-reload
-    command: flask run --debug --host=0.0.0.0 --port=5000
+      - OLLAMA_URL=http://172.26.0.1:11434
+      - WEBAPP_PUBLIC_URL=http://192.168.1.13:5000
+    networks:
+      default:
+      llm-net:
+        aliases:
+          - dlc-webapp
     depends_on:
       redis:
         condition: service_healthy
@@ -95,7 +102,7 @@ services:
       - USER_DATA_DIR=/user-data
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    command: celery -A tasks worker --loglevel=info --concurrency=1 --pool=solo -Q celery,pytorch
+    command: celery -A tasks worker --loglevel=info --concurrency=1 --pool=prefork -Q celery,pytorch
     depends_on:
       redis:
         condition: service_healthy
@@ -141,7 +148,7 @@ services:
       - USER_DATA_DIR=/user-data
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    command: celery -A tasks worker --loglevel=info --concurrency=1 --pool=solo -Q tensorflow
+    command: celery -A tasks worker --loglevel=info --concurrency=1 --pool=prefork -Q tensorflow
     depends_on:
       redis:
         condition: service_healthy
@@ -159,5 +166,90 @@ services:
     # so Docker will NOT restart it automatically after idle shutdown.
     restart: on-failure
 
+  # ── DLC-3D Support Module ───────────────────────────────────────
+  dlc-3d:
+    build:
+      context: ../
+      dockerfile: deeplabcut-webapp-docker-supports/dlc-3D/Dockerfile
+    image: dlc-3d:latest
+    volumes:
+      - /home/sam/data-disk/Parra-Data:/user-data/Parra-Data/Disk
+      - /home/sam/synology/Parra-Lab-Data:/user-data/Parra-Data/Cloud
+      - /home/sam/data-mount-dir:/user-data/Martin-Data/USB
+      - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
+      # Live-reload source files without rebuild
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/app.py:/app/app.py
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/dlc_3d_bp:/app/dlc_3d_bp
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/config.py:/app/config.py
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/viewer.py:/app/viewer.py
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/dlc_3d.html:/app/templates/dlc_3d.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/static:/app/static
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_3d_extract.html:/app/templates/partials/card_3d_extract.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_launcher.html:/app/templates/partials/card_lp_launcher.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_convert.html:/app/templates/partials/card_lp_convert.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_train.html:/app/templates/partials/card_lp_train.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_predict.html:/app/templates/partials/card_lp_predict.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_eks.html:/app/templates/partials/card_lp_eks.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_videos.html:/app/templates/partials/card_lp_videos.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_jobs.html:/app/templates/partials/card_lp_jobs.html
+    environment:
+      - AUTH_DISABLED=true
+      - DLC_3D_PORT=5050
+    networks:
+      - default
+    restart: unless-stopped
+
+  # ── DLC-3D GPU Worker (lightning-pose + EKS) ────────────────────
+  dlc-3d-worker:
+    build:
+      context: ../
+      dockerfile: deeplabcut-webapp-docker-supports/dlc-3D/Dockerfile.worker
+    image: dlc-3d-worker:latest
+    # PyTorch DataLoader workers need ample /dev/shm; the default 64 MB is too
+    # small. Two-stage SV-pretrain runs predict over 3000+ frames at end of
+    # stage 1 which can exhaust 4 GB; 16 GB covers the large-corpus case.
+    shm_size: "16gb"
+    # MVT training opens many file handles concurrently across views; Docker's
+    # default 1024 FD limit triggers "Too many open files" in DataLoader workers.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - /home/sam/data-disk/Parra-Data:/user-data/Parra-Data/Disk
+      - /home/sam/synology/Parra-Lab-Data:/user-data/Parra-Data/Cloud
+      - /home/sam/data-mount-dir:/user-data/Martin-Data/USB
+      - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src:/app
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - USER_DATA_DIR=/user-data
+      # Pin CUDA enumeration to host PCI order so device_ids matches the
+      # host's nvidia-smi index numbering. With only one device exposed
+      # below, cuda:0 inside the container == that device unconditionally.
+      - CUDA_DEVICE_ORDER=PCI_BUS_ID
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # Pin to host PCI 1 = RTX PRO 6000 Blackwell (96 GB VRAM). LP MVT
+            # with patch masking + 3D reprojection loss at our batch_size=64
+            # OOMs on the 5090's 32 GB; the PRO 6000 handles it cleanly.
+            # Restricting to a single device also stops the FD-leak that
+            # pinned the *other* GPU to P0.
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    restart: on-failure
+
 volumes:
   redis-data:
+
+networks:
+  llm-net:
+    external: true

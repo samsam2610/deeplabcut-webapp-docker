@@ -105,6 +105,9 @@ def fake_redis():
         def __init__(self):
             self._store: dict = {}
             self._hstore: dict = {}
+            self._zsets: dict = {}   # sorted-set name → list[member]
+            self._sets: dict  = {}   # plain set name → set
+            self._lists: dict = {}   # list (queue) name → list
 
         def get(self, key):
             return self._store.get(key)
@@ -116,11 +119,13 @@ def fake_redis():
             for k in keys:
                 self._store.pop(k, None)
                 self._hstore.pop(k, None)
+                self._zsets.pop(k, None)
+                self._sets.pop(k, None)
+                self._lists.pop(k, None)
 
         def hset(self, name, key=None, value=None, mapping=None, **kwargs):
             if name not in self._hstore:
                 self._hstore[name] = {}
-            # Support hset(name, key, value) positional form
             if key is not None:
                 self._hstore[name][key] = value
             if mapping:
@@ -133,29 +138,105 @@ def fake_redis():
         def hget(self, name, key):
             return self._hstore.get(name, {}).get(key)
 
+        def exists(self, *keys):
+            count = 0
+            for k in keys:
+                if (k in self._store or k in self._hstore or k in self._zsets
+                        or k in self._sets or k in self._lists):
+                    count += 1
+            return count
+
         def expire(self, key, seconds):
             pass
 
-        def zadd(self, name, mapping):
-            pass
+        # ── sorted sets ───────────────────────────────────────────────
+        def zadd(self, name, mapping, **kwargs):
+            if name not in self._zsets:
+                self._zsets[name] = []
+            for member in mapping:
+                if member not in self._zsets[name]:
+                    self._zsets[name].append(member)
 
         def zrange(self, name, start, stop, withscores=False, rev=False):
-            return []
+            members = self._zsets.get(name, [])
+            if rev:
+                members = list(reversed(members))
+            if stop == -1:
+                return list(members[start:])
+            return list(members[start:stop + 1])
 
         def zrevrange(self, name, start, stop, withscores=False):
-            return []
-
-        def zadd(self, name, mapping, **kwargs):
-            pass
+            return self.zrange(name, start, stop, rev=True)
 
         def zrem(self, name, *members):
-            pass
+            if name in self._zsets:
+                for m in members:
+                    try:
+                        self._zsets[name].remove(m)
+                    except ValueError:
+                        pass
 
+        # ── plain sets ────────────────────────────────────────────────
+        def sadd(self, name, *values):
+            if name not in self._sets:
+                self._sets[name] = set()
+            self._sets[name].update(values)
+
+        def spop(self, name):
+            s = self._sets.get(name)
+            if not s:
+                return None
+            return s.pop()
+
+        def smembers(self, name):
+            return set(self._sets.get(name, set()))
+
+        # ── lists (broker queues) ─────────────────────────────────────
+        def llen(self, name):
+            return len(self._lists.get(name, []))
+
+        def rpush(self, name, *values):
+            if name not in self._lists:
+                self._lists[name] = []
+            self._lists[name].extend(values)
+
+        def lpop(self, name):
+            lst = self._lists.get(name, [])
+            return lst.pop(0) if lst else None
+
+        def lrange(self, name, start, end):
+            """Mirror Redis LRANGE semantics: end is INCLUSIVE; -1 means last."""
+            lst = self._lists.get(name, [])
+            n = len(lst)
+            if not lst:
+                return []
+            # Normalise negative indices
+            s = start if start >= 0 else max(0, n + start)
+            e = end if end >= 0 else n + end
+            # Redis end is inclusive; clamp e to n-1
+            e = min(e, n - 1)
+            if s > e:
+                return []
+            return list(lst[s:e + 1])
+
+        # ─────────────────────────────────────────────────────────────
         def setex(self, key, seconds, value):
             self._store[key] = value
 
         def scan_iter(self, pattern):
-            return iter([])
+            import fnmatch
+            all_keys = (
+                list(self._store.keys())
+                + list(self._hstore.keys())
+                + list(self._zsets.keys())
+                + list(self._sets.keys())
+                + list(self._lists.keys())
+            )
+            seen = set()
+            for k in all_keys:
+                if k not in seen and fnmatch.fnmatch(k, pattern):
+                    seen.add(k)
+                    yield k
 
         def from_url(self, url, decode_responses=True):
             return self

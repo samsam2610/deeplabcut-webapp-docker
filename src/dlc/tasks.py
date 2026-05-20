@@ -14,6 +14,7 @@ from pathlib import Path
 import deeplabcut as dlc
 
 from celery_app import celery  # shared Celery instance
+from dlc._log_stream import stream_log_lines_to_redis as _stream_log_lines_to_redis
 
 
 def _sanitize_dlc_config_yaml(config_path: str | Path) -> None:
@@ -93,6 +94,61 @@ def _sanitize_dlc_config_yaml(config_path: str | Path) -> None:
 
     if changed:
         cfg_path.write_text("".join(out), encoding="utf-8")
+
+
+def _sanitize_pytorch_config_yaml(path: str | Path) -> bool:
+    """Fix DLC PyTorch backend's duplicate `snapshots:` key in pytorch_config.yaml.
+
+    Observed bug: DLC's PyTorch config writer emits BOTH an empty `snapshots:`
+    line and a populated `snapshots:` block consecutively under `runner:`,
+    e.g.
+
+        runner:
+          ...
+          snapshots:                       <- empty (None)
+          snapshots:                       <- populated
+            max_snapshots: 5
+            save_epochs: 25
+            save_optimizer_state: false
+
+    PyYAML's safe_load silently keeps the LAST value for duplicate keys, so
+    most callers don't notice. But DLC reads pytorch_config.yaml back with
+    ruamel.yaml in strict mode, which raises DuplicateKeyError — training
+    fails before it can load the model.
+
+    Backs up the original to <path>.bak.dup-snapshots on first repair, then
+    rewrites with the empty placeholder removed. Idempotent; returns True
+    iff a change was made.
+    """
+    p = Path(path)
+    if not p.is_file():
+        return False
+    text = p.read_text(encoding="utf-8")
+    # Empty `snapshots:` line followed (at SAME indent) by a populated
+    # `snapshots:` block. We only delete the empty one.
+    pat = re.compile(
+        r'^(\s+)snapshots:[ \t]*\n(\1snapshots:[ \t]*\n(?:\1[ \t]+[^\n]+\n)+)',
+        re.MULTILINE,
+    )
+    new_text, n = pat.subn(r'\2', text)
+    if n == 0:
+        return False
+    bak = Path(str(p) + ".bak.dup-snapshots")
+    if not bak.exists():
+        bak.write_text(text, encoding="utf-8")
+    p.write_text(new_text, encoding="utf-8")
+    return True
+
+
+def _sanitize_all_pytorch_configs(project_path: str | Path) -> int:
+    """Run _sanitize_pytorch_config_yaml on every pytorch_config.yaml under
+    the project's dlc-models-pytorch tree. Cheap (a handful of files) and
+    idempotent. Returns the number of files repaired."""
+    n = 0
+    for p in Path(project_path).glob("dlc-models-pytorch/**/pytorch_config.yaml"):
+        if _sanitize_pytorch_config_yaml(p):
+            n += 1
+    return n
 
 
 # ── DLC Create Training Dataset ───────────────────────────────────
@@ -317,6 +373,31 @@ def dlc_convert_labels_to_h5(self, config_path: str, scorer: str = None):
 _TRAIN_PID_PREFIX = "dlc_train_pid:"
 
 
+def _wait_gpu_memory_free(gpu_id: str = "0", timeout: int = 20) -> None:
+    """
+    Poll nvidia-smi until no compute processes remain on the given GPU,
+    or until `timeout` seconds elapse.  Called after killing a DLC subprocess
+    so the CUDA driver has time to reclaim VRAM before the next task starts.
+    A fixed sleep is unreliable — large models (>20 GB) can take >5 s to drain.
+    """
+    import time as _t
+    deadline = _t.monotonic() + timeout
+    while _t.monotonic() < deadline:
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-compute-apps=pid,used_memory",
+                 "--format=csv,noheader",
+                 f"--id={gpu_id}"],
+                text=True, timeout=3,
+            ).strip()
+            if not out:          # no processes holding memory → done
+                return
+        except Exception:
+            break                # nvidia-smi unavailable; fall through to sleep
+        _t.sleep(1)
+    _t.sleep(2)                  # final buffer after the loop
+
+
 def _cuda_cleanup_with_timeout(timeout: int = 10) -> None:
     """
     Release GPU resources in a daemon thread so that a hung cuda.synchronize()
@@ -381,9 +462,23 @@ def _dlc_train_subprocess(config_path: str, kwargs: dict, log_path: str) -> None
             # a stuck cuda.synchronize() cannot prevent the process from exiting
             # (parent will escalate to SIGKILL after ~10 s regardless).
             _cuda_cleanup_with_timeout(timeout=10)
+            # Restore stdio BEFORE the `with open` block closes _f.
+            # billiard's spawn cleanup writes a final exit message to
+            # sys.stderr after the target returns; if sys.stderr still
+            # points at the closed log file, ValueError raises and the
+            # subprocess exits with code 1 — the parent then treats a
+            # successful run as failure (proc.exitcode != 0).
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
 
 
-@celery.task(bind=True, name="tasks.dlc_train_network", acks_late=False)
+@celery.task(
+    bind=True,
+    name="tasks.dlc_train_network",
+    acks_late=False,
+    time_limit=43200,        # 12 h hard kill — covers worst-case large-dataset runs
+    soft_time_limit=39600,   # 11 h soft warning — defense in depth
+)
 def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: dict = None):
     """
     Run deeplabcut.train_network() in a child process so it can be killed
@@ -393,7 +488,7 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
     acks_late=False overrides the global setting so that killing the worker
     does NOT re-queue the task on restart.
     """
-    import multiprocessing as _mp
+    import billiard as _mp  # billiard, not stdlib mp: avoids AuthenticationString pickle error inside Celery prefork child
     import threading as _threading
     import tempfile
     import signal as _signal
@@ -467,6 +562,23 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
                 "Please run 'Create Training Dataset' before training the network."
             )
 
+        # Repair DLC PyTorch backend's duplicate `snapshots:` key in
+        # pytorch_config.yaml before DLC reads it back with ruamel.yaml
+        # (which raises DuplicateKeyError on the duplicate). Cheap pass over
+        # all pytorch_config.yaml files in the project; idempotent.
+        if engine == "pytorch":
+            try:
+                _n_repaired = _sanitize_all_pytorch_configs(_project_dir)
+                if _n_repaired:
+                    self.update_state(
+                        state="PROGRESS",
+                        meta={"progress": 8,
+                              "stage": f"Repaired {_n_repaired} pytorch_config.yaml file(s)",
+                              "log": ""},
+                    )
+            except Exception:
+                pass  # never let a sanitizer crash block training
+
         kwargs = {k: v for k, v in params.items() if v is not None}
 
         # PyTorch DLC uses `device` ("cuda:N") not `gputouse` (TF legacy).
@@ -505,7 +617,7 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         _stop_emit  = _threading.Event()
         _user_killed = [False]   # mutable so the closure can set it
 
-        _log_stream_cursor = [0]   # mutable so the closure can advance it
+        _log_byte_cursor = [0]   # byte offset into log_path; closure advances it
 
         def _emit_loop():
             import signal as _sig
@@ -541,19 +653,13 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
                     break  # proc.join() will unblock shortly
 
                 try:
+                    _stream_log_lines_to_redis(
+                        _redis, log_path, log_list_key, _log_byte_cursor,
+                        job_key=job_key,
+                    )
+
                     with open(log_path) as _lf:
                         _log = _lf.read()[-8000:]
-
-                    # ── Stream new log lines to Redis list (SSE feed) ─────
-                    # Read the full file, split into lines, push only the
-                    # portion after the last-seen cursor so consumers get
-                    # incremental, non-duplicated output.
-                    all_lines = _log.splitlines()
-                    new_lines = all_lines[_log_stream_cursor[0]:]
-                    if new_lines:
-                        _redis.rpush(log_list_key, *new_lines)
-                        _redis.expire(log_list_key, 7200)
-                        _log_stream_cursor[0] = len(all_lines)
 
                     self.update_state(
                         state="PROGRESS",
@@ -598,10 +704,10 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         except (ProcessLookupError, OSError):
             pass  # process group already gone — that's fine
 
-        # Give the CUDA driver time to fully reclaim GPU resources after the
-        # process group has been torn down.  1 s is often insufficient; 3 s
-        # avoids the GPU appearing stuck when the next task starts.
-        time.sleep(3)
+        # Wait until nvidia-smi reports no processes on the GPU (20 s max).
+        # A fixed sleep is unreliable for large models — VRAM can take >5 s
+        # to drain after SIGKILL.
+        _wait_gpu_memory_free(_gpu_id, timeout=20)
 
         _stop_emit.set()
         _emitter.join(timeout=5)
@@ -638,6 +744,29 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
         }
 
     except Exception:
+        # Kill the training subprocess immediately so it doesn't keep
+        # holding the GPU after the parent task is interrupted (e.g. by
+        # Celery's SoftTimeLimitExceeded or any other unhandled exception).
+        # Mirrors the user-stop sequence from _emit_loop: SIGTERM, brief
+        # wait for clean CUDA shutdown, then SIGKILL if still alive.
+        try:
+            import signal as _sig
+            if proc.is_alive():
+                try:
+                    os.killpg(proc.pid, _sig.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    pass
+                for _ in range(24):
+                    if not proc.is_alive():
+                        break
+                    time.sleep(0.5)
+                if proc.is_alive():
+                    try:
+                        os.killpg(proc.pid, _sig.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        pass
+        except Exception:
+            pass
         # Purge all Redis state so no stale "running" record remains
         _redis.delete(pid_key, stop_key)
         _redis.zrem("dlc_train_jobs", task_id)
@@ -657,45 +786,6 @@ def dlc_train_network(self, config_path: str, engine: str = "pytorch", params: d
             os.unlink(log_path)
         except OSError:
             pass
-
-        # ── Shut down this worker when there is nothing left to do ───────────
-        # After a short delay (lets any prefetched task register itself in Redis
-        # before we decide to exit), check whether this worker's broker queues
-        # are empty and no other job is marked "running".  If so, send SIGTERM
-        # to the Celery worker process for a graceful warm shutdown.
-        #
-        # docker-compose uses `restart: on-failure`, so the container is only
-        # restarted after a crash (non-zero exit), not after a clean shutdown.
-        # This means the worker stays off until explicitly started again.
-        #
-        # acks_late=False on this task ensures the broker message is already
-        # acknowledged before we reach here, so SIGTERM cannot cause the
-        # current job to be re-queued.
-        _worker_queues = ("tensorflow",) if engine == "tensorflow" else ("celery", "pytorch")
-        _train_task_id = task_id   # capture for closure
-
-        def _shutdown_if_idle():
-            import time as _t_
-            _t_.sleep(5)
-            try:
-                pending = sum(_redis.llen(q) for q in _worker_queues)
-                # Check whether any *other* job is still running on this worker
-                other_running = 0
-                for _jid in _redis.zrevrange("dlc_train_jobs", 0, 99):
-                    if _jid != _train_task_id:
-                        _j = _redis.hgetall("dlc_train_job:" + _jid)
-                        if _j.get("status") == "running":
-                            other_running += 1
-                for _jid in _redis.zrevrange("dlc_analyze_jobs", 0, 99):
-                    _j = _redis.hgetall("dlc_analyze_job:" + _jid)
-                    if _j.get("status") == "running":
-                        other_running += 1
-                if pending == 0 and other_running == 0:
-                    os.kill(os.getpid(), _signal.SIGTERM)
-            except Exception:
-                pass  # never let a shutdown-check error surface
-
-        _threading.Thread(target=_shutdown_if_idle, daemon=True).start()
 
 
 # ── GPU stats probe ───────────────────────────────────────────────
@@ -1011,6 +1101,14 @@ def _dlc_analyze_subprocess(config_path: str, target_path: str, params: dict, lo
             # reclaims the CUDA context immediately rather than lazily.
             # Wrapped in a timed thread so a stuck synchronize() can't hang.
             _cuda_cleanup_with_timeout(timeout=10)
+            # Restore stdio BEFORE the `with open` block closes _f.
+            # billiard's spawn cleanup writes a final exit message to
+            # sys.stderr after the target returns; if sys.stderr still
+            # points at the closed log file, ValueError raises and the
+            # subprocess exits with code 1 — the parent then treats a
+            # successful run as failure (proc.exitcode != 0).
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
 
 
 @celery.task(bind=True, name="tasks.dlc_analyze", acks_late=False)
@@ -1020,7 +1118,7 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
     process so it can be killed cleanly without taking down the Celery worker.
     params keys: shuffle, trainingsetindex, gputouse, save_as_csv, create_labeled, snapshot_index
     """
-    import multiprocessing as _mp
+    import billiard as _mp  # billiard, not stdlib mp: avoids AuthenticationString pickle error inside Celery prefork child
     import threading as _threading
     import tempfile
     import signal as _signal
@@ -1081,6 +1179,14 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
         if not os.path.exists(target_path):
             raise FileNotFoundError(f"Target not found: {target_path}")
 
+        # Repair DLC PyTorch backend's duplicate `snapshots:` key in
+        # pytorch_config.yaml — analyze_videos reads it back with ruamel.yaml
+        # and would otherwise fail with DuplicateKeyError.
+        try:
+            _sanitize_all_pytorch_configs(Path(config_path).parent)
+        except Exception:
+            pass
+
         init_log = (
             f"config_path  : {config_path}\n"
             f"target_path  : {target_path}\n"
@@ -1111,7 +1217,7 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
             r'(\d+)%\|[^|]*\|\s*(\d+)/(\d+)\s*\[([^\]<]+)<([^\],\]]+)'
         )
 
-        _log_stream_cursor = [0]   # mutable so the closure can advance it
+        _log_byte_cursor = [0]   # byte offset into log_path; closure advances it
 
         def _emit_loop():
             import signal as _sig
@@ -1138,16 +1244,13 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
                     break
 
                 try:
+                    _stream_log_lines_to_redis(
+                        _redis, log_path, log_list_key, _log_byte_cursor,
+                        job_key=job_key,
+                    )
+
                     with open(log_path) as _lf:
                         _log = _lf.read()[-8000:]
-
-                    # ── Stream new log lines to Redis list (SSE feed) ─────
-                    all_lines = _log.splitlines()
-                    new_lines = all_lines[_log_stream_cursor[0]:]
-                    if new_lines:
-                        _redis.rpush(log_list_key, *new_lines)
-                        _redis.expire(log_list_key, 7200)
-                        _log_stream_cursor[0] = len(all_lines)
 
                     # Parse tqdm progress from log
                     _tqdm_pct   = None
@@ -1191,7 +1294,7 @@ def dlc_analyze(self, config_path: str, target_path: str, params: dict = None):
         except (ProcessLookupError, OSError):
             pass  # process group already gone — that's fine
 
-        time.sleep(3)
+        _wait_gpu_memory_free(_gpu_id, timeout=20)
 
         _stop_emit.set()
         _emitter.join(timeout=5)
@@ -1328,12 +1431,21 @@ def _dlc_clv_subprocess(config_path: str, video_path: str, params: dict, log_pat
             import traceback as _tb
             _f.write("\n__CLV_ERROR__\n")
             _f.write(_tb.format_exc())
+        finally:
+            # Restore stdio BEFORE the `with open` block closes _f.
+            # billiard's spawn cleanup writes a final exit message to
+            # sys.stderr after the target returns; if sys.stderr still
+            # points at the closed log file, ValueError raises and the
+            # subprocess exits with code 1 — the parent then treats a
+            # successful run as failure (proc.exitcode != 0).
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
 
 
 @celery.task(bind=True, name="tasks.dlc_create_labeled_video", acks_late=False)
 def dlc_create_labeled_video(self, config_path: str, video_path: str, params: dict = None):
     """Run deeplabcut.create_labeled_video on an already-analyzed video."""
-    import multiprocessing as _mp
+    import billiard as _mp  # billiard, not stdlib mp: avoids AuthenticationString pickle error inside Celery prefork child
     import tempfile
 
     if params is None:
@@ -1758,6 +1870,35 @@ def _dlc_machine_label_subprocess(
                     except Exception:
                         pass
 
+            # Write a plain CSV of ALL raw predictions (before threshold filter)
+            # so the Flask container can re-apply likelihood thresholds without HDF5.
+            raw_pred_csv = frame_dir / "_machine_predictions_raw.csv"
+            try:
+                _raw_rows = [["frame", "bodypart", "x", "y", "likelihood"]]
+                for _idx, _row in df.iterrows():
+                    _img = _Path(str(_idx[-1] if isinstance(_idx, tuple) else _idx)).name
+                    for _bp in bodyparts:
+                        _cols = bp_col_map.get(_bp)
+                        if _cols is None:
+                            continue
+                        _xc, _yc, _lkc = _cols
+                        try:
+                            _x  = float(_row[_xc])
+                            _y  = float(_row[_yc])
+                            _lk = float(_row[_lkc]) if _lkc is not None else 1.0
+                            if not (_pd.isna(_x) or _pd.isna(_y)):
+                                _raw_rows.append([_img, _bp,
+                                                  round(_x, 4), round(_y, 4),
+                                                  round(_lk, 4)])
+                        except Exception:
+                            pass
+                with open(str(raw_pred_csv), "w", newline="") as _rpc:
+                    _csv.writer(_rpc).writerows(_raw_rows)
+                _f.write(f"Written raw pred CSV: {raw_pred_csv.name} "
+                         f"({len(_raw_rows) - 1} predictions)\n")
+            except Exception as _rpce:
+                _f.write(f"Warning: could not write raw pred CSV ({_rpce})\n")
+
             # Write metadata for debugging / information only.
             # Protection is now purely per-bodypart: non-NaN CSV value = approved.
             import json as _json_mod
@@ -1799,6 +1940,14 @@ def _dlc_machine_label_subprocess(
             _f.write(_tb.format_exc())
         finally:
             _cuda_cleanup_with_timeout(timeout=10)
+            # Restore stdio BEFORE the `with open` block closes _f.
+            # billiard's spawn cleanup writes a final exit message to
+            # sys.stderr after the target returns; if sys.stderr still
+            # points at the closed log file, ValueError raises and the
+            # subprocess exits with code 1 — the parent then treats a
+            # successful run as failure (proc.exitcode != 0).
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
 
 
 @celery.task(bind=True, name="tasks.dlc_machine_label_frames", acks_late=False)
@@ -1810,7 +1959,7 @@ def dlc_machine_label_frames(
     as CollectedData_<scorer>.csv for manual review and correction.
     params keys: shuffle, trainingsetindex, gputouse, save_as_csv, snapshot_index
     """
-    import multiprocessing as _mp
+    import billiard as _mp  # billiard, not stdlib mp: avoids AuthenticationString pickle error inside Celery prefork child
     import threading as _threading
     import tempfile
     import redis as _redis_mod
@@ -1843,6 +1992,14 @@ def dlc_machine_label_frames(
             raise FileNotFoundError(f"DLC config.yaml not found: {config_path}")
         if not os.path.isdir(labeled_data_path):
             raise FileNotFoundError(f"Frames folder not found: {labeled_data_path}")
+
+        # Repair DLC PyTorch backend's duplicate `snapshots:` key in
+        # pytorch_config.yaml — DLC reads it back with ruamel.yaml during
+        # ML inference and would otherwise fail with DuplicateKeyError.
+        try:
+            _sanitize_all_pytorch_configs(Path(config_path).parent)
+        except Exception:
+            pass
 
         init_log = (
             f"config_path:       {config_path}\n"
@@ -1917,7 +2074,7 @@ def dlc_machine_label_frames(
             os.killpg(_pgid, _sig.SIGKILL)
         except (ProcessLookupError, OSError):
             pass
-        time.sleep(3)
+        _wait_gpu_memory_free("0", timeout=20)
 
         _stop_emit.set()
         _emitter.join(timeout=5)
@@ -2302,3 +2459,219 @@ def dlc_tapnet_propagate(
             os.unlink(log_path)
         except OSError:
             pass
+
+
+# ── Jitter Prelabel ───────────────────────────────────────────────────────────
+
+@celery.task(bind=True, name="tasks.dlc_jitter_prelabel", acks_late=False)
+def dlc_jitter_prelabel(
+    self,
+    config_path: str,
+    stem_path: str,
+    video_path: str,
+    px_threshold: float = 10.0,
+    min_jittery_parts: int = 3,
+    max_frames: int = 200,
+    webapp_public_url: str = "",
+):
+    import yaml as _yaml_mod
+    from dlc.jitter_prelabel import detect_jitter_frames, upsert_frames
+
+    def _progress(pct, stage):
+        self.update_state(state="PROGRESS", meta={"progress": pct, "stage": stage})
+
+    _progress(5, "Loading config…")
+
+    config_path = Path(config_path)
+    stem_dir    = Path(stem_path)
+    video_path  = Path(video_path)
+
+    if not config_path.is_file():
+        raise FileNotFoundError(f"config.yaml not found: {config_path}")
+    if not stem_dir.is_dir():
+        raise FileNotFoundError(f"Stem directory not found: {stem_dir}")
+    if not video_path.is_file():
+        raise FileNotFoundError(f"Video not found: {video_path}")
+
+    h5_path = stem_dir / "_machine_predictions_raw.h5"
+    if not h5_path.is_file():
+        raise FileNotFoundError(
+            f"_machine_predictions_raw.h5 not found in {stem_dir}. "
+            "Run 'Machine Label Frames' first."
+        )
+
+    with open(str(config_path)) as _f:
+        cfg = _yaml_mod.safe_load(_f)
+    scorer    = cfg.get("scorer", "")
+    bodyparts = cfg.get("bodyparts", [])
+    if not scorer:
+        raise ValueError("scorer not found in config.yaml")
+    if not bodyparts:
+        raise ValueError("bodyparts not found in config.yaml")
+
+    _progress(20, "Detecting jitter frames…")
+
+    jitter_frames = detect_jitter_frames(
+        h5_path,
+        px_threshold=px_threshold,
+        min_jittery_parts=min_jittery_parts,
+        max_frames=max_frames,
+    )
+
+    flagged = len(jitter_frames)
+    _progress(50, f"Found {flagged} jitter frames. Extracting…")
+
+    result = upsert_frames(
+        stem_dir=stem_dir,
+        video_path=video_path,
+        jitter_frames=jitter_frames,
+        scorer=scorer,
+        bodyparts=bodyparts,
+    )
+
+    _progress(95, "Writing labels…")
+
+    stem_name = stem_dir.name
+    link = ""
+    if webapp_public_url:
+        app_token = os.environ.get("APP_TOKEN", "")
+        link = f"{webapp_public_url}/vlm/refiner?token={app_token}&stem={stem_name}"
+
+    return {
+        "flagged_frames": flagged,
+        "added":          result["added"],
+        "updated":        result["updated"],
+        "stem":           stem_name,
+        "webapp_link":    link,
+    }
+
+
+# ── Post-process run (DLC filterpredictions / refineDLC pipeline) ─────────────
+
+@celery.task(bind=True, name="tasks.dlc_postprocess_run", acks_late=False)
+def dlc_postprocess_run(
+    self,
+    *,
+    config_path: str,
+    tool: str,
+    action: str,
+    params: dict,
+    inputs: list,
+):
+    """Run a post-process action on a list of analyzed .h5/.csv files.
+
+    `tool` ∈ {"deeplabcut", "refineDLC"}.
+    `action`:
+        - tool=deeplabcut: "filterpredictions"
+        - tool=refineDLC : "pipeline" | "likelihood_filter" | "outlier_removal"
+                           | "interpolation" | "smoothing"
+
+    Each input gets its own per-run subfolder under <input.parent>/postproc/.
+    Source files are never modified.
+    """
+    from pathlib import Path
+
+    from dlc import postprocess as pp
+    from dlc import postprocess_dlc as ppd
+    from dlc import postprocess_refine as ppr
+
+    tool_tag = {
+        ("deeplabcut", "filterpredictions"): "filterpredictions",
+        ("refineDLC", "pipeline"):           "refine_pipeline",
+        ("refineDLC", "likelihood_filter"):  "refine_lh",
+        ("refineDLC", "outlier_removal"):    "refine_outliers",
+        ("refineDLC", "interpolation"):      "refine_interp",
+        ("refineDLC", "smoothing"):          "refine_smooth",
+    }.get((tool, action))
+    if tool_tag is None:
+        raise ValueError(f"unsupported tool/action: {tool}/{action}")
+
+    started = _utc_now_iso()
+    total = len(inputs)
+    per_input_results: list = []
+    overall_status = "success"
+    run_dirs: set = set()
+
+    # Group inputs by parent dir so every file in the same dir lands in ONE
+    # postproc/<timestamp>_<tag>/ subfolder. Without this, sequential
+    # make_run_subfolder calls within the same wall-clock second collide on
+    # the timestamp and every file after the first FileExistsError-fails.
+    parent_run_dirs: dict[Path, Path] = {}
+
+    for idx, raw in enumerate(inputs, start=1):
+        src = Path(raw)
+        self.update_state(state="PROGRESS", meta={
+            "current": idx, "total": total, "file": src.name, "step": action,
+        })
+
+        try:
+            if src.parent not in parent_run_dirs:
+                parent_run_dirs[src.parent] = pp.make_run_subfolder(
+                    src.parent, tool_tag,
+                )
+            run_dir = parent_run_dirs[src.parent]
+            run_dirs.add(run_dir)
+
+            if tool == "deeplabcut":
+                step_result = ppd.run_filterpredictions(
+                    config_path=config_path,
+                    input_path=src,
+                    output_dir=run_dir,
+                    params=dict(params),
+                )
+                output = step_result.get("output")
+                err = step_result.get("error")
+                file_status = step_result["status"]
+            else:  # refineDLC
+                df = ppr.read_predictions(src)
+                if action == "pipeline":
+                    out_df = ppr.run_pipeline(df, params)
+                else:
+                    out_df = ppr.run_single(df, action, params)
+                output = run_dir / (src.stem + "_refined" + src.suffix)
+                ppr.write_predictions(out_df, output)
+                err = None
+                file_status = "success"
+
+            per_input_results.append({
+                "path": str(src), "output": str(output) if output else None,
+                "status": file_status, "error": err,
+            })
+            if file_status != "success":
+                overall_status = "partial"
+
+        except Exception as exc:  # noqa: BLE001
+            overall_status = "partial"
+            per_input_results.append({
+                "path": str(src), "output": None,
+                "status": "failed", "error": f"{type(exc).__name__}: {exc}",
+            })
+
+    if overall_status == "partial" and not any(
+        r["status"] == "success" for r in per_input_results
+    ):
+        overall_status = "failed"
+
+    finished = _utc_now_iso()
+    payload = {
+        "run_id": (sorted(run_dirs)[0].name if run_dirs else f"{tool_tag}-empty"),
+        "started_at": started,
+        "finished_at": finished,
+        "status": overall_status,
+        "tool": tool,
+        "action": action,
+        "params": params,
+        "inputs": per_input_results,
+    }
+    for d in run_dirs:
+        pp.write_sidecar(d, payload)
+
+    self.update_state(state="SUCCESS", meta={
+        "current": total, "total": total, "stage": "Done", "log": "",
+    })
+    return payload
+
+
+def _utc_now_iso():
+    import datetime as _dt
+    return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"

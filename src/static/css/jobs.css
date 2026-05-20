@@ -1,0 +1,162 @@
+/* /jobs — list rail + detail pane + terminal log viewer */
+
+.jobs-page {
+  padding: 1.2rem 1.4rem;
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+  height: calc(100vh - 5rem);
+  display: flex;
+  flex-direction: column;
+}
+
+.jobs-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+}
+
+.jobs-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.jobs-status-pill {
+  font-size: .72rem;
+  color: var(--text-dim);
+  padding: .15rem .55rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.jobs-status-pill.live  { color: #3fb950; border-color: #3fb950; }
+.jobs-status-pill.paused { color: #d29922; border-color: #d29922; }
+.jobs-status-pill.closed { color: var(--text-dim); }
+.jobs-status-pill.error  { color: #f85149; border-color: #f85149; }
+
+.jobs-layout {
+  display: flex;
+  gap: 1rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.jobs-rail {
+  width: 18rem;
+  flex-shrink: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow-y: auto;
+}
+
+.jobs-row {
+  padding: .55rem .75rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+  transition: background .12s;
+}
+.jobs-row:hover    { background: var(--surface-2); }
+.jobs-row.selected { background: var(--surface-2); border-left: 2px solid var(--accent); padding-left: calc(.75rem - 2px); }
+
+.jobs-row-top {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  font-family: var(--mono);
+  font-size: .76rem;
+}
+.jobs-row-id        { color: var(--text); }
+.jobs-row-op        { color: var(--text-dim); }
+.jobs-row-status    { margin-left: auto; font-size: .8rem; }
+
+.jobs-row-meta {
+  font-size: .68rem;
+  color: var(--text-dim);
+  display: flex;
+  gap: .55rem;
+  flex-wrap: wrap;
+}
+
+.jobs-empty {
+  padding: 1rem .9rem;
+  font-size: .78rem;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.jobs-detail {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: .9rem 1rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.jobs-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: .8rem;
+  flex-wrap: wrap;
+}
+.jobs-detail-header h3 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: .9rem;
+}
+.jobs-detail-meta {
+  font-size: .73rem;
+  color: var(--text-dim);
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.jobs-detail-meta span { white-space: nowrap; }
+
+.jobs-stop-btn {
+  margin-left: auto;
+  padding: .35rem .9rem;
+  font-size: .78rem;
+  background: #f85149;
+  color: #fff;
+  border: 1px solid #f85149;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.jobs-stop-btn:hover    { background: #da3633; }
+.jobs-stop-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.jobs-terminal {
+  flex: 1;
+  min-height: 0;
+  font-family: var(--mono);
+  font-size: .76rem;
+  background: #0d1117;
+  color: #c9d1d9;
+  padding: .65rem .8rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.jobs-reconnect-btn {
+  align-self: flex-start;
+  margin-top: .55rem;
+  padding: .3rem .8rem;
+  font-size: .78rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}

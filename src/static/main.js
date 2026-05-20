@@ -173,6 +173,43 @@
     }, 5000);
   });
 
+  // ── Hard Reset (kill all jobs) ────────────────────────────────
+  const btnHardReset = document.getElementById("btn-hard-reset");
+
+  btnHardReset.addEventListener("click", async () => {
+    const passphrase = prompt(
+      "Hard Reset will immediately kill ALL running and queued jobs and restore a clean idle state.\n\n" +
+      "This cannot be undone. Enter the passphrase to continue:"
+    );
+    if (passphrase === null) return; // user cancelled
+    btnHardReset.disabled = true;
+    try {
+      const res  = await fetch("/admin/hard-reset-jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ passphrase }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        flushCacheStatus.textContent =
+          `Hard reset: killed ${data.processes_killed} process(es), ` +
+          `cleared ${data.queued_tasks_cleared} queued + ${data.jobs_cleared} tracked job(s).`;
+        flushCacheStatus.className = "flush-cache-status ok";
+      } else {
+        flushCacheStatus.textContent = data.error || "Error";
+        flushCacheStatus.className   = "flush-cache-status err";
+      }
+    } catch {
+      flushCacheStatus.textContent = "Network error";
+      flushCacheStatus.className   = "flush-cache-status err";
+    }
+    btnHardReset.disabled = false;
+    setTimeout(() => {
+      flushCacheStatus.textContent = "";
+      flushCacheStatus.className   = "flush-cache-status";
+    }, 7000);
+  });
+
   // ── Restore session state on page load ──────────────────────
   (async () => {
     // Pre-fetch /config so _userDataDir is set before applySessionState runs.
@@ -3776,6 +3813,49 @@
         saveStatus.className   = "config-save-status";
       }, 3000);
     });
+
+    // ── Repair YAML ─────────────────────────────────────────────
+    // Fixes common config corruption (e.g. video paths broken across two
+    // lines in video_sets that make YAML scanner choke). Backs up the
+    // original on disk, applies the repair, refreshes the editor, and
+    // reports the result.
+    const repairBtn = document.getElementById("repair-dlc-config-btn");
+    if (repairBtn) {
+      repairBtn.addEventListener("click", async () => {
+        repairBtn.disabled     = true;
+        saveStatus.textContent = "Scanning…";
+        saveStatus.className   = "config-save-status";
+        try {
+          const res  = await fetch("/dlc/project/config/repair", { method: "POST" });
+          const data = await res.json();
+          if (!res.ok) {
+            saveStatus.textContent = data.error || `Repair failed (HTTP ${res.status})`;
+            saveStatus.className   = "config-save-status err";
+          } else if (data.repaired) {
+            // Write the fresh content back into the editor so the user sees the fix.
+            editor.value = data.content || editor.value;
+            const bak = data.backup_path ? ` Backup: ${data.backup_path.split("/").pop()}` : "";
+            const parseNote = data.parse_ok ? "" : ` (still doesn't parse: ${data.parse_error || "?"})`;
+            saveStatus.textContent = `Fixed ${data.n_fixes} issue${data.n_fixes !== 1 ? "s" : ""}.${bak}${parseNote}`;
+            saveStatus.className   = data.parse_ok ? "config-save-status ok" : "config-save-status err";
+          } else if (!data.parse_ok) {
+            saveStatus.textContent = `Nothing matched the known patterns; YAML still doesn't parse: ${data.parse_error || "?"}`;
+            saveStatus.className   = "config-save-status err";
+          } else {
+            saveStatus.textContent = "Nothing to fix — config already parses cleanly.";
+            saveStatus.className   = "config-save-status ok";
+          }
+        } catch (err) {
+          saveStatus.textContent = `Network error: ${err.message}`;
+          saveStatus.className   = "config-save-status err";
+        }
+        repairBtn.disabled = false;
+        setTimeout(() => {
+          saveStatus.textContent = "";
+          saveStatus.className   = "config-save-status";
+        }, 8000);
+      });
+    }
   })();
 
   // ── Create Training Dataset ──────────────────────────────────

@@ -1,0 +1,452 @@
+{% extends "base.html" %}
+
+{% block title %}VLM Label Refiner{% endblock %}
+
+{% block extra_head %}
+<style>
+/* ── VLM Refiner page ─────────────────────────────────────── */
+.vlm-layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  grid-template-rows: auto 1fr;
+  gap: 0;
+  height: calc(100vh - 56px - 40px); /* viewport − header − footer */
+  padding: 1rem;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* ── Top controls bar ─────────────────────────────────────── */
+.vlm-controls {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: .8rem;
+  flex-wrap: wrap;
+  margin-bottom: .75rem;
+}
+.vlm-controls h1 {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  margin-right: auto;
+}
+
+/* ── Left sidebar: frame list ─────────────────────────────── */
+.vlm-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: .6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .7rem;
+  overflow: hidden;
+}
+.vlm-sidebar-header {
+  font-size: .72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.vlm-stem-select-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+  flex-shrink: 0;
+}
+
+/* Likelihood filter */
+.vlm-lh-row {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  font-size: .75rem;
+  color: var(--text-dim);
+}
+.vlm-lh-row input[type=range] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.vlm-lh-val { min-width: 2.5rem; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* Frame list */
+.vlm-frame-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vlm-frame-item {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .3rem .45rem;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: .76rem;
+  color: var(--text-dim);
+  transition: background .12s, color .12s;
+  word-break: break-all;
+}
+.vlm-frame-item:hover { background: var(--surface-2); color: var(--text); }
+.vlm-frame-item.active { background: rgba(110,231,183,.12); color: var(--accent); }
+.vlm-frame-item .vlm-lh-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: .68rem;
+  padding: .1rem .3rem;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.vlm-lh-badge.low  { background: rgba(248,113,113,.15); color: var(--danger); }
+.vlm-lh-badge.mid  { background: rgba(251,191,36,.12);  color: #fbbf24; }
+.vlm-lh-badge.high { background: rgba(110,231,183,.12); color: var(--accent); }
+
+/* ── Main 3-panel area ────────────────────────────────────── */
+.vlm-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr 220px;
+  gap: .75rem;
+  overflow: hidden;
+  margin-left: .75rem;
+}
+.vlm-panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.vlm-panel-header {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .5rem .7rem;
+  border-bottom: 1px solid var(--border);
+  font-size: .75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.vlm-panel-header .panel-title { color: var(--text); }
+.vlm-panel-body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background: #0a0b0e;
+}
+.vlm-panel-footer {
+  padding: .4rem .65rem;
+  border-top: 1px solid var(--border);
+  font-size: .72rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  min-height: 1.8rem;
+}
+
+/* Images inside panels */
+.vlm-panel-body img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.vlm-panel-body canvas {
+  max-width: 100%;
+  max-height: 100%;
+  cursor: crosshair;
+  display: block;
+}
+
+/* Reference similar-frame tabs */
+.vlm-ref-tabs {
+  display: flex;
+  gap: .3rem;
+  padding: .35rem .65rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  flex-shrink: 0;
+}
+.vlm-ref-tab {
+  font-size: .7rem;
+  padding: .15rem .45rem;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  background: transparent;
+  transition: all .12s;
+}
+.vlm-ref-tab.active { background: rgba(110,231,183,.12); border-color: var(--accent-dim); color: var(--accent); }
+
+/* ── A/B/V toggle ─────────────────────────────────────────── */
+.vlm-toggle-group {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.vlm-toggle-btn {
+  padding: .25rem .65rem;
+  font-size: .8rem;
+  font-weight: 700;
+  letter-spacing: .03em;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.vlm-toggle-btn + .vlm-toggle-btn { border-left: 1px solid var(--border); }
+.vlm-toggle-btn.active { background: rgba(110,231,183,.15); color: var(--accent); }
+.vlm-toggle-btn[data-mode=H].active { background: rgba(99,102,241,.15); color: #818cf8; }
+.vlm-toggle-btn[data-mode=V].active { background: rgba(251,191,36,.12);  color: #fbbf24; }
+
+/* Coord label list inside right panel */
+.vlm-coord-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: .7rem;
+  font-family: var(--mono);
+  color: var(--text-dim);
+  overflow-y: auto;
+  padding: .4rem .6rem;
+}
+.vlm-coord-row {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  gap: .3rem;
+  align-items: baseline;
+}
+.vlm-coord-name { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vlm-coord-val  { color: var(--text-dim); }
+.vlm-coord-val.has-val { color: var(--accent); }
+.vlm-coord-delta { font-size: .65rem; white-space: nowrap; }
+
+/* Crop canvas in panel 3 */
+#vlm-crop-canvas {
+  image-rendering: pixelated;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* Status / toast */
+.vlm-status {
+  font-size: .78rem;
+  color: var(--text-dim);
+  min-height: 1.4rem;
+  transition: color .2s;
+}
+.vlm-status.ok  { color: var(--accent); }
+.vlm-status.err { color: var(--danger); }
+
+/* Scrollbar */
+.vlm-frame-list::-webkit-scrollbar { width: 5px; }
+.vlm-frame-list::-webkit-scrollbar-track { background: transparent; }
+.vlm-frame-list::-webkit-scrollbar-thumb { background: var(--border-lit); border-radius: 3px; }
+
+/* No-project overlay */
+#vlm-no-project {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: .8rem;
+  background: rgba(12,13,16,.85);
+  backdrop-filter: blur(4px);
+  font-size: .88rem;
+  color: var(--text-dim);
+  z-index: 20;
+}
+
+/* Spinner */
+.vlm-spinner {
+  width: 20px; height: 20px;
+  border: 2px solid var(--border-lit);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.btn-vlm-primary {
+  background: rgba(110,231,183,.1);
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+}
+.btn-vlm-primary:hover { background: rgba(110,231,183,.18); }
+.btn-vlm-primary:disabled { opacity: .45; cursor: default; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="vlm-layout">
+
+  <!-- ── Top controls ──────────────────────────────────────── -->
+  <div class="vlm-controls">
+    <h1>VLM Label Refiner</h1>
+
+    <!-- Index status -->
+    <span id="vlm-index-badge"
+          style="font-size:.75rem;padding:.2rem .65rem;border-radius:4px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-dim);display:inline-flex;align-items:center;gap:.35rem;white-space:nowrap;cursor:default"
+          title="Index persists on disk — no need to rebuild unless labeled data changes">
+      <span style="color:var(--text-dim)">○</span> Index: checking…
+    </span>
+
+    <!-- Build / Rebuild index -->
+    <button class="btn-sm btn-vlm-primary" id="btn-build-index" title="Build the visual similarity index for this project">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+      Build Index
+    </button>
+    <label style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--text-dim);cursor:pointer">
+      <input type="checkbox" id="chk-use-ollama" style="accent-color:var(--accent)">
+      + VLM descriptions
+    </label>
+
+    <!-- Mode toggle -->
+    <div class="vlm-toggle-group" title="M = Machine labels · V = VLM-suggested · H = Human override">
+      <button class="vlm-toggle-btn active" data-mode="M">M</button>
+      <button class="vlm-toggle-btn" data-mode="V">V</button>
+      <button class="vlm-toggle-btn" data-mode="H">H</button>
+    </div>
+
+    <!-- Commit to H5 -->
+    <button class="btn-sm" id="btn-commit-h5" title="Save current [H] human labels to CollectedData CSV, then convert to H5" style="border-color:rgba(99,102,241,.4);color:#818cf8">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg>
+      Commit to H5
+    </button>
+
+    <span id="vlm-global-status" class="vlm-status"></span>
+  </div>
+
+  <!-- ── Left sidebar ──────────────────────────────────────── -->
+  <div class="vlm-sidebar">
+    <div class="vlm-sidebar-header">Frames</div>
+
+    <!-- Stem selector -->
+    <div class="vlm-stem-select-wrap">
+      <div class="select-wrap">
+        <select id="vlm-stem-select">
+          <option value="">— select folder —</option>
+        </select>
+        <svg class="chevron" width="16" height="16" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+      </div>
+    </div>
+
+    <!-- Likelihood filter -->
+    <div class="vlm-lh-row">
+      <span>Min likelihood</span>
+      <input type="range" id="vlm-lh-filter" min="0" max="1" step="0.05" value="0">
+      <span class="vlm-lh-val" id="vlm-lh-val">0.00</span>
+    </div>
+    <div style="font-size:.7rem;color:var(--text-dim)" id="vlm-frame-count">— frames</div>
+
+    <!-- Frame list -->
+    <div class="vlm-frame-list" id="vlm-frame-list">
+      <div style="padding:.5rem;color:var(--text-dim);font-size:.76rem">Select a folder to browse frames.</div>
+    </div>
+  </div>
+
+  <!-- ── 3-panel area ──────────────────────────────────────── -->
+  <div class="vlm-panels">
+
+    <!-- Panel 1: Reference frame -->
+    <div class="vlm-panel" id="panel-reference">
+      <div class="vlm-panel-header">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <span class="panel-title">Reference</span>
+        <span id="ref-score-badge" style="margin-left:auto;font-size:.7rem;color:var(--text-dim)"></span>
+      </div>
+      <!-- Reference folder filter -->
+      <div style="padding:.25rem .5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.4rem;font-size:.72rem;color:var(--text-dim)">
+        <span style="white-space:nowrap">Ref folder:</span>
+        <div class="select-wrap" style="flex:1;min-width:0">
+          <select id="vlm-ref-stem-select" style="font-size:.72rem;padding:.15rem .3rem">
+            <option value="">Any (best match)</option>
+          </select>
+          <svg class="chevron" width="14" height="14" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+        </div>
+      </div>
+      <!-- Similar tabs -->
+      <div class="vlm-ref-tabs" id="vlm-ref-tabs">
+        <span style="font-size:.72rem;color:var(--text-dim);align-self:center">No index yet</span>
+      </div>
+      <div class="vlm-panel-body" id="ref-panel-body">
+        <canvas id="ref-canvas" style="display:none;max-width:100%;max-height:100%"></canvas>
+        <span id="ref-placeholder" style="color:var(--text-dim);font-size:.8rem">Select a frame to load references</span>
+      </div>
+      <div class="vlm-panel-footer" id="ref-footer">—</div>
+    </div>
+
+    <!-- Panel 2: Active frame (labeling canvas) -->
+    <div class="vlm-panel" id="panel-active">
+      <div class="vlm-panel-header">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        <span class="panel-title">Active Frame</span>
+        <span id="active-frame-name" style="margin-left:auto;font-size:.7rem;color:var(--text-dim);font-family:var(--mono)"></span>
+      </div>
+      <div class="vlm-panel-body" id="active-panel-body">
+        <canvas id="vlm-active-canvas"></canvas>
+        <span id="active-placeholder" style="color:var(--text-dim);font-size:.8rem">Select a frame from the list</span>
+      </div>
+      <div class="vlm-panel-footer" style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+        <button class="btn-sm btn-vlm-primary" id="btn-vlm-refine" disabled>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          Refine with VLM
+        </button>
+        <button class="btn-sm" id="btn-accept-vlm" disabled style="border-color:rgba(251,191,36,.35);color:#fbbf24">
+          Accept VLM → H
+        </button>
+        <button class="btn-sm btn-create" id="btn-save-labels" disabled>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save [H]
+        </button>
+        <span id="vlm-refine-status" class="vlm-status" style="margin-left:auto"></span>
+      </div>
+    </div>
+
+    <!-- Panel 3: Crop + Coord list -->
+    <div class="vlm-panel" id="panel-crop">
+      <div class="vlm-panel-header">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 2v4a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V2"/><path d="M6 22v-4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4"/></svg>
+        <span class="panel-title">Crop · Coords</span>
+      </div>
+      <div class="vlm-panel-body" style="flex:0 0 auto;height:180px;border-bottom:1px solid var(--border)">
+        <canvas id="vlm-crop-canvas" width="128" height="128"></canvas>
+        <span id="crop-placeholder" style="color:var(--text-dim);font-size:.72rem">crop</span>
+      </div>
+      <div class="vlm-coord-list" id="vlm-coord-list">
+        <span style="color:var(--text-dim)">No frame selected</span>
+      </div>
+    </div>
+
+  </div><!-- /.vlm-panels -->
+
+  <!-- No-project overlay -->
+  <div id="vlm-no-project">
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span>No active DLC project — open one from the main dashboard first.</span>
+    <a href="/" class="btn-sm" style="text-decoration:none">← Back to Dashboard</a>
+  </div>
+
+</div><!-- /.vlm-layout -->
+{% endblock %}
+
+{% block scripts %}
+<script type="module" src="/static/js/vlm_refiner.js"></script>
+{% endblock %}

@@ -1,6 +1,9 @@
 "use strict";
 import { state } from './state.js';
 
+(function () {
+  if (!document.getElementById("frame-extractor-card")) return;
+
   // ── Frame Extractor ──────────────────────────────────────────
     const feCard          = document.getElementById("frame-extractor-card");
     const feOpenBtn       = document.getElementById("btn-open-frame-extractor");
@@ -829,3 +832,4 @@ import { state } from './state.js';
         return;
       }
     });
+})();

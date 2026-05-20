@@ -210,6 +210,15 @@ body {
   background: rgba(251, 191, 36, .08);
 }
 
+.btn-sm.btn-hard-reset {
+  border-color: rgba(248, 113, 113, .35);
+  color: var(--danger);
+}
+
+.btn-sm.btn-hard-reset:hover {
+  background: rgba(248, 113, 113, .1);
+}
+
 .flush-cache-status {
   font-family: var(--mono);
   font-size: .72rem;

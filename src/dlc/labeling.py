@@ -18,7 +18,6 @@ from flask import Blueprint, request, jsonify, send_file, session as flask_sessi
 from werkzeug.utils import secure_filename
 from . import ctx as _ctx
 from dlc.utils import (
-    _get_engine_queue,
     _dlc_project_security_check,
 )
 
@@ -346,6 +345,6 @@ def dlc_convert_labels_to_h5():
     task   = _ctx.celery().send_task(
         "tasks.dlc_convert_labels_to_h5",
         kwargs={"config_path": config_path, "scorer": scorer},
-        queue=_get_engine_queue(engine),
+        queue="celery",
     )
     return jsonify({"task_id": task.id, "operation": "convert_labels_to_h5"}), 202

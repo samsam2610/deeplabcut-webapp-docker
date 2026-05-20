@@ -173,9 +173,19 @@ def test_analyze_js_sends_target_paths_array(analyze_js_src):
 
 
 def test_analyze_js_dblclick_adds_to_batch(analyze_js_src):
-    """Double-click on a browser entry must trigger add-to-list logic."""
-    # The JS must call something like _avAddToList or push to _avBatchList on dblclick
-    assert "dblclick" in analyze_js_src
+    """Double-click on a browser entry must trigger add-to-list logic.
+
+    Post-refactor the dblclick handler lives inside the canonical
+    file_browser.js component; analyze.js wires `onPick: _avAddToList`
+    into makeFileBrowser to receive the dblclick callback.
+    """
+    assert "makeFileBrowser" in analyze_js_src, (
+        "analyze.js must use the canonical makeFileBrowser component"
+    )
+    assert "onPick" in analyze_js_src and "_avAddToList" in analyze_js_src, (
+        "makeFileBrowser must be wired with onPick: _avAddToList so the "
+        "dblclick handler adds to the batch list"
+    )
     assert "av-batch-list" in analyze_js_src or "_avBatchList" in analyze_js_src, (
         "Double-click handler must add the path to the batch list"
     )

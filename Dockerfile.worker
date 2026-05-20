@@ -115,5 +115,5 @@ COPY --chown=${UNAME}:${GNAME} src/ /app/
 CMD ["celery", "-A", "tasks", "worker", \
      "--loglevel=info", \
      "--concurrency=1", \
-     "--pool=solo", \
+     "--pool=prefork", \
      "-Q", "default"]
