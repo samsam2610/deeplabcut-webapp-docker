@@ -2934,3 +2934,184 @@ def _blpop(redis_, queue_key, timeout):
     if isinstance(val, bytes):
         val = val.decode("utf-8", "replace")
     return val
+
+
+def _run_range(runner, *, scorer, model_cfg, multi_animal, req):
+    """Inference + merge for one range request.
+
+    Uses DLC's canonical create_df_from_prediction to build the DataFrame
+    (then reindexes 0..N-1 → actual frame numbers), so the result has the
+    same MultiIndex shape as analyze_videos' output.
+
+    Returns (n_analyzed, n_skipped). Raises on hard failure (caught by the
+    task loop, which publishes status=error).
+    """
+    h5_path  = _resolve_h5_path(req["video_path"], scorer)
+    existing = _ia_pd.read_hdf(str(h5_path)) if h5_path.exists() else None
+
+    target     = list(range(req["start_frame"], req["start_frame"] + req["n_frames"]))
+    to_analyze = _filter_skip_already_done(target, existing)
+    n_skipped  = len(target) - len(to_analyze)
+    if not to_analyze:
+        return 0, n_skipped
+
+    # Resolve callables from module globals at call time (tests patch them).
+    _RVIter  = globals().get("_RangeVideoIterator")
+    _vidinf  = globals().get("video_inference")
+    _make_df = globals().get("_dlc_create_df_from_prediction")
+    if _RVIter is None or _vidinf is None or _make_df is None:
+        raise RuntimeError(
+            "DLC primitives missing — VideoIterator/video_inference/"
+            "create_df_from_prediction not available"
+        )
+
+    vit = _RVIter(req["video_path"], indices=to_analyze)
+    predictions = _vidinf(vit, pose_runner=runner)
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as scratch:
+        df_range = _make_df(
+            predictions=predictions,
+            dlc_scorer=scorer,
+            multi_animal=multi_animal,
+            model_cfg=model_cfg,
+            output_path=scratch,
+            output_prefix=f"range_{req['req_id']}",
+            save_as_csv=False,
+        )
+    # create_df_from_prediction indexes rows 0..N-1. Re-key to absolute frames.
+    df_range.index = _ia_pd.Index(to_analyze, name=df_range.index.name)
+
+    df_merge = df_range if existing is None else df_range.combine_first(existing)
+    _atomic_write_h5(h5_path, df_merge)
+    if req.get("save_as_csv"):
+        _atomic_write_csv(h5_path.with_suffix(".csv"), df_merge)
+    meta_path = _resolve_meta_path(h5_path)
+    _update_meta_pickle(meta_path, df_merge, snapshot=req["snapshot_path"])
+    return len(to_analyze), n_skipped
+
+
+def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
+                              snapshot_path, shuffle, trainingsetindex,
+                              batch_size, ttl):
+    """Pure-function body of the warm-worker task, testable without Celery.
+
+    Boots a DLCLoader + PoseInferenceRunner once, then BLPOP-loops range
+    requests until TTL elapses or a control:stop signal is received.
+    """
+    queue_key = _queue_key(user_id, snap_key)
+
+    _publish_status(
+        redis_, user_id, snap_key, "warming",
+        snapshot_path=snapshot_path,
+        project=str(_IAPath(config_path).parent.name),
+        started_at=str(_ia_time.time()),
+    )
+
+    # Resolve DLC handles from module globals (tests patch).
+    _LoaderCls = globals().get("_dlc_loader_cls")
+    _apis_utils = globals().get("_dlc_apis_utils")
+    try:
+        if _LoaderCls is None or _apis_utils is None:
+            raise RuntimeError(
+                "DLC primitives missing — DLCLoader / apis.utils not available"
+            )
+        loader = _LoaderCls(
+            config=config_path,
+            trainset_index=trainingsetindex,
+            shuffle=shuffle,
+        )
+        scorer       = loader.scorer(snapshot_path)
+        model_cfg    = loader.model_cfg
+        multi_animal = bool(loader.project_cfg.get("multianimalproject", False))
+        runner = _apis_utils.get_pose_inference_runner(
+            model_config=model_cfg, snapshot_path=snapshot_path,
+            batch_size=batch_size, device=None,
+        )
+    except Exception as exc:
+        _publish_status(
+            redis_, user_id, snap_key, "error",
+            last_error=str(exc)[:500],
+        )
+        return
+
+    _publish_status(
+        redis_, user_id, snap_key, "ready",
+        snapshot_path=snapshot_path,
+        project=str(_IAPath(config_path).parent.name),
+    )
+
+    cached_batch_size = batch_size
+    exit_reason = "expired"
+    while True:
+        if _control_says_stop(redis_, user_id, snap_key):
+            exit_reason = "stopped"
+            break
+        budget = _idle_budget(redis_, user_id, snap_key, ttl)
+        item = _blpop(redis_, queue_key, timeout=budget)
+        if item is None:
+            exit_reason = "expired"
+            break
+        try:
+            req = _ia_json.loads(item)
+        except Exception:
+            continue
+
+        if req.get("batch_size") and req["batch_size"] != cached_batch_size:
+            try:
+                runner = _apis_utils.get_pose_inference_runner(
+                    model_config=model_cfg, snapshot_path=snapshot_path,
+                    batch_size=req["batch_size"], device=None,
+                )
+                cached_batch_size = req["batch_size"]
+            except Exception as exc:
+                _publish_result(
+                    redis_, req["req_id"], "error", error=str(exc),
+                )
+                continue
+
+        try:
+            n_analyzed, n_skipped = _run_range(
+                runner, scorer=scorer, model_cfg=model_cfg,
+                multi_animal=multi_animal, req=req,
+            )
+            _publish_result(
+                redis_, req["req_id"], "done",
+                n_analyzed=n_analyzed, n_skipped=n_skipped,
+            )
+        except Exception as exc:
+            _publish_result(
+                redis_, req["req_id"], "error", error=str(exc),
+            )
+        _bump_activity(redis_, user_id, snap_key)
+
+    _publish_status(redis_, user_id, snap_key, exit_reason)
+
+
+def _redis_client_from_celery_app(task):
+    """Resolve a Redis client from inside a Celery task.
+
+    Production: build a fresh client from CELERY_BROKER_URL.
+    Tests: never call the @celery.task path; they call
+    _dlc_inline_session_inner directly with FakeRedis.
+    """
+    import redis as _redis_mod
+    url = _ia_os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
+    return _redis_mod.Redis.from_url(url, decode_responses=True)
+
+
+@celery.task(bind=True, name="tasks.dlc_inline_session", acks_late=False)
+def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
+                       shuffle, trainingsetindex, batch_size, ttl):
+    """Long-lived warm-worker session for one (user, project, snapshot) triple.
+
+    acks_late=False — we don't want this task redelivered on broker restart;
+    a fresh /session/start dispatches a new one.
+
+    See docs/superpowers/specs/2026-05-20-inline-analysis-design.md §3.
+    """
+    redis_ = _redis_client_from_celery_app(self)
+    _dlc_inline_session_inner(
+        redis_, user_id, config_path, snap_key, snapshot_path,
+        shuffle, trainingsetindex, batch_size, ttl,
+    )
