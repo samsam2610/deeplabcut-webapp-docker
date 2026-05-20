@@ -213,22 +213,24 @@ def dlc_create_training_dataset(
                 )
             except ValueError as exc:
                 raise RuntimeError(f"split_mode={split_mode}: {exc}")
-            if result is not None:
-                train_inds, test_inds, stats = result
-                train_idx_list = [list(train_inds)] * num_shuffles
-                test_idx_list = [list(test_inds)] * num_shuffles
-                self.update_state(
-                    state="PROGRESS",
-                    meta={
-                        "progress": 8,
-                        "stage": (
-                            f"Split prepared (mode={split_mode}, "
-                            f"train={len(train_inds)}, test={len(test_inds)}, "
-                            f"dropped_marks={stats['dropped_marks']})"
-                        ),
-                        "log": "",
-                    },
-                )
+            # build_indices is documented to return None only for split_mode="random",
+            # and we've already filtered to hybrid/manual above. Assert the invariant.
+            assert result is not None, f"build_indices returned None for split_mode={split_mode}"
+            train_inds, test_inds, stats = result
+            train_idx_list = [list(train_inds)] * num_shuffles
+            test_idx_list = [list(test_inds)] * num_shuffles
+            self.update_state(
+                state="PROGRESS",
+                meta={
+                    "progress": 8,
+                    "stage": (
+                        f"Split prepared (mode={split_mode}, "
+                        f"train={len(train_inds)}, test={len(test_inds)}, "
+                        f"dropped_marks={stats['dropped_marks']})"
+                    ),
+                    "log": "",
+                },
+            )
 
         self.update_state(
             state="PROGRESS",
@@ -258,6 +260,11 @@ def dlc_create_training_dataset(
             "log":       final_log or f"Training dataset created.\nconfig: {config_path}",
         }
 
+    except RuntimeError:
+        # Already a clean, intentional RuntimeError (e.g. from our split_mode
+        # error wrap). Let it through verbatim so the user sees the clean
+        # message instead of a buried traceback.
+        raise
     except Exception:
         raise RuntimeError(traceback.format_exc()[-3000:])
 
