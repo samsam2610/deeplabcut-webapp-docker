@@ -288,6 +288,7 @@ def range_status():
         "n_analyzed": int(h.get("n_analyzed") or 0),
         "n_skipped":  int(h.get("n_skipped") or 0),
         "error":      h.get("error", ""),
+        "scorer":     h.get("scorer", ""),
     })
 
 

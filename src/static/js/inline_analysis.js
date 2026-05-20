@@ -294,7 +294,23 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
         const d = await r.json();
         if (d.status === "done") {
           lastRun.textContent = `Last run: ${d.n_analyzed} analyzed, ${d.n_skipped} skipped`;
-          if (_player) _player.reloadH5();
+          // Auto-register the canonical h5 as the only visible layer
+          // (polish spec §1.4): build path from video_path + scorer, then
+          // let the factory drop its per-layer pose cache and re-fetch.
+          if (_player && d.scorer && videoPath.value) {
+            const vp = videoPath.value.trim();
+            const dot = vp.lastIndexOf(".");
+            const stem = dot > 0 ? vp.slice(0, dot) : vp;
+            const h5Path = stem + d.scorer + ".h5";
+            try {
+              if (_player.setPrimaryLayer) {
+                _player.setPrimaryLayer({ path: h5Path, label: d.scorer });
+              }
+            } catch (e) { /* factory may not be wired in tests */ }
+            _player.reloadH5();
+          } else if (_player) {
+            _player.reloadH5();
+          }
           _activeReqId = null;
           stopRangePolling();
         } else if (d.status === "error") {

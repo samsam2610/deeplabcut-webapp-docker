@@ -176,6 +176,7 @@ class TestRangeStatus:
         client, _app, redis, _ = ia_client
         redis.hset("inline:result:r1", mapping={
             "status": "done", "n_analyzed": "42", "n_skipped": "8", "error": "",
+            "scorer": "DLC_resnet50_DREADD-Alishuffle1_snapshot-200000",
         })
         resp = client.get("/dlc/project/inline-analysis/range/status?req_id=r1")
         assert resp.status_code == 200
@@ -183,6 +184,10 @@ class TestRangeStatus:
         assert body["status"] == "done"
         assert body["n_analyzed"] == 42
         assert body["n_skipped"] == 8
+        assert body["scorer"] == "DLC_resnet50_DREADD-Alishuffle1_snapshot-200000", (
+            "polish spec §1.4: /range/status done payload must include scorer "
+            "so the JS can construct the canonical h5 path"
+        )
 
     def test_returns_pending_when_no_hash_yet(self, ia_client):
         client, _app, _r, _ = ia_client
