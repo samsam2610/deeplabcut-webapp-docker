@@ -1,0 +1,190 @@
+"""
+DLC Test-set Picker Blueprint.
+
+Routes:
+  GET  /dlc/project/test-set/marks
+  POST /dlc/project/test-set/marks/<video_stem>/<image_name>
+  POST /dlc/project/test-set/marks/bulk
+  POST /dlc/project/test-set/marks/clean-stale
+  POST /dlc/project/test-set/mode
+
+All routes operate on the active DLC project (Redis key
+webapp:dlc_project:<uid>) and use the per-project SQLite at
+<project_path>/test_set_marks.sqlite.
+"""
+from __future__ import annotations
+
+import json
+import uuid
+from pathlib import Path
+
+from flask import Blueprint, jsonify, request, session as flask_session
+from werkzeug.utils import secure_filename
+
+from dlc import marks_store
+from . import ctx as _ctx
+
+bp = Blueprint("dlc_test_set_picker", __name__)
+
+
+def _user_id() -> str:
+    if "uid" not in flask_session:
+        flask_session["uid"] = uuid.uuid4().hex
+    return flask_session["uid"]
+
+
+def _dlc_key() -> str:
+    return f"webapp:dlc_project:{_user_id()}"
+
+
+def _active_project() -> tuple[Path | None, tuple | None]:
+    """Return (project_path, error_response). Error response is None on success."""
+    raw = _ctx.redis_client().get(_dlc_key())
+    if not raw:
+        return None, (jsonify({"error": "No active DLC project."}), 400)
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None, (jsonify({"error": "Corrupt project state."}), 500)
+    project_path = Path(data.get("project_path", "") or "")
+    if not project_path.is_dir():
+        return None, (jsonify({"error": "Project directory not found."}), 404)
+    return project_path, None
+
+
+def _safe_stem(value: str) -> str | None:
+    """Return a secure_filename'd stem, or None if the input is suspicious."""
+    if not value or value != value.strip():
+        return None
+    cleaned = secure_filename(value)
+    if not cleaned or cleaned != value:
+        # secure_filename mutates anything traversal-ish; reject mutation
+        return None
+    return cleaned
+
+
+def _safe_image_name(value: str) -> str | None:
+    if not value or "/" in value or "\\" in value or ".." in value:
+        return None
+    cleaned = secure_filename(value)
+    if not cleaned or cleaned != value:
+        return None
+    return cleaned
+
+
+def _frame_belongs_to_project(project_path: Path, stem: str, image: str) -> bool:
+    labeled_root = (project_path / "labeled-data").resolve()
+    candidate = (labeled_root / stem / image).resolve()
+    try:
+        candidate.relative_to(labeled_root)
+    except ValueError:
+        return False
+    return True
+
+
+def _count_labeled_frames(project_path: Path) -> tuple[int, dict[str, int]]:
+    labeled_root = project_path / "labeled-data"
+    per_folder: dict[str, int] = {}
+    total = 0
+    if not labeled_root.is_dir():
+        return 0, {}
+    for stem_dir in sorted(labeled_root.iterdir()):
+        if not stem_dir.is_dir():
+            continue
+        n = sum(1 for p in stem_dir.iterdir() if p.suffix.lower() == ".png")
+        per_folder[stem_dir.name] = n
+        total += n
+    return total, per_folder
+
+
+@bp.route("/dlc/project/test-set/marks", methods=["GET"])
+def get_marks():
+    project_path, err = _active_project()
+    if err:
+        return err
+    grouped = marks_store.get_marks_grouped(project_path)
+    mode = marks_store.get_mode(project_path)
+    total_labeled, per_folder_total = _count_labeled_frames(project_path)
+    per_folder = {
+        stem: {"marked": len(grouped.get(stem, [])), "total": per_folder_total.get(stem, 0)}
+        for stem in set(grouped) | set(per_folder_total)
+    }
+    return jsonify({
+        "mode": mode,
+        "marks": grouped,
+        "counts": {
+            "marked": sum(len(v) for v in grouped.values()),
+            "total_labeled": total_labeled,
+            "per_folder": per_folder,
+        },
+    })
+
+
+@bp.route("/dlc/project/test-set/marks/<path:video_stem>/<image_name>", methods=["POST"])
+def post_mark(video_stem: str, image_name: str):
+    project_path, err = _active_project()
+    if err:
+        return err
+    stem = _safe_stem(video_stem)
+    image = _safe_image_name(image_name)
+    if stem is None or image is None:
+        return jsonify({"error": "Invalid path component."}), 400
+    if not _frame_belongs_to_project(project_path, stem, image):
+        return jsonify({"error": "Path escapes labeled-data root."}), 403
+
+    body = request.get_json(force=True, silent=True) or {}
+    marked = bool(body.get("marked", True))
+    note = body.get("note")
+    marks_store.set_mark(project_path, stem, image, marked, note)
+    return jsonify({"ok": True, "marked": marked})
+
+
+@bp.route("/dlc/project/test-set/marks/bulk", methods=["POST"])
+def post_bulk():
+    project_path, err = _active_project()
+    if err:
+        return err
+    body = request.get_json(force=True, silent=True) or {}
+    ops_in = body.get("ops") or []
+    if not isinstance(ops_in, list):
+        return jsonify({"error": "ops must be a list."}), 400
+    cleaned: list[dict] = []
+    for op in ops_in:
+        if not isinstance(op, dict):
+            continue
+        stem = _safe_stem(op.get("video_stem", ""))
+        image = _safe_image_name(op.get("image_name", ""))
+        if stem is None or image is None:
+            continue
+        if not _frame_belongs_to_project(project_path, stem, image):
+            continue
+        cleaned.append({
+            "video_stem": stem,
+            "image_name": image,
+            "marked": bool(op.get("marked", True)),
+            "note": op.get("note"),
+        })
+    applied = marks_store.bulk_set(project_path, cleaned)
+    return jsonify({"ok": True, "applied": applied})
+
+
+@bp.route("/dlc/project/test-set/marks/clean-stale", methods=["POST"])
+def post_clean_stale():
+    project_path, err = _active_project()
+    if err:
+        return err
+    removed = marks_store.clean_stale(project_path)
+    return jsonify({"ok": True, "removed": removed})
+
+
+@bp.route("/dlc/project/test-set/mode", methods=["POST"])
+def post_mode():
+    project_path, err = _active_project()
+    if err:
+        return err
+    body = request.get_json(force=True, silent=True) or {}
+    mode = (body.get("mode") or "").strip()
+    if mode not in marks_store.VALID_MODES:
+        return jsonify({"error": f"mode must be one of {list(marks_store.VALID_MODES)}"}), 400
+    marks_store.set_mode(project_path, mode)
+    return jsonify({"ok": True, "mode": mode})
