@@ -201,6 +201,68 @@ def test_new_ids_are_unique_across_partials():
         )
 
 
+def test_poseUrlFn_uses_canonical_frame_poses_batch_endpoint():
+    """Regression guard: inline_analysis.js must point the player's
+    poseUrlFn at /dlc/viewer/frame-poses-batch?h5=...&start=...&count=...
+    — the canonical batched-pose endpoint that viewer.js uses.
+
+    An earlier draft used a made-up /dlc/viewer/h5-pose-window?h5=...&
+    start=...&n=... — that route doesn't exist and 404'd every pose
+    fetch, so the overlay canvas stayed blank no matter what the user
+    did. See systematic-debugging session 2026-05-20.
+    """
+    js = (ROOT / "src" / "static" / "js" / "inline_analysis.js").read_text()
+    assert "/dlc/viewer/h5-pose-window" not in js, (
+        "broken /dlc/viewer/h5-pose-window endpoint must not appear"
+    )
+    assert "/dlc/viewer/frame-poses-batch" in js, (
+        "must use canonical /dlc/viewer/frame-poses-batch endpoint"
+    )
+
+
+def test_factory_parses_canonical_frame_poses_batch_shape():
+    """Regression guard: the analyzed_frame_player factory must handle
+    the canonical {frames: {<n>: {poses: [...]}}} response shape AND
+    normalize each pose's `lh` to `likelihood` so the threshold filter
+    in _drawCurrentFrame works (it reads .likelihood, server sends .lh).
+    """
+    js = (ROOT / "src" / "static" / "js" / "components" /
+          "analyzed_frame_player.js").read_text()
+    # Branch handles {frames: {...}}
+    assert "data.frames" in js, (
+        "factory _prefetchPoseWindow must recognize the canonical "
+        "{frames: {...}} shape returned by /frame-poses-batch"
+    )
+    # `lh` → `likelihood` normalization
+    assert "p.lh" in js, (
+        "factory must normalize p.lh (server) → p.likelihood (drawing path)"
+    )
+
+
+def test_done_handler_auto_enables_overlay_toggle():
+    """Regression guard: after /range/status reports `done`, inline_
+    analysis.js must auto-check the `ia-overlay-toggle` and dispatch a
+    change event so the factory's overlay-enabled flag flips. Without
+    this, the user finishes an analysis and sees no markers until they
+    manually tick a checkbox they probably didn't notice.
+    """
+    js = (ROOT / "src" / "static" / "js" / "inline_analysis.js").read_text()
+    # Find the done branch.
+    done_idx = js.find('d.status === "done"')
+    assert done_idx > 0, "done-branch must exist in the polling handler"
+    done_block = js[done_idx:done_idx + 2200]
+    assert 'ia-overlay-toggle' in done_block, (
+        "done handler must reference ia-overlay-toggle"
+    )
+    assert 'tgl.checked = true' in done_block or 'tgl.checked=true' in done_block, (
+        "done handler must check the overlay toggle"
+    )
+    assert "new Event(\"change\"" in done_block or "new Event('change'" in done_block, (
+        "done handler must dispatch a change event so the factory's "
+        "change listener runs (just setting .checked doesn't fire events)"
+    )
+
+
 def test_frameUrlFn_uses_canonical_annotate_video_frame_endpoint():
     """Regression guard: inline_analysis.js must point the player at
     /annotate/video-frame/<n>?path=... (the canonical browse-mode frame

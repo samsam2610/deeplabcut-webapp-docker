@@ -167,18 +167,43 @@ export function makeAnalyzedFramePlayer(options) {
       fetch(url, { signal })
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
-          if (!data || !data.poses) return;
-          // Spec-compatible shape: list of per-frame entries keyed by frame index.
+          if (!data) return;
           if (!layer.posesCache) layer.posesCache = new Map();
+          // Three accepted response shapes:
+          //   1) {poses: [<entry>, ...]}    — array indexed by startFrame+i
+          //   2) {poses: {"<n>": <entry>}}  — object keyed by frame index
+          //   3) {frames: {"<n>": {poses: [{bp,x,y,lh,color_idx}, ...]}}}
+          //      — canonical /dlc/viewer/frame-poses-batch response
+          const normalizeEntry = (entry) => {
+            // Translate {bp,x,y,lh,color_idx} → {x,y,likelihood,...} so the
+            // threshold filter in _drawCurrentFrame (which reads `.likelihood`)
+            // works against canonical server output too.
+            if (!entry || !Array.isArray(entry.poses)) return entry;
+            return {
+              ...entry,
+              poses: entry.poses.map((p) => ({
+                ...p,
+                likelihood: (typeof p.likelihood === "number")
+                  ? p.likelihood
+                  : (typeof p.lh === "number" ? p.lh : undefined),
+              })),
+            };
+          };
           if (Array.isArray(data.poses)) {
             data.poses.forEach((entry, i) => {
               const frame = (typeof entry.frame === "number") ? entry.frame : (startFrame + i);
-              layer.posesCache.set(frame, entry);
+              layer.posesCache.set(frame, normalizeEntry(entry));
             });
-          } else if (typeof data.poses === "object") {
+          } else if (data.frames && typeof data.frames === "object") {
+            Object.entries(data.frames).forEach(([k, v]) => {
+              layer.posesCache.set(Number(k), normalizeEntry(v));
+            });
+          } else if (data.poses && typeof data.poses === "object") {
             Object.entries(data.poses).forEach(([k, v]) => {
-              layer.posesCache.set(Number(k), v);
+              layer.posesCache.set(Number(k), normalizeEntry(v));
             });
+          } else {
+            return;
           }
           _drawCurrentFrame();
         })
