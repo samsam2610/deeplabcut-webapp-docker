@@ -213,7 +213,13 @@ _DOC_PICKLE_RE = _re.compile(
 def _read_pickle_dataset(pickle_path: Path) -> dict | None:
     """Parse a Documentation_data-*.pickle and return train/test frame tuples.
 
-    Returns None on parse failure.
+    DLC's pickle layout is [Documentation_data, trainIndices, testIndices,
+    trainFraction] where Documentation_data is the *train-only filtered*
+    list (NOT all labeled frames). The indices reference positions in the
+    sibling CollectedData_<scorer>.h5 merged DataFrame. We open that H5
+    to do the mapping.
+
+    Returns None on parse failure or missing sibling H5.
     """
     m = _DOC_PICKLE_RE.match(pickle_path.name)
     if not m:
@@ -227,19 +233,43 @@ def _read_pickle_dataset(pickle_path: Path) -> dict | None:
         return None
     if not isinstance(payload, (list, tuple)) or len(payload) < 3:
         return None
-    entries, train_idx, test_idx = payload[0], payload[1], payload[2]
+    train_idx, test_idx = payload[1], payload[2]
+
+    # Find the sibling CollectedData_*.h5 that holds the merged dataframe.
+    h5_candidates = sorted(pickle_path.parent.glob("CollectedData_*.h5"))
+    if not h5_candidates:
+        return None
+    h5_path = h5_candidates[0]
+
+    # Decode the row MultiIndex from the H5 using h5py (avoids the PyTables
+    # dependency, which is brittle across numpy versions).
+    try:
+        import h5py as _h5py
+        with _h5py.File(str(h5_path), "r") as _f:
+            _key = "df_with_missing" if "df_with_missing" in _f else next(iter(_f.keys()))
+            _g = _f[_key]
+            _nlevels = int(_g.attrs.get("axis1_nlevels", 1))
+            if _nlevels < 3:
+                return None
+            _lv1 = [x.decode("utf-8", errors="replace") for x in _g["axis1_level1"][:]]
+            _lv2 = [x.decode("utf-8", errors="replace") for x in _g["axis1_level2"][:]]
+            _lb1 = _g["axis1_label1"][:]
+            _lb2 = _g["axis1_label2"][:]
+            rows: list[tuple[str, str]] = [
+                (_lv1[int(_lb1[i])], _lv2[int(_lb2[i])])
+                for i in range(len(_lb1))
+            ]
+    except Exception:
+        return None
 
     def _resolve(indices) -> list[dict]:
         out: list[dict] = []
         for i in indices:
             i = int(i)
-            if i < 0 or i >= len(entries):
+            if i < 0 or i >= len(rows):
                 continue  # strips -1 padding and out-of-range
-            row = entries[i]
-            img = row.get("image") if isinstance(row, dict) else None
-            if not img or len(img) < 3:
-                continue
-            out.append({"video_stem": img[1], "image_name": img[2]})
+            stem, image = rows[i]
+            out.append({"video_stem": stem, "image_name": image})
         return out
 
     return {
