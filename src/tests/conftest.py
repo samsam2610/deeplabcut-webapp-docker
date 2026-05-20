@@ -47,6 +47,8 @@ DLC_CUDA_ENV = {**os.environ, "CUDA_VISIBLE_DEVICES": DLC_GPU_INDEX}
 _POSSIBLE_ORIGINAL_PATHS = [
     Path("/home/sam/data-disk/Parra-Data/DLC-Projects/DREADD-Ali-2026-01-07"),
     Path("/home/sam/data-disk/Parra-Data/Disk/DLC-Projects/DREADD-Ali-2026-01-07"),
+    # Docker worker container mount
+    Path("/user-data/NAS-Data-Share/Motor-Learning/DLC-Projects/DREADD-Ali-2026-01-07"),
 ]
 ORIGINAL_DLC_PROJECT: Path | None = next(
     (p for p in _POSSIBLE_ORIGINAL_PATHS if p.is_dir()), None
