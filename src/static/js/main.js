@@ -7,6 +7,7 @@ import './anipose.js';        // imports from dlc_project.js
 import './frame_extractor.js';
 import './training.js';
 import './frame_labeler.js';
+import './test_set_picker.js';
 import './analyze.js';
 import './viewer.js';
 import './postprocess.js';

@@ -1,0 +1,270 @@
+"use strict";
+import { drawFrame, drawBodyparts } from "./frame_overlay.js";
+
+const tsCard       = document.getElementById("test-set-picker-card");
+const tsOpenBtn    = document.getElementById("btn-open-test-set-picker");
+const tsCloseBtn   = document.getElementById("btn-close-test-set-picker");
+const tsStemSelect = document.getElementById("ts-stem-select");
+const tsRefreshBtn = document.getElementById("ts-refresh-btn");
+const tsPlayerSec  = document.getElementById("ts-player-section");
+const tsBtnPrev    = document.getElementById("ts-btn-prev");
+const tsBtnNext    = document.getElementById("ts-btn-next");
+const tsFrameInfo  = document.getElementById("ts-frame-info");
+const tsFrameName  = document.getElementById("ts-frame-name");
+const tsToggleBtn  = document.getElementById("ts-toggle-mark");
+const tsMarkLabel  = document.getElementById("ts-mark-label");
+const tsCanvas     = document.getElementById("ts-canvas");
+const tsCtx        = tsCanvas ? tsCanvas.getContext("2d") : null;
+const tsZoom       = document.getElementById("ts-zoom");
+const tsZoomVal    = document.getElementById("ts-zoom-val");
+const tsMarkerSize = document.getElementById("ts-marker-size");
+const tsMarkerSizeVal = document.getElementById("ts-marker-size-val");
+const tsShowNames  = document.getElementById("ts-show-names");
+const tsFolderCntr = document.getElementById("ts-folder-counter");
+const tsProjectCntr= document.getElementById("ts-project-counter");
+const tsCleanStale = document.getElementById("ts-clean-stale-btn");
+const tsInspectBtn = document.getElementById("ts-inspect-btn");
+
+// ── State ────────────────────────────────────────────────────────
+let _tsStems   = [];      // [{video_stem, frames[]}]
+let _tsStem    = null;    // currently-selected stem string
+let _tsFrames  = [];      // frames in the current stem
+let _tsIdx     = 0;       // current frame index
+let _tsMarks   = {};      // { stem: Set(image) }
+let _tsLabels  = {};      // { image: { bp: [x,y] } } | label dict
+let _tsImage   = null;    // currently-loaded Image
+let _tsPlacement = null;  // placement returned by drawFrame
+let _tsBodyparts = [];
+let _tsPalette = {};
+let _tsProjectTotal = 0;
+
+const TS_DEFAULT_PALETTE = [
+  "#ff5050", "#50c8ff", "#a0e040", "#ffa040", "#c060ff",
+  "#40e0c0", "#ff7090", "#80c080", "#f0c020", "#60a0ff",
+];
+
+function _buildPalette(bps) {
+  const out = {};
+  bps.forEach((bp, i) => { out[bp] = TS_DEFAULT_PALETTE[i % TS_DEFAULT_PALETTE.length]; });
+  return out;
+}
+
+async function _fetchJson(url, opts) {
+  const rv = await fetch(url, opts);
+  if (!rv.ok) throw new Error(await rv.text());
+  return rv.json();
+}
+
+async function _loadStems() {
+  // dlc_list_labeled_frames returns the list directly (it is the array — see src/dlc/labeling.py)
+  const body = await _fetchJson("/dlc/project/labeled-frames");
+  _tsStems = Array.isArray(body) ? body : (body.frames || []);
+  tsStemSelect.innerHTML = '<option value="">— select video —</option>';
+  for (const s of _tsStems) {
+    const stem = s.video_stem || s;
+    const opt = document.createElement("option");
+    opt.value = stem; opt.textContent = stem;
+    tsStemSelect.appendChild(opt);
+  }
+}
+
+async function _loadMarks() {
+  const body = await _fetchJson("/dlc/project/test-set/marks");
+  _tsMarks = {};
+  for (const [stem, list] of Object.entries(body.marks || {})) {
+    _tsMarks[stem] = new Set(list);
+  }
+  _tsProjectTotal = body.counts?.total_labeled || 0;
+  _updateCounters(body.counts || {});
+  const mode = body.mode || "random";
+  document.querySelectorAll('input[name="ts-mode"]').forEach(el => {
+    el.checked = (el.value === mode);
+  });
+}
+
+async function _loadBodyparts() {
+  const body = await _fetchJson("/dlc/project/bodyparts");
+  _tsBodyparts = body.bodyparts || [];
+  _tsPalette = _buildPalette(_tsBodyparts);
+}
+
+async function _loadStemFrames(stem) {
+  const found = _tsStems.find(s => (s.video_stem || s) === stem);
+  _tsFrames = (found && found.frames) || [];
+  _tsIdx = 0;
+  // Fetch labels for the stem (read-only display)
+  try {
+    const body = await _fetchJson(`/dlc/project/labels/${encodeURIComponent(stem)}`);
+    _tsLabels = body.labels || {};
+  } catch {
+    _tsLabels = {};
+  }
+}
+
+function _updateCounters(counts) {
+  const stemCount = (_tsMarks[_tsStem] || new Set()).size;
+  const folderTotal = _tsFrames.length;
+  if (tsFolderCntr) tsFolderCntr.textContent = `${stemCount} / ${folderTotal} marked in this folder`;
+  const projMarked = Object.values(_tsMarks).reduce((acc, s) => acc + s.size, 0);
+  const projTotal = counts.total_labeled ?? _tsProjectTotal;
+  if (tsProjectCntr) tsProjectCntr.textContent = `${projMarked} / ${projTotal} marked in project`;
+}
+
+function _currentFrameName() {
+  return _tsFrames[_tsIdx] || "";
+}
+
+function _isCurrentMarked() {
+  if (!_tsStem) return false;
+  const s = _tsMarks[_tsStem] || new Set();
+  return s.has(_currentFrameName());
+}
+
+function _updateToggleButton() {
+  if (!tsMarkLabel) return;
+  const m = _isCurrentMarked();
+  tsMarkLabel.textContent = m ? "✓ In test set" : "▢ Mark for test set";
+  tsToggleBtn.style.background = m ? "rgba(80, 200, 120, 0.18)" : "";
+  tsToggleBtn.style.borderColor = m ? "rgba(80, 200, 120, 0.6)" : "";
+}
+
+function _draw() {
+  if (!tsCtx) return;
+  const placement = drawFrame(tsCtx, _tsImage);
+  _tsPlacement = placement || null;
+  const name = _currentFrameName();
+  const labels = _tsLabels[name] || _tsLabels[`labeled-data/${_tsStem}/${name}`] || {};
+  const markerSize = parseInt(tsMarkerSize?.value || "4");
+  drawBodyparts(tsCtx, labels, _tsPalette, _tsPlacement, {
+    markerSize,
+    showNames: !!tsShowNames?.checked,
+  });
+}
+
+function _renderFrame() {
+  const name = _currentFrameName();
+  if (!name) { tsFrameInfo.textContent = "Frame 0 / 0"; tsFrameName.textContent = ""; return; }
+  tsFrameInfo.textContent = `Frame ${_tsIdx + 1} / ${_tsFrames.length}`;
+  tsFrameName.textContent = name;
+  _updateToggleButton();
+  // Resize canvas to displayed CSS box, preserving viewer-zoom scaling
+  const zoom = parseInt(tsZoom?.value || "100") / 100;
+  tsCanvas.width = 800 * zoom;
+  tsCanvas.height = 600 * zoom;
+  const img = new Image();
+  img.onload = () => { _tsImage = img; _draw(); };
+  img.src = `/dlc/project/frame-image/${encodeURIComponent(_tsStem)}/${encodeURIComponent(name)}`;
+}
+
+async function _toggleCurrentMark() {
+  if (!_tsStem || !_currentFrameName()) return;
+  const name = _currentFrameName();
+  const willBeMarked = !_isCurrentMarked();
+  // Optimistic
+  if (willBeMarked) (_tsMarks[_tsStem] ||= new Set()).add(name);
+  else _tsMarks[_tsStem]?.delete(name);
+  _updateToggleButton();
+  _updateCounters({});
+  try {
+    await _fetchJson(
+      `/dlc/project/test-set/marks/${encodeURIComponent(_tsStem)}/${encodeURIComponent(name)}`,
+      { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ marked: willBeMarked }) },
+    );
+  } catch (e) {
+    // Rollback on error
+    if (willBeMarked) _tsMarks[_tsStem]?.delete(name);
+    else (_tsMarks[_tsStem] ||= new Set()).add(name);
+    _updateToggleButton();
+    _updateCounters({});
+    console.error("toggle failed:", e);
+  }
+}
+
+async function _setMode(mode) {
+  try {
+    await _fetchJson("/dlc/project/test-set/mode", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+  } catch (e) {
+    console.error("mode update failed:", e);
+  }
+}
+
+async function _openPicker() {
+  if (tsCard) tsCard.classList.remove("hidden");
+  await Promise.all([_loadBodyparts(), _loadStems(), _loadMarks()]);
+}
+function _closePicker() {
+  if (tsCard) tsCard.classList.add("hidden");
+}
+
+function _onStemChange() {
+  _tsStem = tsStemSelect.value || null;
+  if (!_tsStem) { tsPlayerSec.classList.add("hidden"); return; }
+  tsPlayerSec.classList.remove("hidden");
+  _loadStemFrames(_tsStem).then(() => { _renderFrame(); _updateCounters({}); });
+}
+
+function _next() { if (_tsIdx < _tsFrames.length - 1) { _tsIdx++; _renderFrame(); } }
+function _prev() { if (_tsIdx > 0) { _tsIdx--; _renderFrame(); } }
+function _firstInFolder() { if (_tsFrames.length) { _tsIdx = 0; _renderFrame(); } }
+function _lastInFolder()  { if (_tsFrames.length) { _tsIdx = _tsFrames.length - 1; _renderFrame(); } }
+function _nextFolder() {
+  if (!_tsStems.length) return;
+  const cur = _tsStems.findIndex(s => (s.video_stem || s) === _tsStem);
+  const next = (cur + 1) % _tsStems.length;
+  const stem = _tsStems[next].video_stem || _tsStems[next];
+  tsStemSelect.value = stem;
+  _onStemChange();
+}
+function _prevFolder() {
+  if (!_tsStems.length) return;
+  const cur = _tsStems.findIndex(s => (s.video_stem || s) === _tsStem);
+  const prev = (cur - 1 + _tsStems.length) % _tsStems.length;
+  const stem = _tsStems[prev].video_stem || _tsStems[prev];
+  tsStemSelect.value = stem;
+  _onStemChange();
+}
+function _cycleMode() {
+  const modes = ["random", "hybrid", "manual"];
+  const cur = [...document.querySelectorAll('input[name="ts-mode"]')].find(el => el.checked)?.value || "random";
+  const next = modes[(modes.indexOf(cur) + 1) % modes.length];
+  document.querySelectorAll('input[name="ts-mode"]').forEach(el => { el.checked = (el.value === next); });
+  _setMode(next);
+}
+
+// ── Wire up ─────────────────────────────────────────────────────
+if (tsOpenBtn)  tsOpenBtn.addEventListener("click", _openPicker);
+if (tsCloseBtn) tsCloseBtn.addEventListener("click", _closePicker);
+if (tsRefreshBtn) tsRefreshBtn.addEventListener("click", () => _loadStems());
+if (tsStemSelect) tsStemSelect.addEventListener("change", _onStemChange);
+if (tsBtnPrev)  tsBtnPrev.addEventListener("click", _prev);
+if (tsBtnNext)  tsBtnNext.addEventListener("click", _next);
+if (tsToggleBtn) tsToggleBtn.addEventListener("click", _toggleCurrentMark);
+if (tsZoom)      tsZoom.addEventListener("input", () => { tsZoomVal.textContent = `${tsZoom.value} %`; _renderFrame(); });
+if (tsMarkerSize) tsMarkerSize.addEventListener("input", () => { tsMarkerSizeVal.textContent = tsMarkerSize.value; _draw(); });
+if (tsShowNames) tsShowNames.addEventListener("change", _draw);
+if (tsCleanStale) tsCleanStale.addEventListener("click", async () => {
+  await _fetchJson("/dlc/project/test-set/marks/clean-stale", { method: "POST" });
+  await _loadMarks();
+  _updateCounters({});
+});
+document.querySelectorAll('input[name="ts-mode"]').forEach(el => {
+  el.addEventListener("change", () => { if (el.checked) _setMode(el.value); });
+});
+
+document.addEventListener("keydown", (ev) => {
+  if (!tsCard || tsCard.classList.contains("hidden")) return;
+  if (ev.target && /input|textarea|select/i.test(ev.target.tagName)) return;
+  switch (ev.key) {
+    case "ArrowLeft":  if (ev.shiftKey) _prevFolder(); else _prev(); ev.preventDefault(); break;
+    case "ArrowRight": if (ev.shiftKey) _nextFolder(); else _next(); ev.preventDefault(); break;
+    case "Home": _firstInFolder(); ev.preventDefault(); break;
+    case "End":  _lastInFolder();  ev.preventDefault(); break;
+    case "t": case "T": _toggleCurrentMark(); ev.preventDefault(); break;
+    case "m": case "M": _cycleMode(); ev.preventDefault(); break;
+    case "Escape": _closePicker(); break;
+  }
+});

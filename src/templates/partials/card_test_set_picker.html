@@ -1,0 +1,101 @@
+    <section class="card dlc-theme hidden" id="test-set-picker-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>Test-set Picker</h2>
+        <div style="display:flex;gap:.4rem;align-items:center">
+          <button class="btn-sm" id="ts-inspect-btn" title="Inspect frozen splits for an existing training dataset">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Inspect splits
+          </button>
+          <button class="btn-sm" id="btn-close-test-set-picker" title="Close test-set picker">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            Close
+          </button>
+        </div>
+      </div>
+      <p class="subtitle">Mark frames to include in the <strong>test set</strong>. Marks persist per project and survive new iterations.</p>
+
+      <div style="font-size:.75rem;color:var(--text-dim);background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:.45rem .65rem;margin-bottom:.75rem;display:grid;grid-template-columns:auto 1fr;gap:.2rem .75rem;line-height:1.5">
+        <span style="color:var(--text)"><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></span>            <span>Previous / next frame</span>
+        <span style="color:var(--text)"><kbd>T</kbd></span>                            <span>Toggle current frame in test set</span>
+        <span style="color:var(--text)"><kbd>Shift</kbd>+<kbd>&larr;</kbd> / <kbd>&rarr;</kbd></span> <span>Previous / next labeled-data folder</span>
+        <span style="color:var(--text)"><kbd>Home</kbd> / <kbd>End</kbd></span>        <span>First / last frame in folder</span>
+        <span style="color:var(--text)"><kbd>M</kbd></span>                            <span>Cycle split-mode preference (Random &rarr; Hybrid &rarr; Manual)</span>
+        <span style="color:var(--text)"><kbd>Esc</kbd></span>                          <span>Close picker</span>
+      </div>
+
+      <!-- Split mode chip row -->
+      <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.75rem;flex-wrap:wrap">
+        <span style="font-size:.78rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em">Split mode</span>
+        <label class="ts-mode-chip"><input type="radio" name="ts-mode" value="random" checked> <span>Random</span></label>
+        <label class="ts-mode-chip"><input type="radio" name="ts-mode" value="hybrid"> <span>Hybrid</span></label>
+        <label class="ts-mode-chip"><input type="radio" name="ts-mode" value="manual"> <span>Full manual</span></label>
+        <button id="ts-clean-stale-btn" class="btn-sm" style="margin-left:auto" title="Remove marks whose frame file no longer exists on disk">Clean stale</button>
+      </div>
+
+      <!-- Folder selector -->
+      <div style="margin-bottom:.75rem">
+        <label style="display:block;font-size:.78rem;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.4rem">Labeled frames folder</label>
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <div class="select-wrap" style="flex:1">
+            <select id="ts-stem-select">
+              <option value="">— select video —</option>
+            </select>
+            <svg class="chevron" width="16" height="16" viewBox="0 0 16 16"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+          </div>
+          <button class="btn-sm" id="ts-refresh-btn" title="Refresh labeled-data folder list">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <!-- Player section -->
+      <div id="ts-player-section" class="hidden">
+
+        <!-- Frame navigation -->
+        <div class="fl-frame-nav">
+          <button class="btn-sm fe-ctrl-btn" id="ts-btn-prev" title="Previous frame (&larr;)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <span class="fe-frame-counter" id="ts-frame-info">Frame 0 / 0</span>
+          <button class="btn-sm fe-ctrl-btn" id="ts-btn-next" title="Next frame (&rarr;)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <span class="fe-time-display" id="ts-frame-name" style="font-size:.72rem"></span>
+          <button id="ts-toggle-mark" class="btn-sm" title="Toggle current frame in test set (T)"
+                  style="margin-left:auto;padding:.3rem .8rem;border:1px solid var(--border);border-radius:4px">
+            <span id="ts-mark-label">&#9744; Mark for test set</span>
+          </button>
+        </div>
+
+        <!-- Viewer controls -->
+        <div style="display:flex;align-items:center;gap:1.2rem;margin:.5rem 0;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim)">
+            Viewer size
+            <input type="range" id="ts-zoom" min="50" max="300" value="100" step="25" style="width:80px;accent-color:var(--accent)">
+            <span id="ts-zoom-val" style="min-width:2.5rem;text-align:right;color:var(--text)">100 %</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim)">
+            Marker size
+            <input type="range" id="ts-marker-size" min="1" max="24" value="4" style="width:80px;accent-color:var(--accent)">
+            <span id="ts-marker-size-val" style="min-width:1.4rem;text-align:right;color:var(--text)">4</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.78rem;color:var(--text-dim);cursor:pointer">
+            <input type="checkbox" id="ts-show-names" checked style="accent-color:var(--accent)">
+            Show names
+          </label>
+        </div>
+
+        <!-- Canvas -->
+        <div class="fl-canvas-wrap">
+          <canvas id="ts-canvas"></canvas>
+        </div>
+
+        <!-- Counters -->
+        <p style="font-size:.78rem;color:var(--text-dim);margin-top:.6rem">
+          <span id="ts-folder-counter">0 / 0 marked in this folder</span>
+          —
+          <span id="ts-project-counter">0 / 0 marked in project</span>
+        </p>
+      </div>
+    </section>
