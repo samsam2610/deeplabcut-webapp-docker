@@ -185,7 +185,7 @@ def test_new_ids_are_unique_across_partials():
         "ia-file-browser-pane", "ia-hide-no-h5",
         "ia-frame-img", "ia-overlay-canvas", "ia-btn-play",
         "ia-btn-prev", "ia-btn-next", "ia-seek", "ia-frame-counter",
-        "ia-zoom", "ia-zoom-val", "ia-skip-n", "ia-frame-spinner",
+        "ia-zoom", "ia-zoom-val", "ia-skip-n",
         "ia-overlay-toggle",
         "ia-overlay-threshold", "ia-overlay-marker-size",
         "ia-bp-list-wrap", "ia-bp-chips",
@@ -254,6 +254,23 @@ def test_seek_slider_sits_above_controls_row_in_markup():
     assert i_seek < i_prev, (
         "ia-seek must appear before ia-btn-prev in the partial markup "
         "(slider above controls is the canonical video-player layout)"
+    )
+
+
+def test_frame_spinner_removed_from_inline_card():
+    """Regression guard: the inline card must NOT carry a frame-loading
+    spinner. The original draft used `<div id="ia-frame-spinner">Loading…
+    </div>` with no `position:absolute`, so every show/hide shifted the
+    seek slider + controls + curation panel up and down — the user
+    called the experience "clunky" and asked us to remove it.
+
+    If we ever want loading feedback back, build it as a
+    position:absolute overlay so it doesn't displace the document flow.
+    """
+    html = (PARTIALS / "card_inline_analysis.html").read_text()
+    assert 'id="ia-frame-spinner"' not in html, (
+        "ia-frame-spinner must be removed from the inline card "
+        "(it shifts the UI below the player on every frame load)"
     )
 
 
