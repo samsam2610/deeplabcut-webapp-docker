@@ -243,6 +243,34 @@ def _read_collected_data_csv_rows(csv_path: Path) -> list[tuple[str, str]] | Non
         return None
 
 
+class _LenientUnpickler(pickle.Unpickler):
+    """Pickle loader that substitutes a placeholder when a referenced class's
+    module is unavailable in this container.
+
+    DLC's Documentation_data-*.pickle stores ruamel.yaml ScalarFloat objects
+    (plus other DLC-config types) alongside the numpy arrays we actually need.
+    The flask container doesn't have ruamel.yaml installed; standard
+    `pickle.load` raises ModuleNotFoundError on those references. This stub
+    lets payload[1] (train indices) and payload[2] (test indices) be recovered
+    — both are plain numpy arrays with no special class dependencies.
+    """
+
+    def find_class(self, module: str, name: str):  # type: ignore[override]
+        try:
+            return super().find_class(module, name)
+        except (ModuleNotFoundError, ImportError, AttributeError):
+            class _MissingClassStub:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def __setstate__(self, state):
+                    pass
+
+            _MissingClassStub.__module__ = module
+            _MissingClassStub.__name__ = name
+            return _MissingClassStub
+
+
 def _read_pickle_dataset(pickle_path: Path) -> dict | None:
     """Parse a Documentation_data-*.pickle and return train/test frame tuples.
 
@@ -261,7 +289,7 @@ def _read_pickle_dataset(pickle_path: Path) -> dict | None:
     shuffle = int(m.group("shuffle"))
     try:
         with open(pickle_path, "rb") as f:
-            payload = pickle.load(f)
+            payload = _LenientUnpickler(f).load()
     except Exception:
         return None
     if not isinstance(payload, (list, tuple)) or len(payload) < 3:

@@ -148,3 +148,83 @@ def test_inspect_missing_iteration_empty(flask_test_client, tmp_path):
     assert rv.status_code == 200
     body = rv.get_json()
     assert body["datasets"] == []
+
+
+def test_inspect_pickle_with_missing_module_class_still_decodes(flask_test_client, tmp_path):
+    """Real DLC pickles contain ruamel.yaml objects (in payload[0] and the
+    train_fraction slot) that aren't importable in the flask container. The
+    lenient unpickler must skip those classes so the train/test indices we
+    actually need can still be recovered.
+
+    Locks in the fix for the 'No frozen split found' bug reported against
+    the real DREADD-Ali project: the standard pickle.load raised
+    ModuleNotFoundError on a ruamel reference, the bare except swallowed it,
+    and the endpoint returned datasets: [].
+    """
+    import csv as _csv
+    import pickle as _pickle
+
+    proj = tmp_path / "Lenient-2026-05-20"
+    proj.mkdir()
+    (proj / "config.yaml").write_text(
+        "scorer: T\nproject_path: " + str(proj) + "\niteration: 0\n"
+    )
+
+    folder = proj / "training-datasets" / "iteration-0" / "UnaugmentedDataSet_T0"
+    folder.mkdir(parents=True)
+
+    # CSV with two rows
+    csv_path = folder / "CollectedData_T.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["scorer", "", "", "T", "T"])
+        w.writerow(["bodyparts", "", "", "dummy", "dummy"])
+        w.writerow(["coords", "", "", "x", "y"])
+        w.writerow(["labeled-data", "vid_a", "img0001.png", "0", "0"])
+        w.writerow(["labeled-data", "vid_a", "img0002.png", "0", "0"])
+
+    # Construct a pickle whose payload[0] references a class from a module
+    # that doesn't exist on disk — mirroring what DLC writes for ruamel
+    # objects. We can't `pickle.dump` an object whose class's __module__
+    # points to a missing module (pickle validates at write time), so we
+    # build the byte stream by hand and then concat with a normal pickle
+    # for the indices.
+    #
+    # Strategy: pickle.dumps a real list [missing_obj, arr1, arr2, float],
+    # then byte-substitute the module name of the first item to something
+    # that doesn't exist. We choose `pickle` (always present) as the
+    # placeholder, then mangle its name in the bytes.
+    real = [object(), np.array([0], dtype=np.int64), np.array([1], dtype=np.int64), 0.5]
+    raw = _pickle.dumps(real)
+    # pickle's GLOBAL opcode for `builtins.object` is `c__builtin__\nobject\n`
+    # (protocol-dependent) or it's emitted as `\x8c\x08builtins\x94\x8c\x06object\x94\x93\x94`
+    # in higher protocols. Replace `builtins` with a string of the same length
+    # that doesn't name a real module.
+    mangled = raw.replace(b"\x08builtins", b"\x08missin99", 1)
+    if mangled == raw:
+        # Fall back to legacy GLOBAL opcode
+        mangled = raw.replace(b"cbuiltins\n", b"cmissin99\n", 1)
+    assert mangled != raw, "test setup failed: couldn't mangle builtins in pickle stream"
+
+    out = folder / "Documentation_data-T_50shuffle1.pickle"
+    with open(out, "wb") as f:
+        f.write(mangled)
+
+    # Sanity: standard pickle.load fails on this file (the bug we're guarding against)
+    with pytest.raises(Exception):
+        with open(out, "rb") as f:
+            _pickle.load(f)
+
+    _activate(flask_test_client, proj)
+    rv = _client(flask_test_client).get(
+        "/dlc/project/training-dataset/inspect?iteration=0&shuffle=1"
+    )
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert len(body["datasets"]) == 1, (
+        f"Expected 1 dataset; got {body['datasets']}. The lenient unpickler "
+        f"isn't recovering the indices when payload[0] references a missing module."
+    )
+    ds = body["datasets"][0]
+    assert ds["train"] == [{"video_stem": "vid_a", "image_name": "img0001.png"}]
+    assert ds["test"]  == [{"video_stem": "vid_a", "image_name": "img0002.png"}]
