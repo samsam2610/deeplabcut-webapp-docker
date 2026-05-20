@@ -1,0 +1,103 @@
+<section class="card dlc-theme hidden" id="inline-analysis-card">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+    <h2>Inline Analysis</h2>
+    <button class="btn-sm" id="btn-close-inline-analysis" title="Close">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      Close
+    </button>
+  </div>
+  <p class="subtitle">Scrub a video, run DLC on N frames forward against a warm-in-memory model, and merge into the canonical .h5/.csv.</p>
+
+  <!-- File picker -->
+  <div style="margin-bottom:.6rem">
+    <label style="display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--text-dim);margin-bottom:.3rem;cursor:pointer">
+      <input type="checkbox" id="ia-hide-no-h5"
+             style="accent-color:var(--accent);width:13px;height:13px"/>
+      Hide videos without h5
+    </label>
+    <div style="display:flex;gap:.4rem;margin-bottom:.3rem">
+      <input id="ia-video-path" type="text" placeholder="/paste/a/video.mp4"
+             style="flex:1;font-family:var(--mono);font-size:.78rem;padding:.3rem .5rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)"/>
+      <button class="btn-sm" id="ia-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Up">↑ Up</button>
+      <button class="btn-sm" id="ia-browse-btn">Browse</button>
+    </div>
+    <div id="ia-file-browser-pane" class="hidden" style="max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem"></div>
+  </div>
+
+  <!-- Analysis params -->
+  <div style="margin-bottom:.6rem;padding:.5rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)">
+    <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:.4rem">Analysis Parameters</div>
+    <div class="scorer-row" style="margin-bottom:.4rem">
+      <label for="ia-snapshot">Snapshot</label>
+      <select id="ia-snapshot" style="flex:1"></select>
+      <button class="btn-sm" id="ia-refresh-snapshots" title="Refresh">↺</button>
+    </div>
+    <div class="scorer-row" style="margin-bottom:.4rem">
+      <label for="ia-batch-size">Batch size</label>
+      <input type="number" id="ia-batch-size" value="8" min="1" max="256" style="width:5rem"/>
+    </div>
+    <div class="scorer-row" style="margin-bottom:.4rem">
+      <label for="ia-frames-per-click">Frames per click</label>
+      <input type="number" id="ia-frames-per-click" value="500" min="1" max="10000" style="width:6rem"/>
+    </div>
+    <div class="scorer-row" style="margin-bottom:.4rem">
+      <label for="ia-keep-warm-seconds">Keep worker warm (s)</label>
+      <input type="number" id="ia-keep-warm-seconds" value="300" min="10" max="3600" style="width:6rem"/>
+      <span id="ia-warm-indicator" style="margin-left:auto;font-size:.74rem;color:var(--text-dim)">○ cold</span>
+    </div>
+    <div class="scorer-row" style="margin-bottom:.4rem">
+      <label for="ia-save-csv">Save as CSV</label>
+      <input type="checkbox" id="ia-save-csv" checked style="width:auto"/>
+    </div>
+    <button id="ia-btn-analyze-range" class="btn-sm" style="width:100%;margin-top:.3rem">▶ Analyze 500 frames from frame 0</button>
+    <div id="ia-last-run-status" style="margin-top:.3rem;font-size:.74rem;color:var(--text-dim)"></div>
+  </div>
+
+  <!-- Frame player (mirrors viewer.js DOM with `ia-` prefix) -->
+  <div id="ia-player-section">
+    <div id="ia-video-wrap" style="position:relative">
+      <img id="ia-frame-img" alt="" style="max-width:100%;display:block"/>
+      <canvas id="ia-overlay-canvas" style="position:absolute;left:0;top:0;pointer-events:auto"></canvas>
+      <div id="ia-frame-spinner" class="hidden">Loading…</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:.45rem;margin-top:.3rem">
+      <button class="btn-sm" id="ia-btn-prev">◀</button>
+      <button class="btn-sm" id="ia-btn-play">▶</button>
+      <button class="btn-sm" id="ia-btn-next">▶</button>
+      <label style="font-size:.75rem">step <input type="number" id="ia-skip-n" value="1" min="1" max="100" style="width:50px"></label>
+      <span id="ia-frame-counter" style="font-family:var(--mono);font-size:.78rem">Frame 0 / 0</span>
+      <span style="flex:1"></span>
+      <label style="font-size:.75rem">zoom
+        <input type="range" id="ia-zoom" min="50" max="300" value="100" step="25" style="width:80px">
+        <span id="ia-zoom-val">100 %</span>
+      </label>
+    </div>
+    <input type="range" id="ia-seek" min="0" max="0" value="0" step="1" style="width:100%;margin-top:.2rem"/>
+  </div>
+
+  <!-- Kinematic markers -->
+  <div style="margin-top:.5rem;padding:.4rem;border:1px solid var(--border);border-radius:6px">
+    <label style="display:flex;align-items:center;gap:.4rem;font-size:.75rem">
+      <input type="checkbox" id="ia-overlay-toggle"> Show markers
+      threshold <input type="range" id="ia-overlay-threshold" min="0" max="1" step="0.05" value="0.6" style="width:80px">
+      marker size <input type="number" id="ia-overlay-marker-size" value="6" min="1" max="20" style="width:50px">
+    </label>
+    <div style="display:flex;gap:.4rem;align-items:center;margin-top:.3rem;font-size:.75rem">
+      Primary <select id="ia-overlay-primary-select" style="flex:1"></select>
+      <select id="ia-overlay-add-compare" style="flex:1"><option value="">+ add comparison…</option></select>
+    </div>
+    <div id="ia-overlay-compare-list" style="display:flex;flex-direction:column;gap:.2rem;margin-top:.2rem"></div>
+  </div>
+
+  <!-- Marker adjustment banner -->
+  <div id="ia-marker-edit-banner" class="hidden" style="margin-top:.4rem;padding:.4rem .5rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;font-size:.74rem">
+    <span id="ia-edit-count">0</span> frames edited — unsaved
+    <button id="ia-btn-save-edits" class="btn-sm" style="margin-left:.4rem">Save</button>
+    <button id="ia-btn-discard-edits" class="btn-sm" style="margin-left:.2rem">Discard</button>
+  </div>
+
+  <!-- (Dataset Curation panel — opt-in, lazy mount via factory.setCurationFrameHook) -->
+  <div style="margin-top:.4rem;font-size:.74rem;color:var(--text-dim)">
+    <label><input type="checkbox" id="ia-curation-toggle"> Dataset Curation</label>
+  </div>
+</section>
