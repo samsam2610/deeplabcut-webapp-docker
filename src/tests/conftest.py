@@ -8,6 +8,7 @@ CRITICAL CONSTRAINTS ENFORCED HERE:
 """
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shutil
@@ -22,7 +23,12 @@ import pytest
 
 # ── Set DATA_DIR env BEFORE any app.py import (app.py calls mkdir at module level) ──
 # Use a session-scoped temp dir so the value is stable across all tests.
+# IMPORTANT: register an atexit cleanup so the dir is removed even when pytest
+# crashes mid-run. A prior agent's test session leaked ~614 GB of duplicated
+# DLC projects into /tmp/pytest-of-sam/ + /tmp/dlc_test_session_*/ over many
+# interrupted runs — this MUST NOT happen again.
 _SESSION_TMP = tempfile.mkdtemp(prefix="dlc_test_session_")
+atexit.register(shutil.rmtree, _SESSION_TMP, True)
 _SESSION_DATA_DIR = os.path.join(_SESSION_TMP, "data")
 _SESSION_USER_DIR = os.path.join(_SESSION_TMP, "user-data")
 os.makedirs(_SESSION_DATA_DIR, exist_ok=True)
@@ -206,9 +212,13 @@ def flask_test_client(fake_redis, tmp_path):
             flask_app_module.app.config["SECRET_KEY"] = "test-secret"
             flask_app_module.app.config["WTF_CSRF_ENABLED"] = False
 
+            # NOTE: Don't push an extra test_request_context() here. Tests that
+            # call client.session_transaction() manage their own request context
+            # internally; an outer wrapper would conflict and produce LookupError
+            # at teardown (the inner pop dislodges the ContextVar the outer
+            # tries to pop). The test_client already handles ctx for `.get/.post`.
             with flask_app_module.app.test_client() as client:
-                with flask_app_module.app.test_request_context():
-                    yield client, flask_app_module, fake_redis, data_dir, user_data_dir
+                yield client, flask_app_module, fake_redis, data_dir, user_data_dir
 
 
 @pytest.fixture(scope="function")
@@ -221,6 +231,32 @@ def dlc_project_in_data_dir(flask_test_client, dlc_sandbox_project):
     dest = data_dir / dlc_sandbox_project.name
     shutil.copytree(str(dlc_sandbox_project), str(dest))
     return client, app_module, redis_client, dest
+
+
+# ── Aggressive tmp cleanup (DON'T REMOVE — prevents catastrophic disk fill) ────
+# The dlc_sandbox_project fixture copies a multi-GB DLC project on every test.
+# pytest's default retention keeps 3 sessions of tmp_path dirs; combined with
+# repeated e2e runs, this leaked 614 GB into /tmp/pytest-of-sam before being
+# caught. Force the basetemp to clear after every session — failed-test
+# debugging output is preserved via --tb=short and per-test logging.
+def pytest_sessionfinish(session, exitstatus):
+    """Aggressively remove this session's pytest tmp basetemp on exit.
+
+    Runs even on test failure so debug data doesn't grow unbounded. If you
+    need to inspect tmp_path artefacts for a single failing test, comment
+    out this hook and re-run that test in isolation — do not let multi-session
+    pytest runs accumulate.
+    """
+    try:
+        basetemp = getattr(session.config, "_tmp_path_factory", None)
+        if basetemp is None:
+            return
+        root = basetemp.getbasetemp()
+        # Only wipe a path that looks like a pytest tmp dir, to avoid surprises.
+        if root and "pytest-" in str(root) and root.exists():
+            shutil.rmtree(str(root), ignore_errors=True)
+    except Exception as exc:  # never fail the test run because of cleanup
+        print(f"[conftest cleanup] could not remove pytest basetemp: {exc}")
 
 
 def vram_cleanup_check():
