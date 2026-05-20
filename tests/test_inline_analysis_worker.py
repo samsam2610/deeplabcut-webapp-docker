@@ -316,3 +316,202 @@ class TestSessionHelpers:
         dlc_tasks._bump_activity(ia_redis, "u1", "k1")
         new_la = float(ia_redis._hstore["inline:session:u1:k1"]["last_activity"])
         assert new_la > 0
+
+
+# ── _run_range ────────────────────────────────────────────────────────────
+
+
+def _run_range_kw(scorer="SCORER", multi_animal=False):
+    """Build the kwargs _run_range takes (scorer/model_cfg/multi_animal
+    come from DLCLoader at session boot, not from the runner)."""
+    return dict(
+        scorer=scorer,
+        model_cfg={"metadata": {"bodyparts": ["nose"]}},
+        multi_animal=multi_animal,
+    )
+
+
+def _stub_create_df(predictions, dlc_scorer, multi_animal, model_cfg,
+                    output_path, output_prefix, save_as_csv):
+    """Stub that returns a DataFrame with the same row count as
+    predictions and a minimal MultiIndex column set, indexed 0..N-1
+    (matches the real create_df_from_prediction's contract for
+    _run_range's reindex step)."""
+    n = len(predictions)
+    cols = pd.MultiIndex.from_product(
+        [[dlc_scorer], ["nose"], ["x", "y", "likelihood"]],
+        names=["scorer", "bodyparts", "coords"],
+    )
+    return pd.DataFrame(0.0, index=list(range(n)), columns=cols)
+
+
+class TestRunRange:
+    def test_run_range_writes_h5_and_csv(self, tmp_path):
+        video_path = tmp_path / "v.mp4"
+        video_path.write_bytes(b"")
+        runner = MagicMock()
+
+        def fake_video_inference(vit, pose_runner):
+            return [{}, {}, {}]
+
+        with _mock_to_hdf_writes_bytes(), \
+             patch.object(dlc_tasks, "video_inference", fake_video_inference), \
+             patch.object(dlc_tasks, "_dlc_create_df_from_prediction", _stub_create_df), \
+             patch.object(dlc_tasks, "_RangeVideoIterator",
+                          lambda p, indices: iter([None] * len(indices))):
+            req = {
+                "req_id": "r1", "video_path": str(video_path),
+                "start_frame": 100, "n_frames": 3, "batch_size": 8,
+                "save_as_csv": True, "snapshot_path": "snap.pt",
+            }
+            n_analyzed, n_skipped = dlc_tasks._run_range(
+                runner, req=req, **_run_range_kw()
+            )
+        assert n_analyzed == 3
+        assert n_skipped == 0
+        h5_path = dlc_tasks._resolve_h5_path(str(video_path), "SCORER")
+        csv_path = h5_path.with_suffix(".csv")
+        assert h5_path.is_file()
+        assert csv_path.is_file()
+
+    def test_run_range_skips_already_done(self, tmp_path):
+        video_path = tmp_path / "v.mp4"
+        video_path.write_bytes(b"")
+        runner = MagicMock()
+
+        # Seed existing h5 by directly creating the in-memory DataFrame
+        # then using a stubbed read path. We bypass the real h5 write by
+        # patching pd.read_hdf to return our seed.
+        seed_df = _df_with_index([100, 101])
+
+        called_with = []
+
+        def fake_video_inference(vit, pose_runner):
+            called_with.append(list(vit))
+            return [{}]  # one prediction (frame 102 only)
+
+        h5_path = dlc_tasks._resolve_h5_path(str(video_path), "S")
+        # Pretend the h5 already exists on disk by touching the file +
+        # patching pd.read_hdf.
+        h5_path.write_bytes(b"placeholder")
+
+        with _mock_to_hdf_writes_bytes(), \
+             patch("pandas.read_hdf", return_value=seed_df), \
+             patch.object(dlc_tasks, "video_inference", fake_video_inference), \
+             patch.object(dlc_tasks, "_dlc_create_df_from_prediction", _stub_create_df), \
+             patch.object(dlc_tasks, "_RangeVideoIterator",
+                          lambda p, indices: iter([None] * len(indices))):
+            req = {
+                "req_id": "r1", "video_path": str(video_path),
+                "start_frame": 100, "n_frames": 3, "batch_size": 8,
+                "save_as_csv": False, "snapshot_path": "snap.pt",
+            }
+            n_analyzed, n_skipped = dlc_tasks._run_range(
+                runner, req=req, **_run_range_kw(scorer="S")
+            )
+        assert n_analyzed == 1
+        assert n_skipped == 2
+
+    def test_run_range_no_op_when_everything_done(self, tmp_path):
+        video_path = tmp_path / "v.mp4"
+        video_path.write_bytes(b"")
+        runner = MagicMock()
+        seed_df = _df_with_index([100, 101, 102])
+        h5_path = dlc_tasks._resolve_h5_path(str(video_path), "S")
+        h5_path.write_bytes(b"placeholder")
+        req = {
+            "req_id": "r1", "video_path": str(video_path),
+            "start_frame": 100, "n_frames": 3, "batch_size": 8,
+            "save_as_csv": False, "snapshot_path": "snap.pt",
+        }
+        # video_inference + create_df_from_prediction must NOT be called.
+        with patch("pandas.read_hdf", return_value=seed_df), \
+             patch.object(dlc_tasks, "video_inference",
+                          side_effect=AssertionError("must not be called")), \
+             patch.object(dlc_tasks, "_dlc_create_df_from_prediction",
+                          side_effect=AssertionError("must not be called")):
+            n_analyzed, n_skipped = dlc_tasks._run_range(
+                runner, req=req, **_run_range_kw(scorer="S")
+            )
+        assert n_analyzed == 0
+        assert n_skipped == 3
+
+
+# ── _dlc_inline_session_inner ────────────────────────────────────────────
+
+
+def _fake_loader_factory():
+    def _make(**kwargs):
+        m = MagicMock()
+        m.scorer.return_value = "S"
+        m.model_cfg = {"metadata": {"bodyparts": ["nose"]}}
+        m.project_cfg = {"multianimalproject": False}
+        return m
+    return _make
+
+
+class TestInlineSessionTask:
+    def test_session_exits_on_ttl_with_no_work(self, ia_redis, tmp_path):
+        """TTL=1s, empty queue → exits within ~1s; status=expired."""
+        runner_factory = MagicMock(return_value=MagicMock())
+        with patch.object(dlc_tasks, "_dlc_loader_cls", _fake_loader_factory()), \
+             patch.object(dlc_tasks, "_dlc_apis_utils",
+                          MagicMock(get_pose_inference_runner=runner_factory)):
+            t0 = _ia_time_now()
+            dlc_tasks._dlc_inline_session_inner(
+                ia_redis,
+                user_id="u1",
+                config_path=str(tmp_path / "config.yaml"),
+                snap_key="k1",
+                snapshot_path="snap.pt",
+                shuffle=1,
+                trainingsetindex=0,
+                batch_size=8,
+                ttl=1,
+            )
+            elapsed = _ia_time_now() - t0
+        assert elapsed < 3.0, f"expected exit within ~1s+slop, took {elapsed}"
+        h = ia_redis._hstore["inline:session:u1:k1"]
+        assert h["status"] == "expired"
+
+    def test_session_exits_on_control_stop(self, ia_redis, tmp_path):
+        runner_factory = MagicMock(return_value=MagicMock())
+        ia_redis.set("inline:control:u1:k1", "stop")
+        with patch.object(dlc_tasks, "_dlc_loader_cls", _fake_loader_factory()), \
+             patch.object(dlc_tasks, "_dlc_apis_utils",
+                          MagicMock(get_pose_inference_runner=runner_factory)):
+            dlc_tasks._dlc_inline_session_inner(
+                ia_redis, user_id="u1", config_path="cfg",
+                snap_key="k1", snapshot_path="snap.pt",
+                shuffle=1, trainingsetindex=0, batch_size=8, ttl=60,
+            )
+        h = ia_redis._hstore["inline:session:u1:k1"]
+        assert h["status"] == "stopped"
+
+    def test_session_runs_one_range_then_exits(self, ia_redis, tmp_path):
+        import json as _json
+        video_path = tmp_path / "v.mp4"
+        video_path.write_bytes(b"")
+        req = {
+            "req_id": "r1", "video_path": str(video_path),
+            "start_frame": 0, "n_frames": 1, "batch_size": 8,
+            "save_as_csv": False, "snapshot_path": "snap.pt",
+        }
+        ia_redis.lpush("inline:queue:u1:k1", _json.dumps(req))
+        runner_factory = MagicMock(return_value=MagicMock())
+        with _mock_to_hdf_writes_bytes(), \
+             patch.object(dlc_tasks, "_dlc_loader_cls", _fake_loader_factory()), \
+             patch.object(dlc_tasks, "_dlc_apis_utils",
+                          MagicMock(get_pose_inference_runner=runner_factory)), \
+             patch.object(dlc_tasks, "video_inference", return_value=[{}]), \
+             patch.object(dlc_tasks, "_dlc_create_df_from_prediction", _stub_create_df), \
+             patch.object(dlc_tasks, "_RangeVideoIterator",
+                          lambda p, indices: iter([None] * len(indices))):
+            dlc_tasks._dlc_inline_session_inner(
+                ia_redis, user_id="u1", config_path="cfg",
+                snap_key="k1", snapshot_path="snap.pt",
+                shuffle=1, trainingsetindex=0, batch_size=8, ttl=2,
+            )
+        r = ia_redis._hstore["inline:result:r1"]
+        assert r["status"] == "done"
+        assert int(r["n_analyzed"]) == 1
