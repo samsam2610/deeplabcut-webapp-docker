@@ -514,6 +514,7 @@ Explicit non-goals for v1:
 These are deliberate corner-cuts. Each item should remain visible until paid off:
 
 1. **`viewer.js` migration to `analyzed_frame_player.js`.** Per §4, we copy rather than refactor. Until the migration, every player/overlay/curation fix must be hand-mirrored in both files. Both files carry a header comment pointing at the other and at this spec. Follow-up PR title prefix: `refactor(viewer): migrate to analyzed_frame_player factory`.
+1a. **Dataset Curation handlers duplicated.** The Curation IIFE in `viewer.js` (lines 1106-1110 + 1875-2348) was copied verbatim into `inline_analysis.js` with `va-` → `ia-` ID renames per the polish spec §1.5 (2026-05-20). The duplication is tracked here and slated for migration to the shared factory in the SAME follow-up PR that migrates the player. Until then, every curation bugfix must be hand-mirrored in both files.
 2. **`docs/policies/file-browser-component.md` → `shared-components.md`.** The policy doc must broaden to cover the new factory. Either rename or add a sibling. The static-analysis tests follow.
 3. **`_meta.pickle.inline_analysis_snapshots` is unversioned.** Forward-compatible today (unknown fields ignored). If strict versioning becomes important, introduce `meta_version: int`.
 4. **DLC internal API dependency.** Worker depends on `utils.get_pose_inference_runner`, `VideoIterator`, `video_inference`. These are public-ish but unversioned. A monthly smoke against the installed DLC version catches drift; we adapt at the same call sites `analyze_videos` itself uses.
