@@ -56,9 +56,9 @@ async function _fetchJson(url, opts) {
 }
 
 async function _loadStems() {
-  // dlc_list_labeled_frames returns the list directly (it is the array — see src/dlc/labeling.py)
+  // dlc_list_labeled_frames returns { video_stems: [{video_stem, frames[]}, ...] }
   const body = await _fetchJson("/dlc/project/labeled-frames");
-  _tsStems = Array.isArray(body) ? body : (body.frames || []);
+  _tsStems = body.video_stems || body.frames || (Array.isArray(body) ? body : []);
   tsStemSelect.innerHTML = '<option value="">— select video —</option>';
   for (const s of _tsStems) {
     const stem = s.video_stem || s;
