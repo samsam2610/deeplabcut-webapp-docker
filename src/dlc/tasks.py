@@ -3036,6 +3036,18 @@ def _run_range(runner, *, scorer, model_cfg, multi_animal, req):
     to_analyze = _filter_skip_already_done(target, existing)
     n_skipped  = len(target) - len(to_analyze)
     if not to_analyze:
+        # All requested frames already analyzed. Still dense-ify the h5 if it
+        # has gaps (this also self-heals h5s written by earlier worker
+        # versions that produced sparse rows — viewer endpoints index
+        # positionally and silently return nothing for sparse-indexed h5s).
+        if existing is not None and len(existing):
+            max_idx = int(existing.index.max())
+            if len(existing) != max_idx + 1:
+                dense = existing.reindex(_ia_pd.RangeIndex(
+                    start=0, stop=max_idx + 1, name=existing.index.name))
+                _atomic_write_h5(h5_path, dense)
+                if req.get("save_as_csv"):
+                    _atomic_write_csv(h5_path.with_suffix(".csv"), dense)
         return 0, n_skipped
 
     # Resolve callables from module globals at call time (tests patch them).
@@ -3066,6 +3078,17 @@ def _run_range(runner, *, scorer, model_cfg, multi_animal, req):
     df_range.index = _ia_pd.Index(to_analyze, name=df_range.index.name)
 
     df_merge = df_range if existing is None else df_range.combine_first(existing)
+    # Dense-ify: reindex to a contiguous 0..max range with NaN for unanalyzed
+    # frames. DLC's canonical analyze_videos h5 is dense (one row per video
+    # frame). Downstream tools — /dlc/viewer/frame-poses-batch,
+    # filterpredictions, create_labeled_video — index rows POSITIONALLY
+    # (`poses_np[fn]`), so a sparse h5 with rows only at the analyzed frame
+    # indices silently returns nothing for those frames. Filling gaps with
+    # NaN restores the canonical contract; NaN rows compress well in HDF5.
+    if len(df_merge):
+        max_idx = int(df_merge.index.max())
+        df_merge = df_merge.reindex(_ia_pd.RangeIndex(
+            start=0, stop=max_idx + 1, name=df_merge.index.name))
     _atomic_write_h5(h5_path, df_merge)
     if req.get("save_as_csv"):
         _atomic_write_csv(h5_path.with_suffix(".csv"), df_merge)
