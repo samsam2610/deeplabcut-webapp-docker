@@ -102,6 +102,10 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
     },
     onPick: (path) => {
       videoPath.value = path;
+      // Collapse the file browser so the player has room — the path input,
+      // Browse button, and hide-no-h5 toggle stay visible above the player.
+      // Clicking Browse re-opens the pane via picker.openAt. See polish spec §1.2.
+      if (browserPane) browserPane.classList.add("hidden");
       loadVideo(path);
     },
   });
