@@ -126,10 +126,12 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
       const r = await fetch("/dlc/project/snapshots");
       if (!r.ok) return;
       const data = await r.json();
+      // /dlc/project/snapshots returns { snapshots: [{label, iteration,
+      // shuffle, index, rel_path}, ...] }. Use rel_path (project-relative).
       (data.snapshots || []).forEach(s => {
         const opt = document.createElement("option");
-        opt.value = s.path || s;
-        opt.textContent = s.label || s.path || s;
+        opt.value = s.rel_path;
+        opt.textContent = s.label || s.rel_path;
         snapshotSel.appendChild(opt);
       });
     } catch (e) { /* silent */ }
