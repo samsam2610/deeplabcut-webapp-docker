@@ -103,8 +103,136 @@
     <button id="ia-btn-discard-edits" class="btn-sm" style="margin-left:.2rem">Discard</button>
   </div>
 
-  <!-- (Dataset Curation panel — opt-in, lazy mount via factory.setCurationFrameHook) -->
-  <div style="margin-top:.4rem;font-size:.74rem;color:var(--text-dim)">
-    <label><input type="checkbox" id="ia-curation-toggle"> Dataset Curation</label>
+  <!-- ── Dataset Curation Panel (mirror of card_viewer.html lines 240-371, va-→ia-) ── -->
+  <div id="ia-curation-panel" style="margin-top:.65rem;padding:.5rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
+
+    <!-- Toggle row (master kill-switch for the curation tools) -->
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:.45rem;font-size:.8rem;font-weight:500;cursor:pointer;user-select:none">
+        <input type="checkbox" id="ia-curation-toggle"
+               style="accent-color:var(--accent);width:14px;height:14px"/>
+        Dataset Curation
+      </label>
+      <span id="ia-curation-status" class="fe-extract-status" style="font-size:.73rem;flex:1;min-width:0"></span>
+    </div>
+
+    <!-- Existing inner rows wrapped in a hidden-by-default div -->
+    <div id="ia-curation-controls" class="hidden" style="margin-top:.5rem">
+
+      <!-- Row 1: Quick-extract + Add to Dataset -->
+      <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.4rem">
+        <button class="btn-sm" id="ia-extract-frame-btn"
+          title="Save the raw video frame as a lossless PNG in labeled-data/ (no CSV entry)">
+          Extract Frame
+        </button>
+        <button class="btn-sm" id="ia-add-to-dataset-btn"
+          style="background:var(--accent);color:#fff;font-weight:500"
+          title="Extract frame + add blank entry to CollectedData CSV/H5">
+          + Add to Dataset
+        </button>
+      </div>
+
+      <!-- Row 2: Batch extraction controls -->
+      <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.4rem">
+        <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">Batch:</label>
+        <input type="number" id="ia-batch-count" value="10" min="1" max="500"
+          style="width:4.2rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem"
+          title="Number of frames to add" />
+        <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">every</label>
+        <input type="number" id="ia-batch-step" value="30" min="1" max="9999"
+          style="width:4.2rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem"
+          title="Frame step between additions" />
+        <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">frames</label>
+        <button class="btn-sm" id="ia-batch-add-btn"
+          title="Add multiple frames to the dataset starting from the current frame">
+          Batch Add
+        </button>
+      </div>
+
+      <!-- Row 3: Companion CSV status -->
+      <div id="ia-csv-section" style="border-top:1px solid var(--border);padding-top:.45rem;margin-top:.05rem">
+        <!-- No CSV found -->
+        <div id="ia-csv-none">
+          <span style="font-size:.79rem;color:var(--text-dim)">No companion CSV found.</span>
+          <div style="margin-top:.35rem;display:flex;align-items:center;gap:.5rem">
+            <button class="btn-sm btn-create" id="ia-create-csv-btn">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Create CSV
+            </button>
+            <span id="ia-csv-create-status" class="fe-extract-status"></span>
+          </div>
+        </div>
+        <!-- CSV loaded -->
+        <div id="ia-csv-loaded" class="hidden" style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+          <span style="font-size:.74rem;color:var(--text-dim);flex-shrink:0">CSV:</span>
+          <span id="ia-csv-path-display" style="font-family:var(--mono);font-size:.71rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
+        </div>
+      </div>
+
+      <!-- Row 3b: CSV timelines — status first, notes second -->
+      <div id="ia-csv-bars" class="hidden" style="margin-top:.5rem">
+        <div id="ia-status-bar-wrap" class="hidden">
+          <div style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;margin-bottom:.18rem">
+            <span class="fe-csv-bar-label" style="flex:1;margin:0">Status</span>
+            <button id="ia-status-prev-btn" class="btn-sm" disabled title="Previous status frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">◀</button>
+            <button id="ia-status-next-btn" class="btn-sm" disabled title="Next status frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">▶</button>
+          </div>
+          <canvas id="ia-status-canvas" height="12"
+            style="width:100%;display:block;cursor:pointer;border-radius:3px;background:var(--surface)"
+            title="Click to jump to frame"></canvas>
+          <div id="ia-status-chips" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
+        </div>
+        <div id="ia-note-bar-wrap" class="hidden" style="margin-top:.4rem">
+          <div style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;margin-bottom:.18rem">
+            <span class="fe-csv-bar-label" style="flex:1;margin:0">Notes</span>
+            <button id="ia-note-prev-btn" class="btn-sm" disabled title="Previous note frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">◀</button>
+            <button id="ia-note-next-btn" class="btn-sm" disabled title="Next note frame" style="padding:.12rem .4rem;font-size:.72rem;line-height:1">▶</button>
+          </div>
+          <canvas id="ia-note-canvas" height="12"
+            style="width:100%;display:block;cursor:pointer;border-radius:3px;background:var(--surface)"
+            title="Click to jump to frame"></canvas>
+          <div id="ia-note-chips" class="fe-tag-filter" style="margin-top:.3rem;min-height:1rem"></div>
+        </div>
+      </div>
+
+      <!-- Row 4: Annotation panel (shown when CSV loaded) -->
+      <div id="ia-annot-panel" class="hidden" style="margin-top:.5rem">
+        <div style="font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:.4rem">
+          Annotate frame <span id="ia-annot-frame-num" style="color:var(--text);font-family:var(--mono)">0</span>
+        </div>
+        <!-- Status row -->
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.35rem">
+          <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0;min-width:3rem">Status</label>
+          <input type="number" id="ia-status-input" value="0"
+            style="width:4.5rem;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .4rem" />
+          <button id="ia-save-status-btn" class="btn-sm btn-create" style="padding:.28rem .65rem">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Save Status
+          </button>
+        </div>
+        <!-- Note row -->
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.45rem">
+          <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap;flex-shrink:0;min-width:3rem">Note</label>
+          <input type="text" id="ia-note-input" placeholder="Enter note…"
+            style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.26rem .45rem" />
+          <button id="ia-save-note-btn" class="btn-sm btn-create" style="padding:.28rem .65rem">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Save Note
+          </button>
+        </div>
+        <span id="ia-annot-save-status" class="fe-extract-status"></span>
+        <!-- Add note tag -->
+        <div style="margin-top:.45rem;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+          <input type="text" id="ia-new-tag-input" placeholder="New note tag…"
+            style="flex:1;min-width:110px;font-size:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.24rem .4rem" />
+          <button id="ia-add-tag-btn" class="btn-sm">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Tag
+          </button>
+        </div>
+      </div>
+    </div>
+    <!-- end ia-curation-controls -->
   </div>
+  <!-- ── end Dataset Curation Panel ──────────────────────────── -->
 </section>
