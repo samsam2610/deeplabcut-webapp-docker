@@ -226,3 +226,93 @@ class TestResolveH5Path:
     def test_works_with_arbitrary_extension(self):
         result = dlc_tasks._resolve_h5_path("/x/y/video.avi", scorer_name="SCORER")
         assert result.name == "videoSCORER.h5"
+
+
+# ── Session-lifecycle helpers (Redis-backed) ──────────────────────────────
+
+
+@pytest.fixture
+def ia_redis(fake_redis):
+    """Fresh FakeRedis state for each test (the session-scoped fake
+    persists ._hstore / ._store dicts; we clear them per test)."""
+    fake_redis._store.clear()
+    fake_redis._hstore.clear()
+    fake_redis._zsets.clear()
+    fake_redis._sets.clear()
+    fake_redis._lists.clear()
+    return fake_redis
+
+
+class TestSessionHelpers:
+    def test_publish_status_sets_hash_fields(self, ia_redis):
+        dlc_tasks._publish_status(
+            ia_redis, user_id="u1", snap_key="k1",
+            status="ready", project="proj", snapshot_path="snap.pt",
+        )
+        h = ia_redis._hstore["inline:session:u1:k1"]
+        assert h["status"] == "ready"
+        assert h["project"] == "proj"
+        assert h["snapshot_path"] == "snap.pt"
+        assert "last_activity" in h
+
+    def test_publish_result_sets_done(self, ia_redis):
+        dlc_tasks._publish_result(
+            ia_redis, req_id="r1",
+            status="done", n_analyzed=42, n_skipped=8,
+        )
+        h = ia_redis._hstore["inline:result:r1"]
+        assert h["status"] == "done"
+        assert int(h["n_analyzed"]) == 42
+        assert int(h["n_skipped"]) == 8
+
+    def test_publish_result_truncates_long_error(self, ia_redis):
+        dlc_tasks._publish_result(
+            ia_redis, req_id="r2", status="error",
+            error="x" * 5000,
+        )
+        h = ia_redis._hstore["inline:result:r2"]
+        assert len(h["error"]) <= 500
+
+    def test_control_says_stop_consumes_key(self, ia_redis):
+        ia_redis.set("inline:control:u1:k1", "stop")
+        assert dlc_tasks._control_says_stop(ia_redis, "u1", "k1") is True
+        # Second call returns False — key was consumed.
+        assert dlc_tasks._control_says_stop(ia_redis, "u1", "k1") is False
+
+    def test_idle_budget_caps_at_ttl(self, ia_redis):
+        dlc_tasks._publish_status(
+            ia_redis, user_id="u1", snap_key="k1",
+            status="ready", project="proj", snapshot_path="snap.pt",
+        )
+        budget = dlc_tasks._idle_budget(ia_redis, "u1", "k1", ttl=300)
+        assert 290 <= budget <= 300, f"fresh activity → near-full TTL, got {budget}"
+
+    def test_idle_budget_floor_when_expired(self, ia_redis):
+        dlc_tasks._publish_status(
+            ia_redis, user_id="u1", snap_key="k1",
+            status="ready", project="proj", snapshot_path="snap.pt",
+        )
+        # Pretend 500s have passed.
+        ia_redis._hstore["inline:session:u1:k1"]["last_activity"] = str(
+            _ia_time_now() - 500
+        )
+        budget = dlc_tasks._idle_budget(ia_redis, "u1", "k1", ttl=300)
+        assert budget == 1, "expired sessions still get a minimal poll budget of 1s"
+
+    def test_blpop_returns_none_when_empty(self, ia_redis):
+        assert dlc_tasks._blpop(ia_redis, "missing-queue", timeout=1) is None
+
+    def test_blpop_returns_value_when_present(self, ia_redis):
+        ia_redis.lpush("q1", "hello")
+        assert dlc_tasks._blpop(ia_redis, "q1", timeout=1) == "hello"
+
+    def test_bump_activity_updates_timestamp(self, ia_redis):
+        dlc_tasks._publish_status(
+            ia_redis, user_id="u1", snap_key="k1",
+            status="ready", project="proj", snapshot_path="snap.pt",
+        )
+        # Force an old timestamp.
+        ia_redis._hstore["inline:session:u1:k1"]["last_activity"] = "0"
+        dlc_tasks._bump_activity(ia_redis, "u1", "k1")
+        new_la = float(ia_redis._hstore["inline:session:u1:k1"]["last_activity"])
+        assert new_la > 0

@@ -2814,3 +2814,123 @@ def _update_meta_pickle(meta_path, df, snapshot):
     with open(str(tmp), "wb") as f:
         _ia_pickle.dump(meta, f)
     _ia_os.replace(str(tmp), str(meta_path))
+
+
+# ── Inline Analysis: session lifecycle helpers (Redis IPC) ───────────────
+
+def _session_key(user_id, snap_key):
+    return f"inline:session:{user_id}:{snap_key}"
+
+
+def _queue_key(user_id, snap_key):
+    return f"inline:queue:{user_id}:{snap_key}"
+
+
+def _control_key(user_id, snap_key):
+    return f"inline:control:{user_id}:{snap_key}"
+
+
+def _result_key(req_id):
+    return f"inline:result:{req_id}"
+
+
+def _publish_status(redis_, user_id, snap_key, status, **fields):
+    """Set the session hash status + last_activity, refresh TTL."""
+    mapping = {"status": status, "last_activity": str(_ia_time.time()), **fields}
+    key = _session_key(user_id, snap_key)
+    redis_.hset(key, mapping=mapping)
+    try:
+        redis_.expire(key, 3600)
+    except Exception:
+        pass
+
+
+def _publish_result(redis_, req_id, status, n_analyzed=0, n_skipped=0, error=""):
+    """Set the result hash. Errors are truncated to 500 chars."""
+    mapping = {
+        "status":     status,
+        "n_analyzed": str(int(n_analyzed)),
+        "n_skipped":  str(int(n_skipped)),
+        "error":      str(error)[:500],
+    }
+    key = _result_key(req_id)
+    redis_.hset(key, mapping=mapping)
+    try:
+        redis_.expire(key, 300)
+    except Exception:
+        pass
+
+
+def _bump_activity(redis_, user_id, snap_key):
+    key = _session_key(user_id, snap_key)
+    redis_.hset(key, "last_activity", str(_ia_time.time()))
+
+
+def _control_says_stop(redis_, user_id, snap_key):
+    """One-shot consume of inline:control:<…>. Returns True iff key was 'stop'."""
+    key = _control_key(user_id, snap_key)
+    val = redis_.get(key)
+    if val is None:
+        return False
+    if isinstance(val, bytes):
+        val = val.decode("utf-8", "replace")
+    if val != "stop":
+        return False
+    redis_.delete(key)
+    return True
+
+
+def _idle_budget(redis_, user_id, snap_key, ttl):
+    """Seconds remaining before TTL eviction, clamped to >= 1."""
+    key = _session_key(user_id, snap_key)
+    last = None
+    if hasattr(redis_, "hget"):
+        try:
+            last = redis_.hget(key, "last_activity")
+        except Exception:
+            last = None
+    if last is None:
+        try:
+            last = redis_._hstore.get(key, {}).get("last_activity")
+        except AttributeError:
+            last = None
+    if last is None:
+        return ttl
+    if isinstance(last, bytes):
+        last = last.decode("utf-8", "replace")
+    try:
+        elapsed = _ia_time.time() - float(last)
+    except (TypeError, ValueError):
+        return ttl
+    return max(1, int(ttl - elapsed))
+
+
+def _blpop(redis_, queue_key, timeout):
+    """Wrapper around redis BLPOP that returns the raw value or None on timeout.
+
+    In production, the real client blocks server-side for up to `timeout`
+    seconds. FakeRedis (tests) implements blpop as immediate-or-None via
+    the lpop fallback.
+    """
+    res = None
+    if hasattr(redis_, "blpop"):
+        try:
+            res = redis_.blpop(queue_key, timeout=timeout)
+        except Exception:
+            res = None
+    if not res:
+        # Fallback for fakes without blpop: try a single lpop.
+        try:
+            v = redis_.lpop(queue_key)
+        except Exception:
+            return None
+        if v is None:
+            return None
+        if isinstance(v, bytes):
+            v = v.decode("utf-8", "replace")
+        return v
+    # real redis returns (key, value); decode bytes
+    _, val = res
+    if isinstance(val, bytes):
+        val = val.decode("utf-8", "replace")
+    return val
