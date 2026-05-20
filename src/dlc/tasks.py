@@ -2739,3 +2739,463 @@ def dlc_postprocess_run(
 def _utc_now_iso():
     import datetime as _dt
     return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+# ── Inline Analysis: helpers ──────────────────────────────────────────────
+# Lives at the bottom of tasks.py alongside dlc_inline_session.
+# See docs/superpowers/specs/2026-05-20-inline-analysis-design.md.
+
+import json as _ia_json
+import os as _ia_os
+import pandas as _ia_pd
+import pickle as _ia_pickle
+import time as _ia_time
+from pathlib import Path as _IAPath
+
+# Lazy DLC primitives — kept at module level so tests can patch the names.
+# At test-time on the host (and in production), these are populated only
+# when actually called (the bare names below are sentinels patched in tests).
+try:
+    from deeplabcut.pose_estimation_pytorch.apis import (  # type: ignore
+        VideoIterator as _DLC_VideoIterator,
+        video_inference as _dlc_video_inference,
+    )
+    from deeplabcut.pose_estimation_pytorch.apis import utils as _dlc_apis_utils_mod
+    from deeplabcut.pose_estimation_pytorch.apis.videos import (  # type: ignore
+        create_df_from_prediction as _dlc_create_df_from_prediction_fn,
+    )
+    from deeplabcut.pose_estimation_pytorch.data import (  # type: ignore
+        DLCLoader as _DLCLoaderCls,
+    )
+    VideoIterator = _DLC_VideoIterator
+    video_inference = _dlc_video_inference
+    _dlc_apis_utils = _dlc_apis_utils_mod
+    _dlc_create_df_from_prediction = _dlc_create_df_from_prediction_fn
+    _dlc_loader_cls = _DLCLoaderCls
+except ImportError:
+    VideoIterator = None
+    video_inference = None
+    _dlc_apis_utils = None
+    _dlc_create_df_from_prediction = None
+    _dlc_loader_cls = None
+
+
+def _filter_skip_already_done(target_frames, existing_df):
+    """Return the subset of target_frames that need re-analysis.
+
+    A frame needs re-analysis if it's missing from existing_df or if every
+    value in its row is NaN (matches DLC's own dynamic-cropping semantics).
+    """
+    if existing_df is None:
+        return list(target_frames)
+    have = existing_df.index
+    return [
+        f for f in target_frames
+        if f not in have or existing_df.loc[f].isna().all()
+    ]
+
+
+_RangeVideoIterator_cls = None  # built on first call, then cached
+
+def _RangeVideoIterator(video_path, indices):
+    """Return a VideoIterator subclass instance that yields only `indices`,
+    in order, jumping via set_to_frame on each __next__.
+
+    Must be a real subclass of DLC's VideoIterator (not a wrapper) because
+    video_inference does isinstance() checks — a wrapper falls through to
+    "treat-as-path" and str-coerces the object into a bogus filename.
+
+    The subclass is built lazily on first call because VideoIterator is
+    only imported inside the worker container, not at module load time.
+    Tests patch `tasks.VideoIterator` (and/or `tasks._RangeVideoIterator`)
+    directly; they don't trigger this path.
+    """
+    global _RangeVideoIterator_cls
+    if _RangeVideoIterator_cls is None:
+        _VI = globals().get("VideoIterator")
+        if _VI is None:
+            raise RuntimeError(
+                "deeplabcut not installed — VideoIterator unavailable"
+            )
+
+        class _Range(_VI):
+            def __init__(self, video_path, indices):
+                super().__init__(video_path)
+                self._indices = list(indices)
+                self._pos = 0
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if self._pos >= len(self._indices):
+                    raise StopIteration
+                idx = self._indices[self._pos]
+                self._pos += 1
+                self.set_to_frame(idx)
+                return self.read_frame()
+
+        _RangeVideoIterator_cls = _Range
+    return _RangeVideoIterator_cls(video_path, indices)
+
+
+def _atomic_write_h5(path, df):
+    """Write df to <path> atomically via .tmp + os.replace."""
+    path = _IAPath(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    df.to_hdf(str(tmp), key="df_with_missing", mode="w", format="table")
+    _ia_os.replace(str(tmp), str(path))
+
+
+def _atomic_write_csv(path, df):
+    """Write df.to_csv(path) atomically via .tmp + os.replace."""
+    path = _IAPath(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    df.to_csv(str(tmp))
+    _ia_os.replace(str(tmp), str(path))
+
+
+def _resolve_h5_path(video_path, scorer_name):
+    """Compute the canonical companion .h5 path for (video, scorer)."""
+    p = _IAPath(video_path)
+    return p.with_name(p.stem + scorer_name + ".h5")
+
+
+def _resolve_meta_path(h5_path):
+    """Map a DLC analyzed .h5 to its sibling _meta.pickle path."""
+    h5_path = _IAPath(h5_path)
+    return h5_path.with_name(h5_path.stem + "_meta.pickle")
+
+
+def _update_meta_pickle(meta_path, df, snapshot):
+    """Write/update meta.pickle, recording the contributing snapshot.
+
+    Adds the snapshot name to `inline_analysis_snapshots: set[str]` (created
+    if missing). Older DLC tools ignore unknown fields.
+    """
+    meta_path = _IAPath(meta_path)
+    if meta_path.is_file():
+        try:
+            with open(str(meta_path), "rb") as f:
+                meta = _ia_pickle.load(f)
+        except (OSError, _ia_pickle.UnpicklingError, EOFError):
+            meta = {}
+    else:
+        meta = {}
+    snaps = meta.get("inline_analysis_snapshots")
+    if not isinstance(snaps, set):
+        snaps = set(snaps or ())
+    snaps.add(snapshot)
+    meta["inline_analysis_snapshots"] = snaps
+    tmp = meta_path.with_suffix(meta_path.suffix + ".tmp")
+    with open(str(tmp), "wb") as f:
+        _ia_pickle.dump(meta, f)
+    _ia_os.replace(str(tmp), str(meta_path))
+
+
+# ── Inline Analysis: session lifecycle helpers (Redis IPC) ───────────────
+
+def _session_key(user_id, snap_key):
+    return f"inline:session:{user_id}:{snap_key}"
+
+
+def _queue_key(user_id, snap_key):
+    return f"inline:queue:{user_id}:{snap_key}"
+
+
+def _control_key(user_id, snap_key):
+    return f"inline:control:{user_id}:{snap_key}"
+
+
+def _result_key(req_id):
+    return f"inline:result:{req_id}"
+
+
+def _publish_status(redis_, user_id, snap_key, status, **fields):
+    """Set the session hash status + last_activity, refresh TTL."""
+    mapping = {"status": status, "last_activity": str(_ia_time.time()), **fields}
+    key = _session_key(user_id, snap_key)
+    redis_.hset(key, mapping=mapping)
+    try:
+        redis_.expire(key, 3600)
+    except Exception:
+        pass
+
+
+def _publish_result(redis_, req_id, status, n_analyzed=0, n_skipped=0, error="", scorer=""):
+    """Set the result hash. Errors are truncated to 500 chars.
+
+    `scorer` is included on success so the browser can construct the
+    canonical h5 path (video_stem + scorer + ".h5") without an extra
+    round-trip. See polish spec §1.4.
+    """
+    mapping = {
+        "status":     status,
+        "n_analyzed": str(int(n_analyzed)),
+        "n_skipped":  str(int(n_skipped)),
+        "error":      str(error)[:500],
+        "scorer":     str(scorer or ""),
+    }
+    key = _result_key(req_id)
+    redis_.hset(key, mapping=mapping)
+    try:
+        redis_.expire(key, 300)
+    except Exception:
+        pass
+
+
+def _bump_activity(redis_, user_id, snap_key):
+    key = _session_key(user_id, snap_key)
+    redis_.hset(key, "last_activity", str(_ia_time.time()))
+
+
+def _control_says_stop(redis_, user_id, snap_key):
+    """One-shot consume of inline:control:<…>. Returns True iff key was 'stop'."""
+    key = _control_key(user_id, snap_key)
+    val = redis_.get(key)
+    if val is None:
+        return False
+    if isinstance(val, bytes):
+        val = val.decode("utf-8", "replace")
+    if val != "stop":
+        return False
+    redis_.delete(key)
+    return True
+
+
+def _idle_budget(redis_, user_id, snap_key, ttl):
+    """Seconds remaining before TTL eviction, clamped to >= 1."""
+    key = _session_key(user_id, snap_key)
+    last = None
+    if hasattr(redis_, "hget"):
+        try:
+            last = redis_.hget(key, "last_activity")
+        except Exception:
+            last = None
+    if last is None:
+        try:
+            last = redis_._hstore.get(key, {}).get("last_activity")
+        except AttributeError:
+            last = None
+    if last is None:
+        return ttl
+    if isinstance(last, bytes):
+        last = last.decode("utf-8", "replace")
+    try:
+        elapsed = _ia_time.time() - float(last)
+    except (TypeError, ValueError):
+        return ttl
+    return max(1, int(ttl - elapsed))
+
+
+def _blpop(redis_, queue_key, timeout):
+    """Wrapper around redis BLPOP that returns the raw value or None on timeout.
+
+    In production, the real client blocks server-side for up to `timeout`
+    seconds. FakeRedis (tests) implements blpop as immediate-or-None via
+    the lpop fallback.
+    """
+    res = None
+    if hasattr(redis_, "blpop"):
+        try:
+            res = redis_.blpop(queue_key, timeout=timeout)
+        except Exception:
+            res = None
+    if not res:
+        # Fallback for fakes without blpop: try a single lpop.
+        try:
+            v = redis_.lpop(queue_key)
+        except Exception:
+            return None
+        if v is None:
+            return None
+        if isinstance(v, bytes):
+            v = v.decode("utf-8", "replace")
+        return v
+    # real redis returns (key, value); decode bytes
+    _, val = res
+    if isinstance(val, bytes):
+        val = val.decode("utf-8", "replace")
+    return val
+
+
+def _run_range(runner, *, scorer, model_cfg, multi_animal, req):
+    """Inference + merge for one range request.
+
+    Uses DLC's canonical create_df_from_prediction to build the DataFrame
+    (then reindexes 0..N-1 → actual frame numbers), so the result has the
+    same MultiIndex shape as analyze_videos' output.
+
+    Returns (n_analyzed, n_skipped). Raises on hard failure (caught by the
+    task loop, which publishes status=error).
+    """
+    h5_path  = _resolve_h5_path(req["video_path"], scorer)
+    existing = _ia_pd.read_hdf(str(h5_path)) if h5_path.exists() else None
+
+    target     = list(range(req["start_frame"], req["start_frame"] + req["n_frames"]))
+    to_analyze = _filter_skip_already_done(target, existing)
+    n_skipped  = len(target) - len(to_analyze)
+    if not to_analyze:
+        return 0, n_skipped
+
+    # Resolve callables from module globals at call time (tests patch them).
+    _RVIter  = globals().get("_RangeVideoIterator")
+    _vidinf  = globals().get("video_inference")
+    _make_df = globals().get("_dlc_create_df_from_prediction")
+    if _RVIter is None or _vidinf is None or _make_df is None:
+        raise RuntimeError(
+            "DLC primitives missing — VideoIterator/video_inference/"
+            "create_df_from_prediction not available"
+        )
+
+    vit = _RVIter(req["video_path"], indices=to_analyze)
+    predictions = _vidinf(vit, pose_runner=runner)
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as scratch:
+        df_range = _make_df(
+            predictions=predictions,
+            dlc_scorer=scorer,
+            multi_animal=multi_animal,
+            model_cfg=model_cfg,
+            output_path=scratch,
+            output_prefix=f"range_{req['req_id']}",
+            save_as_csv=False,
+        )
+    # create_df_from_prediction indexes rows 0..N-1. Re-key to absolute frames.
+    df_range.index = _ia_pd.Index(to_analyze, name=df_range.index.name)
+
+    df_merge = df_range if existing is None else df_range.combine_first(existing)
+    _atomic_write_h5(h5_path, df_merge)
+    if req.get("save_as_csv"):
+        _atomic_write_csv(h5_path.with_suffix(".csv"), df_merge)
+    meta_path = _resolve_meta_path(h5_path)
+    _update_meta_pickle(meta_path, df_merge, snapshot=req["snapshot_path"])
+    return len(to_analyze), n_skipped
+
+
+def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
+                              snapshot_path, shuffle, trainingsetindex,
+                              batch_size, ttl):
+    """Pure-function body of the warm-worker task, testable without Celery.
+
+    Boots a DLCLoader + PoseInferenceRunner once, then BLPOP-loops range
+    requests until TTL elapses or a control:stop signal is received.
+    """
+    queue_key = _queue_key(user_id, snap_key)
+
+    _publish_status(
+        redis_, user_id, snap_key, "warming",
+        snapshot_path=snapshot_path,
+        project=str(_IAPath(config_path).parent.name),
+        started_at=str(_ia_time.time()),
+    )
+
+    # Resolve DLC handles from module globals (tests patch).
+    _LoaderCls = globals().get("_dlc_loader_cls")
+    _apis_utils = globals().get("_dlc_apis_utils")
+    try:
+        if _LoaderCls is None or _apis_utils is None:
+            raise RuntimeError(
+                "DLC primitives missing — DLCLoader / apis.utils not available"
+            )
+        loader = _LoaderCls(
+            config=config_path,
+            trainset_index=trainingsetindex,
+            shuffle=shuffle,
+        )
+        scorer       = loader.scorer(snapshot_path)
+        model_cfg    = loader.model_cfg
+        multi_animal = bool(loader.project_cfg.get("multianimalproject", False))
+        runner = _apis_utils.get_pose_inference_runner(
+            model_config=model_cfg, snapshot_path=snapshot_path,
+            batch_size=batch_size, device=None,
+        )
+    except Exception as exc:
+        _publish_status(
+            redis_, user_id, snap_key, "error",
+            last_error=str(exc)[:500],
+        )
+        return
+
+    _publish_status(
+        redis_, user_id, snap_key, "ready",
+        snapshot_path=snapshot_path,
+        project=str(_IAPath(config_path).parent.name),
+    )
+
+    cached_batch_size = batch_size
+    exit_reason = "expired"
+    while True:
+        if _control_says_stop(redis_, user_id, snap_key):
+            exit_reason = "stopped"
+            break
+        budget = _idle_budget(redis_, user_id, snap_key, ttl)
+        item = _blpop(redis_, queue_key, timeout=budget)
+        if item is None:
+            exit_reason = "expired"
+            break
+        try:
+            req = _ia_json.loads(item)
+        except Exception:
+            continue
+
+        if req.get("batch_size") and req["batch_size"] != cached_batch_size:
+            try:
+                runner = _apis_utils.get_pose_inference_runner(
+                    model_config=model_cfg, snapshot_path=snapshot_path,
+                    batch_size=req["batch_size"], device=None,
+                )
+                cached_batch_size = req["batch_size"]
+            except Exception as exc:
+                _publish_result(
+                    redis_, req["req_id"], "error", error=str(exc),
+                )
+                continue
+
+        try:
+            n_analyzed, n_skipped = _run_range(
+                runner, scorer=scorer, model_cfg=model_cfg,
+                multi_animal=multi_animal, req=req,
+            )
+            _publish_result(
+                redis_, req["req_id"], "done",
+                n_analyzed=n_analyzed, n_skipped=n_skipped,
+                scorer=scorer,
+            )
+        except Exception as exc:
+            _publish_result(
+                redis_, req["req_id"], "error", error=str(exc),
+            )
+        _bump_activity(redis_, user_id, snap_key)
+
+    _publish_status(redis_, user_id, snap_key, exit_reason)
+
+
+def _redis_client_from_celery_app(task):
+    """Resolve a Redis client from inside a Celery task.
+
+    Production: build a fresh client from CELERY_BROKER_URL.
+    Tests: never call the @celery.task path; they call
+    _dlc_inline_session_inner directly with FakeRedis.
+    """
+    import redis as _redis_mod
+    url = _ia_os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
+    return _redis_mod.Redis.from_url(url, decode_responses=True)
+
+
+@celery.task(bind=True, name="tasks.dlc_inline_session", acks_late=False)
+def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
+                       shuffle, trainingsetindex, batch_size, ttl):
+    """Long-lived warm-worker session for one (user, project, snapshot) triple.
+
+    acks_late=False — we don't want this task redelivered on broker restart;
+    a fresh /session/start dispatches a new one.
+
+    See docs/superpowers/specs/2026-05-20-inline-analysis-design.md §3.
+    """
+    redis_ = _redis_client_from_celery_app(self)
+    _dlc_inline_session_inner(
+        redis_, user_id, config_path, snap_key, snapshot_path,
+        shuffle, trainingsetindex, batch_size, ttl,
+    )

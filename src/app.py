@@ -180,6 +180,7 @@ from dlc.labeling import bp as _dlc_labeling_bp
 from dlc.test_set_picker import bp as _dlc_test_set_picker_bp
 from dlc.training import bp as _dlc_training_bp
 from dlc.inference import bp as _dlc_inference_bp
+from dlc.inline_analysis import bp as _dlc_inline_analysis_bp
 from dlc.monitoring import bp as _dlc_monitoring_bp
 from dlc.viewer import bp as _dlc_viewer_bp
 from dlc.curator import bp as _dlc_curator_bp
@@ -195,6 +196,7 @@ app.register_blueprint(_dlc_labeling_bp)
 app.register_blueprint(_dlc_test_set_picker_bp)
 app.register_blueprint(_dlc_training_bp)
 app.register_blueprint(_dlc_inference_bp)
+app.register_blueprint(_dlc_inline_analysis_bp)
 app.register_blueprint(_dlc_monitoring_bp)
 app.register_blueprint(_dlc_viewer_bp)
 app.register_blueprint(_dlc_curator_bp)

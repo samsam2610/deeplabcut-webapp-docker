@@ -25,6 +25,7 @@ ANALYZE    = ROOT / "src" / "static" / "js" / "analyze.js"
 VIEWER     = ROOT / "src" / "static" / "js" / "viewer.js"
 ANNOTATOR  = ROOT / "src" / "static" / "js" / "annotator.js"
 POSTPROC   = ROOT / "src" / "static" / "js" / "postprocess.js"
+INLINE_ANALYSIS = ROOT / "src" / "static" / "js" / "inline_analysis.js"
 POLICY_DOC = ROOT / "docs" / "policies" / "file-browser-component.md"
 
 
@@ -144,6 +145,11 @@ def test_annotator_uses_canonical_factory():
 def test_postprocess_uses_canonical_factory():
     _assert_imports_factory(POSTPROC)
     _assert_no_inline_factory(POSTPROC, "_ppMakeEntry")
+
+
+def test_inline_analysis_uses_canonical_factory():
+    _assert_imports_factory(INLINE_ANALYSIS)
+    _assert_no_inline_factory(INLINE_ANALYSIS, "_iaMakeEntry")
 
 
 # ─────────────────────────────────────────────────────────────────────
