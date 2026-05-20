@@ -98,4 +98,31 @@
           <span id="ts-project-counter">0 / 0 marked in project</span>
         </p>
       </div>
+
+      <!-- ── Inspect-mode dialog (hidden by default) ───────────── -->
+      <div id="ts-inspect-dialog" class="hidden"
+           style="position:fixed;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;z-index:1000">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.2rem;min-width:300px;max-width:90vw">
+          <h3 style="margin:0 0 .8rem 0">Inspect frozen splits</h3>
+          <div class="scorer-row" style="margin-bottom:.55rem">
+            <label for="ts-inspect-iter">Iteration</label>
+            <input type="number" id="ts-inspect-iter" min="0" value="0" style="width:5rem">
+          </div>
+          <div class="scorer-row" style="margin-bottom:.85rem">
+            <label for="ts-inspect-shuffle">Shuffle</label>
+            <input type="number" id="ts-inspect-shuffle" min="1" value="1" style="width:5rem">
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:.5rem">
+            <button id="ts-inspect-cancel" class="btn-sm">Cancel</button>
+            <button id="ts-inspect-go" class="btn-sm btn-create">Inspect</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Inspect-mode banner (shown only in inspect mode) -->
+      <div id="ts-inspect-banner" class="hidden"
+           style="background:rgba(255,170,40,0.12);border:1px solid rgba(255,170,40,0.55);border-radius:6px;padding:.45rem .7rem;margin-bottom:.6rem;font-size:.82rem">
+        <span id="ts-inspect-banner-text">Inspect mode</span>
+        <button id="ts-inspect-exit" class="btn-sm" style="margin-left:.7rem">Exit inspect mode</button>
+      </div>
     </section>
