@@ -136,6 +136,46 @@ def test_bp_chips_container_present():
     assert 'id="ia-bp-chips"' in txt
 
 
+def test_full_curation_panel_mirrored_in_inline_analysis_partial():
+    """Polish spec §1.5: every va-* curation ID has an ia-* counterpart
+    in the inline-analysis partial."""
+    txt = (PARTIALS / "card_inline_analysis.html").read_text()
+    required_ia_ids = [
+        # Toggle + master area
+        "ia-curation-panel", "ia-curation-toggle", "ia-curation-controls",
+        "ia-curation-status",
+        # Row 1: Extract + Add
+        "ia-extract-frame-btn", "ia-add-to-dataset-btn",
+        # Row 2: Batch
+        "ia-batch-count", "ia-batch-step", "ia-batch-add-btn",
+        # Row 3: CSV section
+        "ia-csv-section", "ia-csv-none", "ia-csv-loaded",
+        "ia-csv-path-display", "ia-create-csv-btn", "ia-csv-create-status",
+        # Row 3b: Timelines
+        "ia-csv-bars", "ia-status-bar-wrap", "ia-note-bar-wrap",
+        "ia-status-canvas", "ia-note-canvas",
+        "ia-status-chips", "ia-note-chips",
+        "ia-status-prev-btn", "ia-status-next-btn",
+        "ia-note-prev-btn", "ia-note-next-btn",
+        # Row 4: Annotation panel
+        "ia-annot-panel", "ia-annot-frame-num",
+        "ia-status-input", "ia-save-status-btn",
+        "ia-note-input", "ia-save-note-btn",
+        "ia-annot-save-status",
+        "ia-new-tag-input", "ia-add-tag-btn",
+    ]
+    missing = [i for i in required_ia_ids if f'id="{i}"' not in txt]
+    assert not missing, f"missing IDs in curation panel: {missing}"
+
+
+def test_no_va_ids_leaked_into_inline_partial():
+    """Sanity: ensure the rename from va- to ia- was complete."""
+    import re as _re
+    txt = (PARTIALS / "card_inline_analysis.html").read_text()
+    leaked = _re.findall(r'id="(va-[^"]+)"', txt)
+    assert not leaked, f"va- IDs leaked into inline-analysis partial: {leaked}"
+
+
 def test_new_ids_are_unique_across_partials():
     new_ids = {
         "inline-analysis-card", "btn-close-inline-analysis", "btn-open-inline-analysis",

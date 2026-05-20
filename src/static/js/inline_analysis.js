@@ -232,6 +232,12 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
       const info = r.ok ? await r.json() : { fps: 30, nframes: 0 };
       _player.loadVideo(path, info.fps || 30, info.nframes || 0);
       syncAnalyzeButtonLabel();
+      // Notify the curation block (mirrors viewer.js's MutationObserver +
+      // _vaCsvLoad flow) so it can refresh _iaFrameCount/_iaFps and load
+      // the companion CSV.
+      if (typeof window.__iaCurationOnVideo === "function") {
+        window.__iaCurationOnVideo(path, info.fps || 30, info.nframes || 0);
+      }
     } catch (e) { /* silent */ }
   }
 
@@ -324,5 +330,468 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
   function stopRangePolling() {
     if (_activeReqPoll) { clearInterval(_activeReqPoll); _activeReqPoll = null; }
   }
+
+  // ── Dataset Curation (copied from viewer.js per parent spec §4) ──────
+  // DUPLICATION NOTICE: this block is a near-verbatim copy of the
+  // curation IIFE in viewer.js (lines 1106-1110 + 1875-2348) with the
+  // mechanical rename `va-` → `ia-` per polish spec §1.5. When you fix
+  // a bug here, mirror it into viewer.js and vice versa. The migration
+  // plan is the same as the player migration — see
+  // docs/superpowers/specs/2026-05-20-inline-analysis-design.md §4 and
+  // "Known tech debt".
+  (() => {
+    // Module-private mirrors of viewer.js's _vaFrameCount/_vaFps so the
+    // copied helpers can read them without reaching into the factory.
+    let _iaFrameCount = 0;
+    let _iaFps        = 30;
+
+    // ── Master toggle reveal (mirror viewer.js lines 1106-1110) ────────
+    const iaCurationToggle   = document.getElementById("ia-curation-toggle");
+    const iaCurationControls = document.getElementById("ia-curation-controls");
+    iaCurationToggle?.addEventListener("change", () => {
+      iaCurationControls?.classList.toggle("hidden", !iaCurationToggle.checked);
+    });
+
+    const iaCurationStatus  = document.getElementById("ia-curation-status");
+    const iaExtractFrameBtn = document.getElementById("ia-extract-frame-btn");
+    const iaAddToDatasetBtn = document.getElementById("ia-add-to-dataset-btn");
+    const iaBatchAddBtn     = document.getElementById("ia-batch-add-btn");
+    const iaBatchCount      = document.getElementById("ia-batch-count");
+    const iaBatchStep       = document.getElementById("ia-batch-step");
+    const iaCsvNone         = document.getElementById("ia-csv-none");
+    const iaCsvLoaded       = document.getElementById("ia-csv-loaded");
+    const iaCsvPathDisplay  = document.getElementById("ia-csv-path-display");
+    const iaCreateCsvBtn    = document.getElementById("ia-create-csv-btn");
+    const iaCsvCreateStatus = document.getElementById("ia-csv-create-status");
+    const iaCsvBars         = document.getElementById("ia-csv-bars");
+    const iaStatusBarWrap   = document.getElementById("ia-status-bar-wrap");
+    const iaNoteBarWrap     = document.getElementById("ia-note-bar-wrap");
+    const iaStatusCanvas    = document.getElementById("ia-status-canvas");
+    const iaNoteCanvas      = document.getElementById("ia-note-canvas");
+    const iaStatusChips     = document.getElementById("ia-status-chips");
+    const iaNoteChips       = document.getElementById("ia-note-chips");
+    const iaAnnotPanel      = document.getElementById("ia-annot-panel");
+    const iaAnnotFrameNum   = document.getElementById("ia-annot-frame-num");
+    const iaNoteInput       = document.getElementById("ia-note-input");
+    const iaStatusInput     = document.getElementById("ia-status-input");
+    const iaSaveStatusBtn   = document.getElementById("ia-save-status-btn");
+    const iaSaveNoteBtn     = document.getElementById("ia-save-note-btn");
+    const iaAnnotSaveStatus = document.getElementById("ia-annot-save-status");
+    const iaStatusPrevBtn   = document.getElementById("ia-status-prev-btn");
+    const iaStatusNextBtn   = document.getElementById("ia-status-next-btn");
+    const iaNoteStepPrevBtn = document.getElementById("ia-note-prev-btn");
+    const iaNoteStepNextBtn = document.getElementById("ia-note-next-btn");
+    const iaNewTagInput     = document.getElementById("ia-new-tag-input");
+    const iaAddTagBtn       = document.getElementById("ia-add-tag-btn");
+
+    // Companion CSV state
+    let _iaCsvPath          = null;
+    let _iaCsvRows          = [];
+    let _iaUserTags         = [];
+    let _iaUserStatuses     = [];
+    let _iaActiveNoteChips   = new Set();
+    let _iaActiveStatusChips = new Set();
+    let _iaNoteColorMap      = {};
+    let _iaStatusColorMap    = {};
+
+    const _IA_STATUS_COLORS = ["#34d399","#f97316","#e879f9","#facc15","#f87171","#22d3ee","#a78bfa","#fb923c"];
+    const _IA_NOTE_COLORS   = ["#60a5fa","#f472b6","#4ade80","#38bdf8","#e879f9","#a78bfa","#facc15","#fb7185"];
+
+    // ── Status helpers ──────────────────────────────────────────
+    let _curationMsgTimer = null;
+    function _curStatus(msg, isErr) {
+      if (!iaCurationStatus) return;
+      iaCurationStatus.textContent = msg;
+      iaCurationStatus.className   = "fe-extract-status" + (isErr ? " err" : "");
+      if (_curationMsgTimer) clearTimeout(_curationMsgTimer);
+      if (msg && !isErr) {
+        _curationMsgTimer = setTimeout(() => {
+          iaCurationStatus.textContent = "";
+        }, 4000);
+      }
+    }
+
+    function _videoRequestBody(frameNum) {
+      const n = (frameNum !== undefined)
+        ? frameNum
+        : (_player ? _player.getCurrentFrame() : 0);
+      const body = { frame_number: n };
+      const vp = videoPath.value.trim();
+      if (vp) body.video_path = vp;
+      return body;
+    }
+
+    // ── Extract Frame ────────────────────────────────────────────
+    if (iaExtractFrameBtn) {
+      iaExtractFrameBtn.addEventListener("click", async () => {
+        if (!videoPath.value.trim()) {
+          _curStatus("No video loaded — open a video first.", true); return;
+        }
+        iaExtractFrameBtn.disabled = true;
+        _curStatus("Extracting…");
+        try {
+          const res  = await fetch("/dlc/curator/extract-frame", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(_videoRequestBody()),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          _curStatus(
+            data.duplicate
+              ? `Already extracted: ${data.saved}`
+              : `Saved ${data.saved} (${data.folder}, #${data.frame_count})`
+          );
+        } catch (err) {
+          _curStatus(`Extract failed: ${err.message}`, true);
+        } finally {
+          iaExtractFrameBtn.disabled = false;
+        }
+      });
+    }
+
+    // ── Add to Dataset ────────────────────────────────────────────
+    if (iaAddToDatasetBtn) {
+      iaAddToDatasetBtn.addEventListener("click", async () => {
+        if (!videoPath.value.trim()) {
+          _curStatus("No video loaded — open a video first.", true); return;
+        }
+        iaAddToDatasetBtn.disabled = true;
+        _curStatus("Adding to dataset…");
+        try {
+          const res  = await fetch("/dlc/curator/add-to-dataset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(_videoRequestBody()),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          const h5note = data.h5_updated ? " + H5" : "";
+          _curStatus(
+            data.duplicate
+              ? `Already in dataset: ${data.saved}`
+              : `Added ${data.saved} to CSV${h5note} (${data.frame_count} frames)`
+          );
+        } catch (err) {
+          _curStatus(`Failed: ${err.message}`, true);
+        } finally {
+          iaAddToDatasetBtn.disabled = false;
+        }
+      });
+    }
+
+    // ── Batch Add ─────────────────────────────────────────────────
+    if (iaBatchAddBtn) {
+      iaBatchAddBtn.addEventListener("click", async () => {
+        if (!videoPath.value.trim()) {
+          _curStatus("No video loaded — open a video first.", true); return;
+        }
+        const count = Math.max(1, parseInt(iaBatchCount?.value) || 10);
+        const step  = Math.max(1, parseInt(iaBatchStep?.value)  || 30);
+        iaBatchAddBtn.disabled = true;
+        let added = 0, dupes = 0, errors = 0;
+        const start = _player ? _player.getCurrentFrame() : 0;
+        let lastFrame = start;
+        for (let i = 0; i < count; i++) {
+          const frameNum = start + i * step;
+          if (frameNum >= _iaFrameCount) break;
+          lastFrame = frameNum;
+          _curStatus(`Batch adding… ${i + 1}/${count} (frame ${frameNum})`);
+          if (_player) _player.setCurrentFrame(frameNum);
+          try {
+            const res  = await fetch("/dlc/curator/add-to-dataset", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(_videoRequestBody(frameNum)),
+            });
+            const data = await res.json();
+            if (!res.ok) { errors++; continue; }
+            if (data.duplicate) dupes++; else added++;
+          } catch (_) { errors++; }
+        }
+        if (_player && lastFrame !== _player.getCurrentFrame()) {
+          _player.setCurrentFrame(lastFrame);
+        }
+        iaBatchAddBtn.disabled = false;
+        const parts = [];
+        if (added) parts.push(`${added} added`);
+        if (dupes) parts.push(`${dupes} duplicate${dupes !== 1 ? "s" : ""}`);
+        if (errors) parts.push(`${errors} error${errors !== 1 ? "s" : ""}`);
+        _curStatus(`Batch done: ${parts.join(", ") || "nothing to add"}.`, errors > 0 && added === 0);
+      });
+    }
+
+    // ── Timeline bars ────────────────────────────────────────────
+    function _iaDrawCanvas(canvas, rows, field, activeSet, colorMap) {
+      if (!canvas) return;
+      const total = Math.max(_iaFrameCount, 1);
+      const W = Math.round(canvas.getBoundingClientRect().width) || canvas.clientWidth || 600;
+      canvas.width = W;
+      const H    = canvas.height || 12;
+      const ctx  = canvas.getContext("2d");
+      const minW = Math.max(1, Math.round(W / total));
+      ctx.clearRect(0, 0, W, H);
+      if (!activeSet || activeSet.size === 0) return;
+      rows.forEach(row => {
+        const val = row[field];
+        if (!val || (field === "frame_line_status" && val === "0")) return;
+        if (!activeSet.has(val)) return;
+        ctx.fillStyle = colorMap[val] || "#888";
+        const x = Math.round((Number(row.frame_number) / total) * W);
+        ctx.fillRect(x, 0, minW, H);
+      });
+    }
+    function _iaRedrawNoteCanvas()   { _iaDrawCanvas(iaNoteCanvas,   _iaCsvRows, "note",              _iaActiveNoteChips,   _iaNoteColorMap);   }
+    function _iaRedrawStatusCanvas() { _iaDrawCanvas(iaStatusCanvas, _iaCsvRows, "frame_line_status", _iaActiveStatusChips, _iaStatusColorMap); }
+
+    function _iaBuildCsvBars() {
+      if (!iaCsvBars) return;
+      const hasNote   = _iaCsvRows.some(r => r.note);
+      const hasStatus = _iaCsvRows.some(r => r.frame_line_status && r.frame_line_status !== "0");
+      iaCsvBars.classList.toggle("hidden", !hasNote && !hasStatus);
+      iaNoteBarWrap?.classList.toggle("hidden", !hasNote);
+      iaStatusBarWrap?.classList.toggle("hidden", !hasStatus);
+      _iaRedrawNoteCanvas();
+      _iaRedrawStatusCanvas();
+    }
+
+    [iaNoteCanvas, iaStatusCanvas].forEach(canvas => {
+      if (!canvas) return;
+      canvas.addEventListener("click", e => {
+        const rect = canvas.getBoundingClientRect();
+        const fn = Math.round((e.clientX - rect.left) / rect.width * Math.max(_iaFrameCount - 1, 0));
+        if (_player) _player.setCurrentFrame(fn);
+      });
+    });
+
+    function _iaNavAnnot(field, activeSet, dir) {
+      if (!activeSet.size) return;
+      const cur = _player ? _player.getCurrentFrame() : 0;
+      const frames = _iaCsvRows
+        .filter(r => { const v = r[field]; return v && (field !== "frame_line_status" || v !== "0") && activeSet.has(v); })
+        .map(r => r.frame_number)
+        .sort((a, b) => a - b);
+      if (!frames.length) return;
+      if (dir < 0) {
+        const prev = [...frames].reverse().find(f => f < cur);
+        if (prev != null && _player) _player.setCurrentFrame(prev);
+      } else {
+        const next = frames.find(f => f > cur);
+        if (next != null && _player) _player.setCurrentFrame(next);
+      }
+    }
+    if (iaStatusPrevBtn)   iaStatusPrevBtn.addEventListener("click",   () => _iaNavAnnot("frame_line_status", _iaActiveStatusChips, -1));
+    if (iaStatusNextBtn)   iaStatusNextBtn.addEventListener("click",   () => _iaNavAnnot("frame_line_status", _iaActiveStatusChips,  1));
+    if (iaNoteStepPrevBtn) iaNoteStepPrevBtn.addEventListener("click", () => _iaNavAnnot("note",              _iaActiveNoteChips,   -1));
+    if (iaNoteStepNextBtn) iaNoteStepNextBtn.addEventListener("click", () => _iaNavAnnot("note",              _iaActiveNoteChips,    1));
+
+    // ── Companion CSV helpers ────────────────────────────────────
+    function _iaCsvSyncPanel() {
+      if (!_iaCsvPath) return;
+      const cur = _player ? _player.getCurrentFrame() : 0;
+      if (iaAnnotFrameNum) iaAnnotFrameNum.textContent = cur;
+      const row = _iaCsvRows.find(r => r.frame_number === cur);
+      if (iaNoteInput)   iaNoteInput.value   = row ? (row.note || "") : "";
+      if (iaStatusInput) iaStatusInput.value = row ? (row.frame_line_status ?? "0") : "0";
+    }
+
+    function _iaCsvApplyRows(rows, csvPath) {
+      _iaCsvPath  = csvPath;
+      _iaCsvRows  = rows;
+      const noteVals   = [...new Set(rows.map(r => r.note).filter(v => v))];
+      const statusVals = [...new Set(rows.map(r => r.frame_line_status).filter(v => v && v !== "0"))];
+      _iaUserTags     = [...new Set([..._iaUserTags,     ...noteVals])];
+      _iaUserStatuses = [...new Set([..._iaUserStatuses, ...statusVals])];
+
+      if (iaCsvNone)        iaCsvNone.classList.add("hidden");
+      if (iaCsvLoaded)      iaCsvLoaded.classList.remove("hidden");
+      if (iaCsvPathDisplay) { iaCsvPathDisplay.textContent = csvPath; iaCsvPathDisplay.title = csvPath; }
+      if (iaAnnotPanel)     iaAnnotPanel.classList.remove("hidden");
+
+      _iaBuildCsvBars();
+      _iaCsvRenderStatusChips();
+      _iaCsvRenderTags();
+      _iaCsvSyncPanel();
+    }
+
+    function _iaCsvRenderStatusChips() {
+      if (!iaStatusChips) return;
+      iaStatusChips.innerHTML = "";
+      _iaStatusColorMap = {};
+      _iaUserStatuses.forEach((val, i) => {
+        const color = _IA_STATUS_COLORS[i % _IA_STATUS_COLORS.length];
+        _iaStatusColorMap[val] = color;
+        const chip = document.createElement("span");
+        chip.className = "fe-tag-chip" + (_iaActiveStatusChips.has(val) ? " active" : "");
+        chip.textContent = val;
+        chip.style.setProperty("--chip-color", color);
+        chip.title = `Click to show/hide "${val}" on timeline`;
+        chip.addEventListener("click", () => {
+          if (_iaActiveStatusChips.has(val)) _iaActiveStatusChips.delete(val);
+          else _iaActiveStatusChips.add(val);
+          _iaCsvRenderStatusChips();
+          _iaRedrawStatusCanvas();
+        });
+        iaStatusChips.appendChild(chip);
+      });
+      const hasActive = _iaActiveStatusChips.size > 0;
+      if (iaStatusPrevBtn) iaStatusPrevBtn.disabled = !hasActive;
+      if (iaStatusNextBtn) iaStatusNextBtn.disabled = !hasActive;
+    }
+
+    function _iaCsvRenderTags() {
+      if (!iaNoteChips) return;
+      iaNoteChips.innerHTML = "";
+      _iaNoteColorMap = {};
+      _iaUserTags.forEach((tag, i) => {
+        const color = _IA_NOTE_COLORS[i % _IA_NOTE_COLORS.length];
+        _iaNoteColorMap[tag] = color;
+        const chip = document.createElement("span");
+        chip.className = "fe-tag-chip" + (_iaActiveNoteChips.has(tag) ? " active" : "");
+        chip.textContent = tag;
+        chip.style.setProperty("--chip-color", color);
+        chip.title = `Click to show/hide "${tag}" on timeline`;
+        chip.addEventListener("click", () => {
+          if (_iaActiveNoteChips.has(tag)) _iaActiveNoteChips.delete(tag);
+          else _iaActiveNoteChips.add(tag);
+          _iaCsvRenderTags();
+          _iaRedrawNoteCanvas();
+        });
+        iaNoteChips.appendChild(chip);
+      });
+      const hasActive = _iaActiveNoteChips.size > 0;
+      if (iaNoteStepPrevBtn) iaNoteStepPrevBtn.disabled = !hasActive;
+      if (iaNoteStepNextBtn) iaNoteStepNextBtn.disabled = !hasActive;
+    }
+
+    async function _iaCsvSaveStatus() {
+      if (!_iaCsvPath) return;
+      const cur = _player ? _player.getCurrentFrame() : 0;
+      const existingRow = _iaCsvRows.find(r => r.frame_number === cur);
+      const note   = iaNoteInput ? iaNoteInput.value.trim() : (existingRow?.note || "");
+      const status = iaStatusInput ? (iaStatusInput.value || "0") : "0";
+      await _iaCsvDoSave(note, status);
+    }
+    async function _iaCsvSaveNote() {
+      if (!_iaCsvPath) return;
+      const cur = _player ? _player.getCurrentFrame() : 0;
+      const existingRow = _iaCsvRows.find(r => r.frame_number === cur);
+      const note   = iaNoteInput ? iaNoteInput.value.trim() : "";
+      const status = iaStatusInput ? (iaStatusInput.value || "0") : (existingRow?.frame_line_status || "0");
+      await _iaCsvDoSave(note, status);
+    }
+    async function _iaCsvDoSave(note, status) {
+      const cur = _player ? _player.getCurrentFrame() : 0;
+      if (iaAnnotSaveStatus) { iaAnnotSaveStatus.textContent = "Saving…"; iaAnnotSaveStatus.className = "fe-extract-status"; }
+      try {
+        const res  = await fetch("/annotate/save-row", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            csv_path:          _iaCsvPath,
+            frame_number:      cur,
+            note,
+            frame_line_status: status,
+            fps:               _iaFps,
+          }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        const isInteresting = note || (status && status !== "0");
+        const idx = _iaCsvRows.findIndex(r => r.frame_number === cur);
+        if (isInteresting) {
+          const savedRow = data.row || { frame_number: cur, timestamp: (cur / _iaFps).toFixed(3), frame_line_status: status, note };
+          if (idx >= 0) _iaCsvRows[idx] = savedRow;
+          else { _iaCsvRows.push(savedRow); _iaCsvRows.sort((a, b) => a.frame_number - b.frame_number); }
+          if (note && !_iaUserTags.includes(note)) { _iaUserTags.push(note); _iaCsvRenderTags(); }
+          if (status && status !== "0" && !_iaUserStatuses.includes(status)) { _iaUserStatuses.push(status); _iaCsvRenderStatusChips(); }
+        } else {
+          if (idx >= 0) _iaCsvRows.splice(idx, 1);
+        }
+        _iaBuildCsvBars();
+        if (iaAnnotSaveStatus) {
+          iaAnnotSaveStatus.textContent = "Saved";
+          iaAnnotSaveStatus.className   = "fe-extract-status ok";
+          setTimeout(() => { if (iaAnnotSaveStatus?.textContent === "Saved") iaAnnotSaveStatus.textContent = ""; }, 2000);
+        }
+      } catch (err) {
+        if (iaAnnotSaveStatus) { iaAnnotSaveStatus.textContent = `Error: ${err.message}`; iaAnnotSaveStatus.className = "fe-extract-status err"; }
+      }
+    }
+
+    async function _iaCsvLoad(vp) {
+      _iaCsvPath = null; _iaCsvRows = []; _iaUserTags = []; _iaUserStatuses = [];
+      _iaActiveNoteChips = new Set(); _iaActiveStatusChips = new Set();
+      _iaNoteColorMap = {}; _iaStatusColorMap = {};
+      if (iaCsvNone)        iaCsvNone.classList.remove("hidden");
+      if (iaCsvLoaded)      iaCsvLoaded.classList.add("hidden");
+      if (iaCsvBars)        iaCsvBars.classList.add("hidden");
+      if (iaAnnotPanel)     iaAnnotPanel.classList.add("hidden");
+      if (iaCsvCreateStatus) iaCsvCreateStatus.textContent = "";
+      if (!vp) return;
+      try {
+        const res  = await fetch(`/annotate/csv?path=${encodeURIComponent(vp)}`);
+        const data = await res.json();
+        if (data.csv_exists) _iaCsvApplyRows(data.rows, data.csv_path);
+      } catch (_) {}
+    }
+
+    // Wire into the factory's frame-navigation hook so sync runs after
+    // every loadFrame (factory exposes setCurationFrameHook today).
+    function _wireCurationFrameHook() {
+      if (_player && _player.setCurationFrameHook) {
+        _player.setCurationFrameHook(() => _iaCsvSyncPanel());
+      } else {
+        // _player isn't built yet; retry once it appears.
+        setTimeout(_wireCurationFrameHook, 200);
+      }
+    }
+    _wireCurationFrameHook();
+
+    // Create CSV
+    if (iaCreateCsvBtn) {
+      iaCreateCsvBtn.addEventListener("click", async () => {
+        const vp = videoPath.value.trim();
+        if (!vp) return;
+        if (iaCsvCreateStatus) { iaCsvCreateStatus.textContent = `Creating CSV for ${_iaFrameCount} frames…`; iaCsvCreateStatus.className = "fe-extract-status"; }
+        try {
+          const res  = await fetch("/annotate/create-csv", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ video_path: vp, fps: _iaFps, frame_count: _iaFrameCount }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+          if (iaCsvCreateStatus) iaCsvCreateStatus.textContent = "";
+          _iaCsvApplyRows(data.rows, data.csv_path);
+        } catch (err) {
+          if (iaCsvCreateStatus) { iaCsvCreateStatus.textContent = `Error: ${err.message}`; iaCsvCreateStatus.className = "fe-extract-status err"; }
+        }
+      });
+    }
+    if (iaSaveStatusBtn) iaSaveStatusBtn.addEventListener("click", _iaCsvSaveStatus);
+    if (iaSaveNoteBtn)   iaSaveNoteBtn.addEventListener("click",   _iaCsvSaveNote);
+    if (iaAddTagBtn) {
+      iaAddTagBtn.addEventListener("click", () => {
+        const tag = iaNewTagInput ? iaNewTagInput.value.trim() : "";
+        if (!tag) return;
+        if (!_iaUserTags.includes(tag)) { _iaUserTags.push(tag); _iaCsvRenderTags(); }
+        if (iaNewTagInput) iaNewTagInput.value = "";
+      });
+    }
+    if (iaNewTagInput) {
+      iaNewTagInput.addEventListener("keydown", e => {
+        if (e.key === "Enter") { e.preventDefault(); iaAddTagBtn?.click(); }
+      });
+    }
+
+    // Public hook the outer scope (loadVideo) calls so we can refresh
+    // _iaFrameCount/_iaFps and trigger companion-CSV load.
+    window.__iaCurationOnVideo = function (vp, fps, frameCount) {
+      _iaFrameCount = frameCount || 0;
+      _iaFps        = fps || 30;
+      _iaCsvLoad(vp);
+    };
+  })(); // end Dataset Curation (inline-analysis copy)
 
 })();
