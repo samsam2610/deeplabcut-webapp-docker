@@ -300,27 +300,61 @@ document.addEventListener("keydown", (ev) => {
 });
 
 // ── Inspect mode ────────────────────────────────────────────────
-const tsInspectDialog = document.getElementById("ts-inspect-dialog");
-const tsInspectIter   = document.getElementById("ts-inspect-iter");
-const tsInspectShuffle= document.getElementById("ts-inspect-shuffle");
-const tsInspectCancel = document.getElementById("ts-inspect-cancel");
-const tsInspectGo     = document.getElementById("ts-inspect-go");
-const tsInspectBanner = document.getElementById("ts-inspect-banner");
+const tsInspectDialog  = document.getElementById("ts-inspect-dialog");
+const tsInspectSelect  = document.getElementById("ts-inspect-select");
+const tsInspectRefresh = document.getElementById("ts-inspect-refresh");
+const tsInspectCancel  = document.getElementById("ts-inspect-cancel");
+const tsInspectGo      = document.getElementById("ts-inspect-go");
+const tsInspectBanner  = document.getElementById("ts-inspect-banner");
 const tsInspectBannerTxt = document.getElementById("ts-inspect-banner-text");
-const tsInspectExit   = document.getElementById("ts-inspect-exit");
+const tsInspectExit    = document.getElementById("ts-inspect-exit");
 
 let _tsInspect = null;  // null = picker mode; otherwise { iteration, shuffle, trainSet, testSet, trainFraction }
 
+async function _loadInspectSplits() {
+  if (!tsInspectSelect) return;
+  tsInspectSelect.innerHTML = '<option value="">— loading… —</option>';
+  if (tsInspectGo) tsInspectGo.disabled = true;
+  try {
+    const body = await _fetchJson("/dlc/project/training-dataset/splits");
+    const splits = (body && body.splits) || [];
+    if (splits.length === 0) {
+      tsInspectSelect.innerHTML = '<option value="" disabled selected>— no splits found —</option>';
+      return;
+    }
+    tsInspectSelect.innerHTML = "";
+    for (const s of splits) {
+      const opt = document.createElement("option");
+      opt.value = JSON.stringify({ iteration: s.iteration, shuffle: s.shuffle });
+      opt.textContent = s.label;
+      tsInspectSelect.appendChild(opt);
+    }
+    // Enable "Inspect" once a valid value is selected (the first option, by default)
+    if (tsInspectGo) tsInspectGo.disabled = !tsInspectSelect.value;
+  } catch (e) {
+    tsInspectSelect.innerHTML = '<option value="" disabled selected>— failed to load —</option>';
+    console.error("loadInspectSplits failed:", e);
+  }
+}
+
 function _openInspectDialog() {
   if (tsInspectDialog) tsInspectDialog.classList.remove("hidden");
+  _loadInspectSplits();
 }
 function _closeInspectDialog() {
   if (tsInspectDialog) tsInspectDialog.classList.add("hidden");
 }
 
 async function _runInspect() {
-  const iter = parseInt(tsInspectIter.value || "0");
-  const shuffle = parseInt(tsInspectShuffle.value || "1");
+  if (!tsInspectSelect || !tsInspectSelect.value) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(tsInspectSelect.value);
+  } catch {
+    return;
+  }
+  const iter = parseInt(parsed.iteration);
+  const shuffle = parseInt(parsed.shuffle);
   try {
     const body = await _fetchJson(
       `/dlc/project/training-dataset/inspect?iteration=${iter}&shuffle=${shuffle}`,
@@ -390,6 +424,10 @@ function _renderFrameInspectAware() {
 
 // Wire up inspect buttons
 if (tsInspectBtn)    tsInspectBtn.addEventListener("click", _openInspectDialog);
+if (tsInspectRefresh) tsInspectRefresh.addEventListener("click", _loadInspectSplits);
+if (tsInspectSelect)  tsInspectSelect.addEventListener("change", () => {
+  if (tsInspectGo) tsInspectGo.disabled = !tsInspectSelect.value;
+});
 if (tsInspectCancel) tsInspectCancel.addEventListener("click", _closeInspectDialog);
 if (tsInspectGo)     tsInspectGo.addEventListener("click", _runInspect);
 if (tsInspectExit)   tsInspectExit.addEventListener("click", _exitInspect);
