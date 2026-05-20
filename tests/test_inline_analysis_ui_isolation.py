@@ -239,6 +239,36 @@ def test_factory_parses_canonical_frame_poses_batch_shape():
     )
 
 
+def test_worker_dense_ifies_h5_for_positional_consumers():
+    """Regression guard: the warm-worker's _run_range must reindex the
+    merged DataFrame to a CONTIGUOUS 0..max range before writing the
+    canonical h5. Without this, an analysis from a non-zero start frame
+    (e.g. user scrubs to frame 24015 and analyzes 500 from there)
+    writes rows ONLY at indices 24015..24514 — pandas-sparse but
+    positionally-disjoint.
+
+    Downstream DLC tools — /dlc/viewer/frame-poses-batch,
+    filterpredictions, create_labeled_video — read h5 rows
+    POSITIONALLY (`poses_np[frame_number]`), so a sparse h5 silently
+    returns nothing for the analyzed frames. Symptom: user runs
+    Inline Analysis, h5 lands on disk, but the player shows no markers.
+
+    See systematic-debugging session 2026-05-20.
+    """
+    tasks_py = (ROOT / "src" / "dlc" / "tasks.py").read_text()
+    # The dense-ify step on the merge path
+    assert "df_merge.reindex(_ia_pd.RangeIndex(" in tasks_py, (
+        "_run_range must reindex df_merge to a contiguous 0..max range "
+        "before writing (DLC canonical analyze_videos h5 is dense)"
+    )
+    # The self-healing branch for "all skipped" — must also dense-ify
+    # so existing sparse h5s get fixed on the next user click.
+    assert "dense = existing.reindex" in tasks_py, (
+        "_run_range's full-skip branch must self-heal existing sparse "
+        "h5s by reindexing them dense"
+    )
+
+
 def test_done_handler_auto_enables_overlay_toggle():
     """Regression guard: after /range/status reports `done`, inline_
     analysis.js must auto-check the `ia-overlay-toggle` and dispatch a
