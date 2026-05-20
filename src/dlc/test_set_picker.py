@@ -306,3 +306,54 @@ def get_inspect():
         datasets.append(parsed)
 
     return jsonify({"iteration": requested_iter, "datasets": datasets})
+
+
+# ── List available frozen splits (for inspect dropdown) ───────────────────────
+
+_ITER_FOLDER_RE = _re.compile(r"^iteration-(\d+)$")
+
+
+@bp.route("/dlc/project/training-dataset/splits", methods=["GET"])
+def get_splits():
+    """List every Documentation_data-*.pickle on disk so the inspect UI can
+    populate its dropdown without users guessing iteration/shuffle numbers.
+
+    Returns: {"splits": [{iteration, shuffle, train_fraction, pickle, label}, ...]}
+    sorted by (iteration DESC, shuffle ASC).
+    """
+    project_path, err = _active_project()
+    if err:
+        return err
+
+    ts_root = project_path / "training-datasets"
+    if not ts_root.is_dir():
+        return jsonify({"splits": []})
+
+    splits: list[dict] = []
+    for iter_dir in ts_root.iterdir():
+        if not iter_dir.is_dir():
+            continue
+        iter_match = _ITER_FOLDER_RE.match(iter_dir.name)
+        if not iter_match:
+            continue
+        iteration = int(iter_match.group(1))
+        for pickle_path in iter_dir.glob("UnaugmentedDataSet_*/Documentation_data-*.pickle"):
+            m = _DOC_PICKLE_RE.match(pickle_path.name)
+            if not m:
+                continue
+            try:
+                train_pct = int(m.group("frac"))
+                shuffle = int(m.group("shuffle"))
+            except (TypeError, ValueError):
+                continue
+            train_fraction = train_pct / 100.0
+            splits.append({
+                "iteration": iteration,
+                "shuffle": shuffle,
+                "train_fraction": train_fraction,
+                "pickle": pickle_path.name,
+                "label": f"iteration-{iteration} • shuffle-{shuffle} • trainset {train_pct}%",
+            })
+
+    splits.sort(key=lambda s: (-s["iteration"], s["shuffle"]))
+    return jsonify({"splits": splits})
