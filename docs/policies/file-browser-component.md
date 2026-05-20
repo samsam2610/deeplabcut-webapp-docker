@@ -74,3 +74,21 @@ If your card needs behavior the component doesn't have, **add it to the componen
 - Different empty-state copy — add a `dirOnlyEmptyText` / `defaultEmptyText` option.
 
 When you extend it, update both this policy doc and the static-analysis tests to cover the new contract.
+
+## Related: other shared frontend factories
+
+The same "one canonical factory, hard-policed by static tests" pattern is
+applied to other multi-card frontend logic. As of 2026-05-20:
+
+- `src/static/js/components/analyzed_frame_player.js`
+  Export: `makeAnalyzedFramePlayer({ prefix, frameUrlFn, poseUrlFn, onCsvSaved })`
+  Consumers (current): `inline_analysis.js`.
+  Consumers (after deferred migration per
+  `docs/superpowers/specs/2026-05-20-inline-analysis-design.md` §4):
+  `viewer.js` too.
+  Policy test: `tests/test_analyzed_frame_player_factory.py`.
+
+When this doc grows beyond just the file browser, rename it to
+`docs/policies/shared-components.md` and update the policy-test imports
+that reference the file path. See the "Known tech debt" section of the
+inline-analysis spec for the migration plan.

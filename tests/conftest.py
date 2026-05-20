@@ -204,6 +204,20 @@ def fake_redis():
             lst = self._lists.get(name, [])
             return lst.pop(0) if lst else None
 
+        def lpush(self, name, *values):
+            if name not in self._lists:
+                self._lists[name] = []
+            # Redis LPUSH inserts at the head, in order.
+            for v in values:
+                self._lists[name].insert(0, v)
+
+        def blpop(self, key, timeout=0):
+            # FakeRedis is non-blocking: immediate pop or None.
+            items = self._lists.get(key) or []
+            if not items:
+                return None
+            return (key, items.pop(0))
+
         def lrange(self, name, start, end):
             """Mirror Redis LRANGE semantics: end is INCLUSIVE; -1 means last."""
             lst = self._lists.get(name, [])
