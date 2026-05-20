@@ -59,3 +59,17 @@ def test_picker_js_has_inspect_logic():
     text = (SRC / "static" / "js" / "test_set_picker.js").read_text()
     assert "/dlc/project/training-dataset/inspect" in text
     assert "_tsInspect" in text
+
+
+def test_ctd_card_has_split_mode_selector():
+    text = (SRC / "templates" / "partials" / "card_training_dataset.html").read_text()
+    assert 'name="ctd-split-mode"' in text
+    assert 'value="random"' in text
+    assert 'value="hybrid"' in text
+    assert 'value="manual"' in text
+
+
+def test_main_js_sends_split_mode():
+    text = (SRC / "static" / "main.js").read_text()
+    assert "split_mode" in text
+    assert "ctd-split-mode" in text
