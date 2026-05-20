@@ -141,19 +141,51 @@ function _draw() {
   });
 }
 
+// Size the canvas to fit the card width (× zoom), with height proportional
+// to the image's aspect ratio so drawFrame fills it edge-to-edge. Same
+// approach as frame_labeler.js → _flFitCanvas.
+function _fitCanvas() {
+  if (!tsCanvas || !_tsImage) return;
+  const card = tsCard;
+  if (!card) return;
+  const cs = getComputedStyle(card);
+  const padL = parseFloat(cs.paddingLeft) || 0;
+  const padR = parseFloat(cs.paddingRight) || 0;
+  const baseW = card.clientWidth - padL - padR;
+  const zoom = parseInt(tsZoom?.value || "100") / 100;
+  const maxW = Math.max(baseW, window.innerWidth - 32);
+  const targetW = Math.min(Math.round(baseW * zoom), Math.floor(maxW));
+  const naturalW = _tsImage.naturalWidth || _tsImage.width || 1;
+  const naturalH = _tsImage.naturalHeight || _tsImage.height || 1;
+  tsCanvas.width = targetW;
+  tsCanvas.height = Math.round(naturalH * (targetW / naturalW));
+
+  // Break out of card padding symmetrically (matches labeler behavior)
+  const wrap = tsCanvas.parentElement;
+  const extra = targetW - baseW;
+  if (extra > 0) {
+    wrap.style.width = targetW + "px";
+    wrap.style.marginLeft = `-${extra / 2}px`;
+  } else {
+    wrap.style.width = "";
+    wrap.style.marginLeft = "";
+  }
+}
+
 function _renderFrame() {
   const name = _currentFrameName();
   if (!name) { tsFrameInfo.textContent = "Frame 0 / 0"; tsFrameName.textContent = ""; return; }
   tsFrameInfo.textContent = `Frame ${_tsIdx + 1} / ${_tsFrames.length}`;
   tsFrameName.textContent = name;
   _updateToggleButton();
-  // Resize canvas to displayed CSS box, preserving viewer-zoom scaling
-  const zoom = parseInt(tsZoom?.value || "100") / 100;
-  tsCanvas.width = 800 * zoom;
-  tsCanvas.height = 600 * zoom;
   const img = new Image();
-  img.onload = () => { _tsImage = img; _draw(); };
+  img.onload = () => { _tsImage = img; _fitCanvas(); _draw(); };
   img.src = `/dlc/project/frame-image/${encodeURIComponent(_tsStem)}/${encodeURIComponent(name)}`;
+}
+
+// Re-fit on window/card resize so the canvas stays bounded.
+if (typeof ResizeObserver !== "undefined" && tsCard) {
+  new ResizeObserver(() => { if (_tsImage) { _fitCanvas(); _draw(); } }).observe(tsCard);
 }
 
 async function _toggleCurrentMark() {
@@ -243,7 +275,10 @@ if (tsStemSelect) tsStemSelect.addEventListener("change", _onStemChange);
 if (tsBtnPrev)  tsBtnPrev.addEventListener("click", _prev);
 if (tsBtnNext)  tsBtnNext.addEventListener("click", _next);
 if (tsToggleBtn) tsToggleBtn.addEventListener("click", _toggleCurrentMark);
-if (tsZoom)      tsZoom.addEventListener("input", () => { tsZoomVal.textContent = `${tsZoom.value} %`; _renderFrame(); });
+if (tsZoom)      tsZoom.addEventListener("input", () => {
+  tsZoomVal.textContent = `${tsZoom.value} %`;
+  if (_tsImage) { _fitCanvas(); _draw(); }
+});
 if (tsMarkerSize) tsMarkerSize.addEventListener("input", () => { tsMarkerSizeVal.textContent = tsMarkerSize.value; _draw(); });
 if (tsShowNames) tsShowNames.addEventListener("change", _draw);
 if (tsCleanStale) tsCleanStale.addEventListener("click", async () => {
