@@ -56,12 +56,38 @@ def dlc_create_training_dataset():
         num_shuffles = 1
     freeze_split = bool(body.get("freeze_split", True))
 
+    # New: split_mode + per-project marks snapshot.
+    split_mode = (body.get("split_mode") or "random").strip().lower()
+    if split_mode not in ("random", "hybrid", "manual"):
+        split_mode = "random"
+
+    marks_payload: list[list[str]] = []
+    if split_mode in ("hybrid", "manual"):
+        from dlc import marks_store
+        proj_path_str = project_data.get("project_path", "")
+        if proj_path_str:
+            marks_payload = [
+                [stem, image]
+                for (stem, image) in marks_store.list_marks(Path(proj_path_str))
+            ]
+
     task = _ctx.celery().send_task(
         "tasks.dlc_create_training_dataset",
-        kwargs={"config_path": config_path, "num_shuffles": num_shuffles, "freeze_split": freeze_split},
+        kwargs={
+            "config_path": config_path,
+            "num_shuffles": num_shuffles,
+            "freeze_split": freeze_split,
+            "split_mode": split_mode,
+            "marks": marks_payload,
+        },
         queue=_get_engine_queue(engine),
     )
-    return jsonify({"task_id": task.id, "operation": "create_training_dataset"}), 202
+    return jsonify({
+        "task_id": task.id,
+        "operation": "create_training_dataset",
+        "split_mode": split_mode,
+        "marks_count": len(marks_payload),
+    }), 202
 
 
 @bp.route("/dlc/project/add-datasets-to-video-list", methods=["POST"])
