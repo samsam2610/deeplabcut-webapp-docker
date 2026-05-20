@@ -10,65 +10,29 @@ import pytest
 
 def _make_pickle(folder: Path, scorer: str, train_fraction_pct: int, shuffle: int,
                  frames: list[tuple[str, str]], train_idx: list[int], test_idx: list[int]):
-    """Write a Documentation_data-*.pickle + sibling CollectedData_<scorer>.h5
+    """Write a Documentation_data-*.pickle + sibling CollectedData_<scorer>.csv
     matching DLC's real layout.
 
-    The H5 is written with h5py directly (no PyTables/tables dependency) in
-    the fixed-format layout that DLC produces. The production reader also uses
-    h5py so the encoding matches.
+    Production reads the CSV (stdlib only) so we just write a minimal one with
+    the right header shape and one row per (stem, image). The H5 is not needed
+    — DLC always writes the CSV alongside it.
     """
-    import h5py
+    import csv as _csv
     folder.mkdir(parents=True, exist_ok=True)
 
-    # Build the MultiIndex components from frames list.
-    stems = sorted(set(stem for stem, _ in frames))
-    images = sorted(set(img for _, img in frames))
-    stem_to_idx = {s: i for i, s in enumerate(stems)}
-    img_to_idx = {im: i for i, im in enumerate(images)}
+    csv_path = folder / f"CollectedData_{scorer}.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = _csv.writer(f)
+        # 3 header rows (scorer / bodyparts / coords) with empty placeholders for
+        # the row-index cells. One dummy column is enough.
+        w.writerow(["scorer", "", "", scorer, scorer])
+        w.writerow(["bodyparts", "", "", "dummy", "dummy"])
+        w.writerow(["coords", "", "", "x", "y"])
+        for stem, image in frames:
+            w.writerow(["labeled-data", stem, image, "0", "0"])
 
-    lb1 = np.array([stem_to_idx[stem] for stem, _ in frames], dtype=np.int8)
-    lb2 = np.array([img_to_idx[img] for _, img in frames], dtype=np.int16)
-
-    h5_path = folder / f"CollectedData_{scorer}.h5"
-    with h5py.File(str(h5_path), "w") as f:
-        g = f.create_group("df_with_missing")
-        g.attrs["CLASS"] = np.bytes_(b"GROUP")
-        g.attrs["TITLE"] = np.bytes_(b"")
-        g.attrs["VERSION"] = np.bytes_(b"1.0")
-        g.attrs["axis1_nlevels"] = np.int64(3)
-        g.attrs["axis1_variety"] = np.bytes_(b"multi")
-        g.attrs["axis0_nlevels"] = np.int64(1)
-        g.attrs["axis0_variety"] = np.bytes_(b"regular")
-        g.attrs["block0_items_nlevels"] = np.int64(1)
-        g.attrs["block0_items_variety"] = np.bytes_(b"regular")
-        g.attrs["encoding"] = np.bytes_(b"UTF-8")
-        g.attrs["errors"] = np.bytes_(b"strict")
-        g.attrs["nblocks"] = np.int64(1)
-        g.attrs["ndim"] = np.int64(2)
-        g.attrs["pandas_type"] = np.bytes_(b"frame")
-        g.attrs["pandas_version"] = np.bytes_(b"0.15.2")
-
-        # Row index (axis1 = rows in pandas fixed/legacy format)
-        g.create_dataset("axis1_level0", data=np.array([b"labeled-data"]))
-        g.create_dataset("axis1_level1", data=np.array([s.encode() for s in stems]))
-        g.create_dataset("axis1_level2", data=np.array([im.encode() for im in images]))
-        g.create_dataset("axis1_label0", data=np.zeros(len(frames), dtype=np.int8))
-        g.create_dataset("axis1_label1", data=lb1)
-        g.create_dataset("axis1_label2", data=lb2)
-
-        # Column index (axis0) — one dummy column
-        g.create_dataset("axis0_level0", data=np.array([b"dummy"]))
-        g.create_dataset("axis0_label0", data=np.zeros(1, dtype=np.int8))
-        g.create_dataset("block0_items_level0", data=np.array([b"dummy"]))
-        g.create_dataset("block0_items_label0", data=np.zeros(1, dtype=np.int8))
-        g.create_dataset("block0_values", data=np.zeros((len(frames), 1)))
-        g.create_dataset("axis0", data=np.arange(1, dtype=np.int64))
-
-    # Pickle: payload[0] is the train-only filtered list (we put a dummy value
-    # here — the new endpoint reads only payload[1]/payload[2] for indices and
-    # uses the H5 for frame mapping).
     payload = [
-        [],
+        [],  # payload[0] unused — production maps indices via the sibling CSV
         np.array(train_idx, dtype=np.int64),
         np.array(test_idx, dtype=np.int64),
         train_fraction_pct / 100.0,

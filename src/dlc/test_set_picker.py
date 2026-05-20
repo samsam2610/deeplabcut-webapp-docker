@@ -210,16 +210,49 @@ _DOC_PICKLE_RE = _re.compile(
 )
 
 
+def _read_collected_data_csv_rows(csv_path: Path) -> list[tuple[str, str]] | None:
+    """Read the row MultiIndex (video_stem, image_name) from the sibling
+    CollectedData_<scorer>.csv that DLC writes alongside the H5.
+
+    DLC's CSV layout: 3 header rows (scorer / bodyparts / coords) where the
+    first 2-3 cells are blank placeholders for the row-index, followed by
+    data rows whose first 3 cells are `labeled-data, <video_stem>, <image_name>`.
+
+    Using the CSV (stdlib `csv` module) instead of the H5 keeps the inspect
+    endpoint working in the flask container even when h5py/PyTables are not
+    installed. Returns None if the CSV can't be parsed.
+    """
+    import csv as _csv
+    try:
+        with open(csv_path, "r", newline="") as f:
+            reader = _csv.reader(f)
+            rows_out: list[tuple[str, str]] = []
+            for i, row in enumerate(reader):
+                # Skip the 3 column-header rows (scorer / bodyparts / coords).
+                if i < 3:
+                    continue
+                if len(row) < 3:
+                    continue
+                # First 3 cells = the row MultiIndex tuple.
+                _root, stem, image = row[0], row[1], row[2]
+                if not stem or not image:
+                    continue
+                rows_out.append((stem, image))
+        return rows_out
+    except Exception:
+        return None
+
+
 def _read_pickle_dataset(pickle_path: Path) -> dict | None:
     """Parse a Documentation_data-*.pickle and return train/test frame tuples.
 
     DLC's pickle layout is [Documentation_data, trainIndices, testIndices,
     trainFraction] where Documentation_data is the *train-only filtered*
     list (NOT all labeled frames). The indices reference positions in the
-    sibling CollectedData_<scorer>.h5 merged DataFrame. We open that H5
-    to do the mapping.
+    sibling CollectedData_<scorer> merged DataFrame. We read the sibling
+    CSV (stdlib only) to recover the (stem, image) for each positional index.
 
-    Returns None on parse failure or missing sibling H5.
+    Returns None on parse failure or missing sibling CSV.
     """
     m = _DOC_PICKLE_RE.match(pickle_path.name)
     if not m:
@@ -235,31 +268,12 @@ def _read_pickle_dataset(pickle_path: Path) -> dict | None:
         return None
     train_idx, test_idx = payload[1], payload[2]
 
-    # Find the sibling CollectedData_*.h5 that holds the merged dataframe.
-    h5_candidates = sorted(pickle_path.parent.glob("CollectedData_*.h5"))
-    if not h5_candidates:
+    # Find the sibling CollectedData_*.csv (always written next to the H5 by DLC).
+    csv_candidates = sorted(pickle_path.parent.glob("CollectedData_*.csv"))
+    if not csv_candidates:
         return None
-    h5_path = h5_candidates[0]
-
-    # Decode the row MultiIndex from the H5 using h5py (avoids the PyTables
-    # dependency, which is brittle across numpy versions).
-    try:
-        import h5py as _h5py
-        with _h5py.File(str(h5_path), "r") as _f:
-            _key = "df_with_missing" if "df_with_missing" in _f else next(iter(_f.keys()))
-            _g = _f[_key]
-            _nlevels = int(_g.attrs.get("axis1_nlevels", 1))
-            if _nlevels < 3:
-                return None
-            _lv1 = [x.decode("utf-8", errors="replace") for x in _g["axis1_level1"][:]]
-            _lv2 = [x.decode("utf-8", errors="replace") for x in _g["axis1_level2"][:]]
-            _lb1 = _g["axis1_label1"][:]
-            _lb2 = _g["axis1_label2"][:]
-            rows: list[tuple[str, str]] = [
-                (_lv1[int(_lb1[i])], _lv2[int(_lb2[i])])
-                for i in range(len(_lb1))
-            ]
-    except Exception:
+    rows = _read_collected_data_csv_rows(csv_candidates[0])
+    if rows is None:
         return None
 
     def _resolve(indices) -> list[dict]:
