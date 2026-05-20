@@ -132,3 +132,29 @@ def test_picker_js_renders_folder_counter():
     assert "_refreshStemOptionLabel" in text, (
         "picker JS should have a _refreshStemOptionLabel helper to update one option in place after a toggle"
     )
+
+
+def test_picker_js_folder_counter_branches_in_inspect_mode():
+    """In inspect mode the folder dropdown should show how many of each
+    folder's frames are in the INSPECTED split's test set, not the
+    user's edit-mode marks count."""
+    text = (SRC / "static" / "js" / "test_set_picker.js").read_text()
+    assert "_countInspectTestForStem" in text, (
+        "picker JS should have a _countInspectTestForStem helper that "
+        "counts inspected-split test entries per folder"
+    )
+    assert "_refreshAllStemOptionLabels" in text, (
+        "picker JS should have a _refreshAllStemOptionLabels helper "
+        "to repaint every option when entering/exiting inspect mode"
+    )
+    # _stemOptionLabel must branch on _tsInspect to pick between sources
+    assert "_stemOptionLabel" in text
+    # Body of _stemOptionLabel references _tsInspect (inspect branch)
+    # — sanity that the branch wasn't lost in a refactor.
+    body_start = text.find("function _stemOptionLabel")
+    assert body_start >= 0
+    body_end = text.find("\n}", body_start)
+    body = text[body_start:body_end]
+    assert "_tsInspect" in body, (
+        "_stemOptionLabel body should reference _tsInspect (branch between picker and inspect mode)"
+    )

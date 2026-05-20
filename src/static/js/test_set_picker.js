@@ -44,9 +44,26 @@ function _buildPalette(bps) {
   return out;
 }
 
+function _countInspectTestForStem(stem) {
+  // Count keys "stem|image" in the inspected split's test set whose stem matches.
+  if (!_tsInspect || !_tsInspect.testSet) return 0;
+  const prefix = stem + "|";
+  let n = 0;
+  for (const key of _tsInspect.testSet) {
+    if (key.startsWith(prefix)) n++;
+  }
+  return n;
+}
+
 function _stemOptionLabel(stem, totalFrames) {
-  const marked = (_tsMarks[stem] || new Set()).size;
-  return `${stem} — ${marked}/${totalFrames}`;
+  // Inspect mode → show how many of this folder's frames are in the
+  // INSPECTED split's test set. Picker mode → show the user's edit-mode
+  // marks count from the SQLite store.
+  const inspectMode = !!_tsInspect;
+  const lhs = inspectMode
+    ? _countInspectTestForStem(stem)
+    : (_tsMarks[stem] || new Set()).size;
+  return `${stem} — ${lhs}/${totalFrames}`;
 }
 
 function _refreshStemOptionLabel(stem) {
@@ -56,6 +73,13 @@ function _refreshStemOptionLabel(stem) {
   const found = _tsStems.find(s => (s.video_stem || s) === stem);
   const total = (found && found.frames) ? found.frames.length : 0;
   opt.textContent = _stemOptionLabel(stem, total);
+}
+
+function _refreshAllStemOptionLabels() {
+  if (!tsStemSelect) return;
+  for (const opt of tsStemSelect.querySelectorAll('option[value]')) {
+    if (opt.value) _refreshStemOptionLabel(opt.value);
+  }
 }
 
 async function _fetchJson(url, opts) {
@@ -300,11 +324,7 @@ if (tsCleanStale) tsCleanStale.addEventListener("click", async () => {
   await _fetchJson("/dlc/project/test-set/marks/clean-stale", { method: "POST" });
   await _loadMarks();
   // Refresh every visible stem option since several may have been affected.
-  if (tsStemSelect) {
-    for (const opt of tsStemSelect.querySelectorAll('option[value]')) {
-      if (opt.value) _refreshStemOptionLabel(opt.value);
-    }
-  }
+  _refreshAllStemOptionLabels();
   _updateCounters({});
 });
 document.querySelectorAll('input[name="ts-mode"]').forEach(el => {
@@ -402,6 +422,8 @@ async function _runInspect() {
       `Inspecting iteration-${iter} / shuffle-${shuffle} ` +
       `(trainset${Math.round(ds.train_fraction * 100)}) — read-only`;
     _closeInspectDialog();
+    // Switch the folder dropdown to show per-folder test-count from THIS split.
+    _refreshAllStemOptionLabels();
     _renderFrameInspectAware();
   } catch (e) {
     alert(`Inspect failed: ${e.message || e}`);
@@ -413,6 +435,8 @@ function _exitInspect() {
   if (tsInspectBanner) tsInspectBanner.classList.add("hidden");
   // Re-enable the toggle button (it was disabled in inspect mode)
   if (tsToggleBtn) tsToggleBtn.disabled = false;
+  // Restore the folder dropdown to picker-mode marks counts.
+  _refreshAllStemOptionLabels();
   _renderFrameInspectAware();
 }
 
