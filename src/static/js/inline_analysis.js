@@ -225,8 +225,12 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
         // frame endpoint (used by frame_labeler / annotator). Per-session
         // VideoCapture cache keeps decoding fast across slider drags.
         frameUrlFn: (n) => `/annotate/video-frame/${n}?path=${encodeURIComponent(path)}`,
+        // Canonical DLC viewer batch endpoint. h5 + start + count are the
+        // expected query params (not `n`). Response shape is
+        //   {frames: {"<frame_idx>": {poses: [{bp,x,y,lh,color_idx}]}}, bodyparts: [...]}
+        // The factory normalizes this in _prefetchPoseWindow.
         poseUrlFn:  (layer, n) =>
-          `/dlc/viewer/h5-pose-window?h5=${encodeURIComponent(layer.path)}&start=${n}&n=30`,
+          `/dlc/viewer/frame-poses-batch?h5=${encodeURIComponent(layer.path)}&start=${n}&count=30`,
         onCsvSaved: () => { /* no-op */ },
       });
     }
@@ -317,6 +321,15 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
               }
             } catch (e) { /* factory may not be wired in tests */ }
             _player.reloadH5();
+            // Auto-enable the "Show markers" toggle the user just produced
+            // labels for — they shouldn't have to flip a separate checkbox to
+            // see what they just analyzed. Dispatch change so the factory's
+            // change-listener picks it up the same way a click would.
+            const tgl = document.getElementById("ia-overlay-toggle");
+            if (tgl && !tgl.checked) {
+              tgl.checked = true;
+              tgl.dispatchEvent(new Event("change", { bubbles: true }));
+            }
           } else if (_player) {
             _player.reloadH5();
           }
