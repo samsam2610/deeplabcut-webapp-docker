@@ -221,7 +221,10 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
     if (!_player) {
       _player = makeAnalyzedFramePlayer({
         prefix: "ia",
-        frameUrlFn: (n) => `/annotate/frame?path=${encodeURIComponent(path)}&frame=${n}`,
+        // /annotate/video-frame/<n>?path=... is the canonical browse-mode
+        // frame endpoint (used by frame_labeler / annotator). Per-session
+        // VideoCapture cache keeps decoding fast across slider drags.
+        frameUrlFn: (n) => `/annotate/video-frame/${n}?path=${encodeURIComponent(path)}`,
         poseUrlFn:  (layer, n) =>
           `/dlc/viewer/h5-pose-window?h5=${encodeURIComponent(layer.path)}&start=${n}&n=30`,
         onCsvSaved: () => { /* no-op */ },
