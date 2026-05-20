@@ -50,8 +50,6 @@ def test_picker_js_loaded_somewhere():
 def test_inspect_dialog_present():
     text = (SRC / "templates" / "partials" / "card_test_set_picker.html").read_text()
     assert "ts-inspect-dialog" in text
-    assert "ts-inspect-iter" in text
-    assert "ts-inspect-shuffle" in text
     assert "ts-inspect-banner" in text
 
 
@@ -94,4 +92,33 @@ def test_picker_js_imports_default_palette():
     assert "TS_DEFAULT_PALETTE" not in text, (
         "TS_DEFAULT_PALETTE local array should have been removed in favor of "
         "the shared DEFAULT_PALETTE"
+    )
+
+
+def test_inspect_dialog_uses_dropdown():
+    text = (SRC / "templates" / "partials" / "card_test_set_picker.html").read_text()
+    # New IDs
+    assert 'id="ts-inspect-select"' in text, (
+        "inspect dialog should have a ts-inspect-select dropdown"
+    )
+    assert 'id="ts-inspect-refresh"' in text, (
+        "inspect dialog should have a ts-inspect-refresh button"
+    )
+    # Old IDs gone
+    assert 'id="ts-inspect-iter"' not in text, (
+        "inspect dialog should no longer use ts-inspect-iter number input"
+    )
+    assert 'id="ts-inspect-shuffle"' not in text, (
+        "inspect dialog should no longer use ts-inspect-shuffle number input"
+    )
+
+
+def test_picker_js_calls_splits_endpoint():
+    text = (SRC / "static" / "js" / "test_set_picker.js").read_text()
+    assert "/dlc/project/training-dataset/splits" in text, (
+        "test_set_picker.js should fetch /dlc/project/training-dataset/splits "
+        "to populate the inspect dropdown"
+    )
+    assert "_loadInspectSplits" in text, (
+        "picker JS should have a _loadInspectSplits helper"
     )
