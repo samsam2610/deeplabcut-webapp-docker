@@ -188,3 +188,91 @@ def post_mode():
         return jsonify({"error": f"mode must be one of {list(marks_store.VALID_MODES)}"}), 400
     marks_store.set_mode(project_path, mode)
     return jsonify({"ok": True, "mode": mode})
+
+
+# ── Inspect frozen splits ─────────────────────────────────────────────────────
+
+import pickle
+import re as _re
+
+
+def _parse_iteration_from_config(project_path: Path) -> int:
+    cfg_path = project_path / "config.yaml"
+    if not cfg_path.is_file():
+        return 0
+    text = cfg_path.read_text()
+    m = _re.search(r'^iteration\s*:\s*(\d+)', text, _re.MULTILINE)
+    return int(m.group(1)) if m else 0
+
+
+_DOC_PICKLE_RE = _re.compile(
+    r"^Documentation_data-(?P<task>.+)_(?P<frac>\d+)shuffle(?P<shuffle>\d+)\.pickle$"
+)
+
+
+def _read_pickle_dataset(pickle_path: Path) -> dict | None:
+    """Parse a Documentation_data-*.pickle and return train/test frame tuples.
+
+    Returns None on parse failure.
+    """
+    m = _DOC_PICKLE_RE.match(pickle_path.name)
+    if not m:
+        return None
+    train_pct = int(m.group("frac"))
+    shuffle = int(m.group("shuffle"))
+    try:
+        with open(pickle_path, "rb") as f:
+            payload = pickle.load(f)
+    except Exception:
+        return None
+    if not isinstance(payload, (list, tuple)) or len(payload) < 3:
+        return None
+    entries, train_idx, test_idx = payload[0], payload[1], payload[2]
+
+    def _resolve(indices) -> list[dict]:
+        out: list[dict] = []
+        for i in indices:
+            i = int(i)
+            if i < 0 or i >= len(entries):
+                continue  # strips -1 padding and out-of-range
+            row = entries[i]
+            img = row.get("image") if isinstance(row, dict) else None
+            if not img or len(img) < 3:
+                continue
+            out.append({"video_stem": img[1], "image_name": img[2]})
+        return out
+
+    return {
+        "shuffle": shuffle,
+        "train_fraction": train_pct / 100.0,
+        "train": _resolve(train_idx),
+        "test":  _resolve(test_idx),
+        "documentation_pickle": str(pickle_path.name),
+    }
+
+
+@bp.route("/dlc/project/training-dataset/inspect", methods=["GET"])
+def get_inspect():
+    project_path, err = _active_project()
+    if err:
+        return err
+
+    requested_iter = request.args.get("iteration", type=int)
+    if requested_iter is None:
+        requested_iter = _parse_iteration_from_config(project_path)
+
+    iter_root = project_path / "training-datasets" / f"iteration-{requested_iter}"
+    if not iter_root.is_dir():
+        return jsonify({"iteration": requested_iter, "datasets": []})
+
+    requested_shuffle = request.args.get("shuffle", type=int)
+    datasets: list[dict] = []
+    for pickle_path in sorted(iter_root.glob("UnaugmentedDataSet_*/Documentation_data-*.pickle")):
+        parsed = _read_pickle_dataset(pickle_path)
+        if parsed is None:
+            continue
+        if requested_shuffle is not None and parsed["shuffle"] != requested_shuffle:
+            continue
+        datasets.append(parsed)
+
+    return jsonify({"iteration": requested_iter, "datasets": datasets})
