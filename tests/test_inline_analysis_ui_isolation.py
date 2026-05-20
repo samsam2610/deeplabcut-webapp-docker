@@ -69,6 +69,23 @@ def test_no_create_labeled_controls_in_card():
     assert "Create labeled frame" not in txt
 
 
+def test_inline_analysis_js_does_not_hide_other_cards():
+    """Spec §1.1: openCard must NOT call hideAllOtherCards or otherwise
+    iterate over section.card and toggle .hidden — that collapses every
+    other open dashboard card. The card just shows itself and scrolls
+    into view.
+    """
+    js = (ROOT / "src" / "static" / "js" / "inline_analysis.js").read_text()
+    assert "hideAllOtherCards" not in js, (
+        "inline_analysis.js must not define or call hideAllOtherCards "
+        "— see polish spec §1.1"
+    )
+    assert "section.card" not in js, (
+        "inline_analysis.js must not query `section.card` (which would "
+        "let it mass-toggle other cards' visibility)"
+    )
+
+
 def test_new_ids_are_unique_across_partials():
     new_ids = {
         "inline-analysis-card", "btn-close-inline-analysis", "btn-open-inline-analysis",

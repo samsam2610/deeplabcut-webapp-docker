@@ -50,15 +50,11 @@ import { makeAnalyzedFramePlayer } from './components/analyzed_frame_player.js';
   let _activeReqPoll = null;
 
   // ── Open / close ───────────────────────────────────────────────────────
-  function hideAllOtherCards() {
-    document.querySelectorAll("section.card").forEach((c) => {
-      if (c !== card) c.classList.add("hidden");
-    });
-  }
-
   function openCard() {
-    hideAllOtherCards();
+    // Open at bottom like every other dashboard card — do NOT collapse
+    // other open cards. See polish spec §1.1.
     card.classList.remove("hidden");
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
     refreshSnapshots();
   }
 
