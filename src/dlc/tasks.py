@@ -2731,35 +2731,48 @@ def _filter_skip_already_done(target_frames, existing_df):
     ]
 
 
-class _RangeVideoIterator:
-    """Iterate over a video at *non-contiguous* frame indices.
+_RangeVideoIterator_cls = None  # built on first call, then cached
 
-    Wraps DLC's VideoIterator so successive __next__ calls jump to the
-    next requested index via set_to_frame + read_frame. Order is preserved
-    from the caller-supplied indices list.
+def _RangeVideoIterator(video_path, indices):
+    """Return a VideoIterator subclass instance that yields only `indices`,
+    in order, jumping via set_to_frame on each __next__.
+
+    Must be a real subclass of DLC's VideoIterator (not a wrapper) because
+    video_inference does isinstance() checks — a wrapper falls through to
+    "treat-as-path" and str-coerces the object into a bogus filename.
+
+    The subclass is built lazily on first call because VideoIterator is
+    only imported inside the worker container, not at module load time.
+    Tests patch `tasks.VideoIterator` (and/or `tasks._RangeVideoIterator`)
+    directly; they don't trigger this path.
     """
-    def __init__(self, video_path, indices):
-        # Resolve VideoIterator from THIS module's globals at call time
-        # (tests patch tasks.VideoIterator after the module is imported).
-        _cls = globals().get("VideoIterator")
-        if _cls is None:
+    global _RangeVideoIterator_cls
+    if _RangeVideoIterator_cls is None:
+        _VI = globals().get("VideoIterator")
+        if _VI is None:
             raise RuntimeError(
                 "deeplabcut not installed — VideoIterator unavailable"
             )
-        self._inner = _cls(video_path)
-        self._indices = list(indices)
-        self._pos = 0
 
-    def __iter__(self):
-        return self
+        class _Range(_VI):
+            def __init__(self, video_path, indices):
+                super().__init__(video_path)
+                self._indices = list(indices)
+                self._pos = 0
 
-    def __next__(self):
-        if self._pos >= len(self._indices):
-            raise StopIteration
-        idx = self._indices[self._pos]
-        self._pos += 1
-        self._inner.set_to_frame(idx)
-        return self._inner.read_frame()
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if self._pos >= len(self._indices):
+                    raise StopIteration
+                idx = self._indices[self._pos]
+                self._pos += 1
+                self.set_to_frame(idx)
+                return self.read_frame()
+
+        _RangeVideoIterator_cls = _Range
+    return _RangeVideoIterator_cls(video_path, indices)
 
 
 def _atomic_write_h5(path, df):
