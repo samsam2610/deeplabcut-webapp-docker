@@ -999,6 +999,7 @@ import { makeFileBrowser } from './components/file_browser.js';
         const data = await r.json();
         if (!r.ok || data.error) { layer.errored = true; return null; }
         const entry = { key, poses: data.poses || [], n_bodyparts: data.n_bodyparts || 1 };
+        layer.errored = false;   // a successful fetch clears any earlier transient error (abort/race)
         layer.posesCache.set(frame, entry);
         return entry;
       } catch (e) { layer.errored = true; return null; }
@@ -1125,6 +1126,7 @@ import { makeFileBrowser } from './components/file_browser.js';
         const r    = await fetch(`/dlc/viewer/h5-info?h5=${encodeURIComponent(layer.path)}`);
         const data = await r.json();
         if (!r.ok || data.error) { layer.errored = true; return; }
+        layer.errored = false;   // success clears any earlier transient error
         layer.bodyparts = data.bodyparts || [];
         if (layer === _iaPrimary()) {
           // Keep the legacy globals in sync for any code path not yet migrated.
