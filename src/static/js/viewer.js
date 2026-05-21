@@ -1132,6 +1132,11 @@ import { makeFileBrowser } from './components/file_browser.js';
           // Keep the legacy globals in sync for any code path not yet migrated.
           _vaAllBodyParts = layer.bodyparts.slice();
           _vaNBodyparts   = _vaAllBodyParts.length;
+          // Build the body-part toggle chips. The legacy _vaLoadH5Info
+          // path did this, but the primary discover/select flow goes
+          // through here instead — without this the chip list never
+          // appears in the normal flow.
+          _vaRebuildPartsChecklist();
         }
       } catch (e) { layer.errored = true; }
     }

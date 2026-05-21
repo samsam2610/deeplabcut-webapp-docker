@@ -143,3 +143,28 @@ def test_layer_errored_flag_is_cleared_on_successful_fetch():
             f"{jsname} must clear layer.errored in BOTH _*FetchPosesForFrame "
             "and _*LoadLayerInfo success paths"
         )
+
+
+def test_loadlayerinfo_builds_bodypart_chips():
+    """Regression guard: _*LoadLayerInfo (the primary discover/select path)
+    must call _*RebuildPartsChecklist after setting *AllBodyParts.
+
+    The chip-builder used to be invoked only by the legacy _*LoadH5Info
+    (manual "Browse for h5" path). The everyday flow — pick video →
+    auto-discover → _*ApplyPrimaryFromSelect → _*LoadLayerInfo — set
+    *AllBodyParts but never built the chips, so the body-part visibility
+    toggle list never appeared. See session 2026-05-20.
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    for jsname, P in (("viewer.js", "va"), ("inline_analysis_player.js", "ia")):
+        src = (root / "src" / "static" / "js" / jsname).read_text()
+        # Locate the _*LoadLayerInfo body and assert it rebuilds the chips.
+        marker = f"async function _{P}LoadLayerInfo("
+        i = src.find(marker)
+        assert i > 0, f"{jsname}: _{P}LoadLayerInfo not found"
+        body = src[i:i + 1400]
+        assert f"_{P}RebuildPartsChecklist()" in body, (
+            f"{jsname}: _{P}LoadLayerInfo must call _{P}RebuildPartsChecklist() "
+            "so body-part chips build in the normal discover/select flow"
+        )
