@@ -84,16 +84,8 @@ import { makeFileBrowser } from './components/file_browser.js';
     //     bodyparts, errored }
     const _iaLayers = [];
     let   _iaGlobalThreshold    = 0.60;
-    let   _iaPerLayerThresholds = false;
 
     function _iaPrimary()     { return _iaLayers[0] || null; }
-    function _iaCompare()     { return _iaLayers.slice(1); }
-    function _iaIsEditable()  { return _iaLayers.length === 1; }
-    function _iaLayerThreshold(layer) {
-      return _iaPerLayerThresholds && layer.threshold != null
-        ? layer.threshold
-        : _iaGlobalThreshold;
-    }
 
     const _SHAPE_ORDER = ["circle-filled", "diamond", "square", "triangle"];
     function _iaAssignShapes() {
@@ -721,11 +713,6 @@ import { makeFileBrowser } from './components/file_browser.js';
 
     function _iaUpdateEditBanner() {
       if (!iaMarkerEditBanner) return;
-      // Force-hide while comparison layers are active — editing is disabled.
-      if (!_iaIsEditable()) {
-        iaMarkerEditBanner.classList.add("hidden");
-        return;
-      }
       const n = _iaEditCount();
       if (n === 0) {
         iaMarkerEditBanner.classList.add("hidden");
@@ -767,7 +754,6 @@ import { makeFileBrowser } from './components/file_browser.js';
 
     // Flush a single marker edit to the server (fire-and-forget)
     async function _iaFlushMarkerEdit(frame, bp, x, y) {
-      if (!_iaIsEditable()) return;     // edit disabled while compare layers active
       const layer = _iaPrimary();
       if (!layer) return;
       try {
@@ -781,7 +767,6 @@ import { makeFileBrowser } from './components/file_browser.js';
 
     // Delete a marker (set to NaN) in the server cache (fire-and-forget)
     async function _iaFlushMarkerDelete(frame, bp) {
-      if (!_iaIsEditable()) return;     // edit disabled while compare layers active
       const layer = _iaPrimary();
       if (!layer) return;
       try {
@@ -822,8 +807,7 @@ import { makeFileBrowser } from './components/file_browser.js';
           _iaSelectBp(hit);
           return;
         }
-        if (!_iaIsEditable()) return;     // edit disabled while compare layers active
-        if (!_iaSelectedBp) return;
+          if (!_iaSelectedBp) return;
         const { x, y } = _iaCanvasToVideo(cx, cy);
         if (!_iaLocalEdits.has(_iaCurrentFrame)) _iaLocalEdits.set(_iaCurrentFrame, {});
         _iaLocalEdits.get(_iaCurrentFrame)[_iaSelectedBp] = { x, y };
@@ -837,8 +821,7 @@ import { makeFileBrowser } from './components/file_browser.js';
 
       // Mousedown on a marker → begin drag; otherwise ignored
       iaOverlayCanvas.addEventListener("mousedown", e => {
-        if (!_iaIsEditable()) return;     // edit disabled while compare layers active
-        if (!_iaOverlayEnabled || !_iaCurrentPoses.length || e.button !== 0) return;
+          if (!_iaOverlayEnabled || !_iaCurrentPoses.length || e.button !== 0) return;
         const rect = iaOverlayCanvas.getBoundingClientRect();
         const hit  = _iaHitTestWithEdits(e.clientX - rect.left, e.clientY - rect.top);
         if (!hit) return;
@@ -855,8 +838,7 @@ import { makeFileBrowser } from './components/file_browser.js';
         const cy   = e.clientY - rect.top;
 
         if (_iaDragging && _iaDragBp) {
-          if (!_iaIsEditable()) return;     // edit disabled while compare layers active
-          const { x, y } = _iaCanvasToVideo(cx, cy);
+              const { x, y } = _iaCanvasToVideo(cx, cy);
           if (!_iaLocalEdits.has(_iaCurrentFrame)) _iaLocalEdits.set(_iaCurrentFrame, {});
           _iaLocalEdits.get(_iaCurrentFrame)[_iaDragBp] = { x, y };
           _iaSyncCanvas();
@@ -871,8 +853,7 @@ import { makeFileBrowser } from './components/file_browser.js';
       });
 
       iaOverlayCanvas.addEventListener("mouseup", async e => {
-        if (!_iaIsEditable()) return;     // edit disabled while compare layers active
-        if (!_iaDragging || !_iaDragBp) return;
+          if (!_iaDragging || !_iaDragBp) return;
         _iaDragging = false;
         const rect  = iaOverlayCanvas.getBoundingClientRect();
         const { x, y } = _iaCanvasToVideo(e.clientX - rect.left, e.clientY - rect.top);
@@ -906,8 +887,7 @@ import { makeFileBrowser } from './components/file_browser.js';
       // Right-click → delete (NaN) the currently selected marker
       iaOverlayCanvas.addEventListener("contextmenu", e => {
         e.preventDefault();
-        if (!_iaIsEditable()) return;     // edit disabled while compare layers active
-        if (!_iaOverlayEnabled || !_iaSelectedBp || !_iaPrimary()) return;
+          if (!_iaOverlayEnabled || !_iaSelectedBp || !_iaPrimary()) return;
         if (!_iaLocalEdits.has(_iaCurrentFrame)) _iaLocalEdits.set(_iaCurrentFrame, {});
         _iaLocalEdits.get(_iaCurrentFrame)[_iaSelectedBp] = { x: null, y: null };
         _iaSyncCanvas();
@@ -922,8 +902,7 @@ import { makeFileBrowser } from './components/file_browser.js';
     // Save Adjustments button
     if (iaSaveAdjBtn) {
       iaSaveAdjBtn.addEventListener("click", async () => {
-        if (!_iaIsEditable()) return;     // edit disabled while compare layers active
-        const layer = _iaPrimary();
+          const layer = _iaPrimary();
         if (!layer) return;
         iaSaveAdjBtn.disabled = true;
         iaSaveAdjBtn.textContent = "Saving…";
@@ -956,8 +935,7 @@ import { makeFileBrowser } from './components/file_browser.js';
     // Discard Adjustments button
     if (iaDiscardAdjBtn) {
       iaDiscardAdjBtn.addEventListener("click", async () => {
-        if (!_iaIsEditable()) return;     // edit disabled while compare layers active
-        const layer = _iaPrimary();
+          const layer = _iaPrimary();
         if (!layer) return;
         _iaLocalEdits.clear();
         _iaClearPoseCache();
@@ -987,8 +965,7 @@ import { makeFileBrowser } from './components/file_browser.js';
     const iaClearFrameBtn = document.getElementById("ia-clear-frame-btn");
     if (iaClearFrameBtn) {
       iaClearFrameBtn.addEventListener("dblclick", async () => {
-        if (!_iaIsEditable()) return;     // edit disabled while compare layers active
-        if (!_iaOverlayEnabled || !_iaPrimary() || !_iaCurrentPoses.length) return;
+          if (!_iaOverlayEnabled || !_iaPrimary() || !_iaCurrentPoses.length) return;
         const frameMap = {};
         for (const pose of _iaCurrentPoses) {
           frameMap[pose.bp] = { x: null, y: null };
@@ -1004,7 +981,7 @@ import { makeFileBrowser } from './components/file_browser.js';
 
     // Pose cache key (per layer) — encodes everything that affects pose data.
     function _iaPoseCacheKey(layer) {
-      return `${layer.path}:${_iaLayerThreshold(layer).toFixed(2)}`;
+      return `${layer.path}:${_iaGlobalThreshold.toFixed(2)}`;
     }
 
     // Fetch poses for one (layer, frame) pair into layer.posesCache.
@@ -1015,7 +992,7 @@ import { makeFileBrowser } from './components/file_browser.js';
       if (cached && cached.key === key) return cached;
       const params = new URLSearchParams({
         h5:        layer.path,
-        threshold: _iaLayerThreshold(layer).toFixed(2),
+        threshold: _iaGlobalThreshold.toFixed(2),
       });
       try {
         const r    = await fetch(`/dlc/viewer/frame-poses/${frame}?${params}`);
@@ -1039,12 +1016,6 @@ import { makeFileBrowser } from './components/file_browser.js';
       } else {
         _iaCurrentPoses = [];
       }
-      // Also kick off comparison-layer fetches for the same frame so V/H markers appear.
-      await Promise.all(
-        _iaCompare()
-          .filter(l => l.visible && !l.errored)
-          .map(l => _iaFetchPosesForFrame(l, frameNumber))
-      );
       _iaHoverBp = null;
       _iaDrawHoverLabel();
       _iaUpdateBpChipStatus();
@@ -1081,7 +1052,7 @@ import { makeFileBrowser } from './components/file_browser.js';
         h5:        layer.path,
         start:     String(fromFrame),
         count:     String(_POSE_WINDOW),
-        threshold: _iaLayerThreshold(layer).toFixed(2),
+        threshold: _iaGlobalThreshold.toFixed(2),
       });
       try {
         const r = await fetch(`/dlc/viewer/frame-poses-batch?${params}`, { signal });
@@ -1263,12 +1234,10 @@ import { makeFileBrowser } from './components/file_browser.js';
       // Fetch every analyzable h5 near `videoPath` and populate the Primary <select>.
       // Default the primary to the first 'raw' entry, or the first variant otherwise.
       const select = document.getElementById("ia-overlay-primary-select");
-      const addCmp = document.getElementById("ia-overlay-add-compare");
-      if (!select || !addCmp) return;
+      if (!select) return;
 
-      // Reset both controls to their empty states.
+      // Reset the primary select to its empty state.
       select.innerHTML = '<option value="">(no h5 detected — use Browse)</option>';
-      addCmp.innerHTML = '<option value="">+ add comparison…</option>';
 
       let data;
       try {
@@ -1296,29 +1265,6 @@ import { makeFileBrowser } from './components/file_browser.js';
       if (!defaultEntry) return;
       select.value = defaultEntry.path;
       await _iaApplyPrimaryFromSelect();
-      _iaSyncPrimaryRow();
-      _iaRefreshAddComparisonOptions(data.variants);
-    }
-
-    function _iaRefreshAddComparisonOptions(variants) {
-      const addCmp = document.getElementById("ia-overlay-add-compare");
-      const hint   = document.getElementById("ia-overlay-add-compare-empty-hint");
-      if (!addCmp) return;
-      addCmp.innerHTML = '<option value="">+ add comparison…</option>';
-      const taken = new Set(_iaLayers.map(l => l.path));
-      const available = (variants || []).filter(v => !v.disabled && !taken.has(v.path));
-      available.forEach((v) => {
-        const opt = document.createElement("option");
-        opt.value = v.path;
-        opt.textContent = v.label;
-        opt.dataset.type  = v.type;
-        opt.dataset.label = v.label;
-        addCmp.appendChild(opt);
-      });
-      // Show the dropdown only when at least one non-taken option exists;
-      // otherwise show the inline "(no other variants)" hint.
-      addCmp.classList.toggle("hidden", available.length === 0);
-      if (hint) hint.classList.toggle("hidden", available.length > 0);
     }
 
     async function _iaApplyPrimaryFromSelect() {
@@ -1337,152 +1283,7 @@ import { makeFileBrowser } from './components/file_browser.js';
       document.getElementById("ia-overlay-h5-path").value = path;
       await _iaLoadLayerInfo(layer);
       await _iaLoadEditCacheForPrimary();
-      _iaRenderCompareRows();
-      _iaRefreshAddComparisonOptions(_iaLastVariants);
-      _iaRenderPrimaryThresholdInline();
       if (_iaOverlayEnabled) _iaLoadFrame(_iaCurrentFrame);
-      _iaSyncPrimaryRow();
-    }
-
-    function _iaRenderPrimaryThresholdInline() {
-      const host = document.getElementById("ia-overlay-primary-select");
-      if (!host) return;
-      let slot = document.getElementById("ia-overlay-primary-threshold-slot");
-      if (!_iaPerLayerThresholds) {
-        if (slot) slot.remove();
-        return;
-      }
-      if (!slot) {
-        slot = document.createElement("span");
-        slot.id = "ia-overlay-primary-threshold-slot";
-        slot.style.cssText = "display:flex;align-items:center;gap:.25rem;margin-left:.4rem";
-        host.parentElement?.appendChild(slot);
-      }
-      slot.innerHTML = "";
-      const layer = _iaPrimary();
-      if (!layer) return;
-      const slider = document.createElement("input");
-      slider.type = "range"; slider.min = "0"; slider.max = "1"; slider.step = "0.05";
-      slider.value = String(layer.threshold ?? _iaGlobalThreshold);
-      slider.style.cssText = "width:60px;accent-color:var(--accent)";
-      const lbl = document.createElement("span");
-      lbl.style.cssText = "font-family:var(--mono);font-size:.7rem;min-width:2.2rem";
-      lbl.textContent = Number(slider.value).toFixed(2);
-      slider.addEventListener("input", () => {
-        layer.threshold = Number(slider.value);
-        lbl.textContent = layer.threshold.toFixed(2);
-        if (_iaOverlayEnabled) {
-          _iaFetchPosesForFrame(layer, _iaCurrentFrame).then(_iaDrawCurrentFrame);
-        }
-      });
-      slot.appendChild(slider);
-      slot.appendChild(lbl);
-    }
-
-    // ── Comparison-row UI ──────────────────────────────────────────
-    function _shapeGlyph(shape) {
-      switch (shape) {
-        case "circle-filled": return "●";
-        case "diamond":       return "◆";
-        case "square":        return "□";
-        case "triangle":      return "△";
-        default:              return "?";
-      }
-    }
-
-    function _iaRenderCompareRows() {
-      const list = document.getElementById("ia-overlay-compare-list");
-      if (!list) return;
-      list.innerHTML = "";
-      _iaCompare().forEach((layer) => {
-        const row = document.createElement("div");
-        row.id = `va-layer-row-${layer.id}`;
-        row.style.cssText = "display:flex;align-items:center;gap:.35rem;font-size:.74rem;padding:.15rem .25rem;background:var(--surface);border:1px solid var(--border);border-radius:5px";
-        // visibility checkbox
-        const vis = document.createElement("input");
-        vis.type = "checkbox";
-        vis.checked = layer.visible;
-        vis.style.cssText = "accent-color:var(--accent);width:12px;height:12px;flex-shrink:0";
-        vis.addEventListener("change", () => {
-          layer.visible = vis.checked;
-          _iaDrawCurrentFrame();
-        });
-        row.appendChild(vis);
-        // shape badge
-        const badge = document.createElement("span");
-        badge.textContent = _shapeGlyph(layer.shape);
-        badge.style.cssText = "font-family:var(--mono);width:1.1rem;text-align:center;flex-shrink:0";
-        row.appendChild(badge);
-        // label
-        const lbl = document.createElement("span");
-        lbl.textContent = layer.label;
-        lbl.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-        row.appendChild(lbl);
-        // per-layer threshold (rendered conditionally when Customize is on)
-        const thrSlot = document.createElement("span");
-        thrSlot.dataset.role = "threshold";
-        thrSlot.style.cssText = "display:flex;align-items:center;gap:.25rem;flex-shrink:0";
-        if (_iaPerLayerThresholds) {
-          const slider = document.createElement("input");
-          slider.type = "range"; slider.min = "0"; slider.max = "1"; slider.step = "0.05";
-          slider.value = String(layer.threshold ?? _iaGlobalThreshold);
-          slider.style.cssText = "width:60px;accent-color:var(--accent)";
-          const lbl = document.createElement("span");
-          lbl.style.cssText = "font-family:var(--mono);font-size:.7rem;min-width:2.2rem";
-          lbl.textContent = Number(slider.value).toFixed(2);
-          slider.addEventListener("input", () => {
-            layer.threshold = Number(slider.value);
-            lbl.textContent = layer.threshold.toFixed(2);
-            if (_iaOverlayEnabled) {
-              _iaFetchPosesForFrame(layer, _iaCurrentFrame).then(_iaDrawCurrentFrame);
-            }
-          });
-          thrSlot.appendChild(slider);
-          thrSlot.appendChild(lbl);
-        }
-        row.appendChild(thrSlot);
-        // remove button
-        const rm = document.createElement("button");
-        rm.className = "btn-sm";
-        rm.style.cssText = "padding:.05rem .35rem;font-size:.7rem;flex-shrink:0";
-        rm.textContent = "×";
-        rm.title = "Remove this comparison layer";
-        rm.addEventListener("click", () => _iaRemoveCompare(layer.id));
-        row.appendChild(rm);
-        list.appendChild(row);
-      });
-      _iaUpdateEditDisabledBanner();
-    }
-
-    async function _iaAddCompare(path, label, type) {
-      if (_iaLayers.some(l => l.path === path)) return;
-      const layer = _iaMakeLayer({ path, label, type });
-      _iaLayers.push(layer);
-      _iaAssignShapes();
-      await _iaLoadLayerInfo(layer);
-      // Pre-fetch poses for the current frame so the new layer paints immediately.
-      if (_iaOverlayEnabled) await _iaFetchPosesForFrame(layer, _iaCurrentFrame);
-      _iaRenderCompareRows();
-      _iaRefreshAddComparisonOptions(_iaLastVariants);
-      _iaDrawCurrentFrame();
-    }
-
-    function _iaRemoveCompare(id) {
-      const idx = _iaLayers.findIndex(l => l.id === id);
-      if (idx < 1) return;  // never remove primary
-      _iaLayers.splice(idx, 1);
-      _iaAssignShapes();
-      _iaRenderCompareRows();
-      _iaRefreshAddComparisonOptions(_iaLastVariants);
-      _iaDrawCurrentFrame();
-    }
-
-    function _iaUpdateEditDisabledBanner() {
-      const banner = document.getElementById("ia-overlay-edit-disabled-banner");
-      if (banner) banner.classList.toggle("hidden", _iaIsEditable());
-      // Re-evaluate the marker-edit banner: when compare layers are active it
-      // must be force-hidden regardless of unsaved-edit count.
-      _iaUpdateEditBanner();
     }
 
     iaOverlayToggle?.addEventListener("change", () => {
@@ -1501,39 +1302,6 @@ import { makeFileBrowser } from './components/file_browser.js';
 
     const iaOverlayPrimarySelect = document.getElementById("ia-overlay-primary-select");
     iaOverlayPrimarySelect?.addEventListener("change", _iaApplyPrimaryFromSelect);
-
-    const iaOverlayAddCompare = document.getElementById("ia-overlay-add-compare");
-    iaOverlayAddCompare?.addEventListener("change", async (e) => {
-      const path = e.target.value;
-      if (!path) return;
-      const opt  = e.target.options[e.target.selectedIndex];
-      await _iaAddCompare(path, opt.dataset.label, opt.dataset.type);
-      e.target.value = "";  // reset to placeholder
-    });
-
-    const iaOverlayPrimaryVisible = document.getElementById("ia-overlay-primary-visible");
-    const iaOverlayPrimaryShape   = document.getElementById("ia-overlay-primary-shape");
-    const iaOverlayPrimaryLabel   = document.getElementById("ia-overlay-primary-label");
-
-    iaOverlayPrimaryVisible?.addEventListener("change", () => {
-      const layer = _iaPrimary();
-      if (!layer) return;
-      layer.visible = !!iaOverlayPrimaryVisible.checked;
-      _iaDrawCurrentFrame();
-    });
-
-    function _iaSyncPrimaryRow() {
-      const layer = _iaPrimary();
-      if (!layer) {
-        if (iaOverlayPrimaryShape) iaOverlayPrimaryShape.textContent = "—";
-        if (iaOverlayPrimaryLabel) iaOverlayPrimaryLabel.textContent = "(no primary)";
-        if (iaOverlayPrimaryVisible) iaOverlayPrimaryVisible.checked = false;
-        return;
-      }
-      if (iaOverlayPrimaryShape) iaOverlayPrimaryShape.textContent = _shapeGlyph(layer.shape);
-      if (iaOverlayPrimaryLabel) iaOverlayPrimaryLabel.textContent = layer.label || "";
-      if (iaOverlayPrimaryVisible) iaOverlayPrimaryVisible.checked = !!layer.visible;
-    }
 
     iaOverlayH5Clear?.addEventListener("click", () => {
       _iaSetPrimaryLayer(null);
@@ -1557,23 +1325,6 @@ import { makeFileBrowser } from './components/file_browser.js';
       // Stale per-layer cache entries are auto-skipped by _iaFetchPosesForFrame
       // (key mismatch on threshold), so we just trigger a re-fetch of the
       // current frame.
-      if (_iaOverlayEnabled) _iaLoadFrame(_iaCurrentFrame);
-    });
-
-    // Customize per-layer thresholds toggle
-    const iaCustomizeThr = document.getElementById("ia-overlay-customize-thresholds");
-    iaCustomizeThr?.addEventListener("change", () => {
-      _iaPerLayerThresholds = iaCustomizeThr.checked;
-      if (!_iaPerLayerThresholds) {
-        // Forget per-layer overrides; revert to global.
-        _iaLayers.forEach(l => l.threshold = null);
-      } else {
-        // Seed each layer's override with the current global so toggling on
-        // produces no immediate visual change.
-        _iaLayers.forEach(l => l.threshold = _iaGlobalThreshold);
-      }
-      _iaRenderCompareRows();
-      _iaRenderPrimaryThresholdInline();
       if (_iaOverlayEnabled) _iaLoadFrame(_iaCurrentFrame);
     });
 
