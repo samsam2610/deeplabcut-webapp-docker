@@ -64,3 +64,25 @@ def test_write_to_canonical_creates_then_merges(tmp_path):
                                  canonical_scorer="CANON", save_as_csv=False)
     got2 = pd.read_hdf(str(h5))
     assert got2.iloc[0, 0] == 5.0 and got2.iloc[2, 0] == 1.0
+
+
+def test_run_range_writes_canonical_not_scorer_named(monkeypatch, tmp_path):
+    """_run_range must write <stem>_analyzed.h5 (canonical), not <stem><scorer>.h5."""
+    from src.dlc import tasks
+    vid = tmp_path / "clipB.avi"; vid.write_bytes(b"x")
+    cols = pd.MultiIndex.from_product([["SNAPSCORER"], ["nose"], ["x", "y", "likelihood"]],
+                                      names=["scorer", "bodyparts", "coords"])
+    fake_df = pd.DataFrame([[1.0, 2.0, 0.9]], index=pd.Index([0]), columns=cols)
+    monkeypatch.setitem(tasks.__dict__, "_RangeVideoIterator", lambda *a, **k: object())
+    monkeypatch.setitem(tasks.__dict__, "video_inference", lambda *a, **k: object())
+    monkeypatch.setitem(tasks.__dict__, "_dlc_create_df_from_prediction",
+                        lambda **k: fake_df.copy())
+    req = {"video_path": str(vid), "start_frame": 0, "n_frames": 1,
+           "save_as_csv": True, "snapshot_path": "/snap", "req_id": "r1"}
+    n_an, n_sk = tasks._run_range(runner=object(), scorer="SNAPSCORER", model_cfg={},
+                                  multi_animal=False, canonical_scorer="CANON", req=req)
+    assert n_an == 1
+    assert (tmp_path / "clipB_analyzed.h5").exists()
+    assert not (tmp_path / "clipBSNAPSCORER.h5").exists()
+    got = pd.read_hdf(str(tmp_path / "clipB_analyzed.h5"))
+    assert got.columns.get_level_values("scorer").unique().tolist() == ["CANON"]
