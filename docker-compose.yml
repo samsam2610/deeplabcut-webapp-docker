@@ -185,6 +185,7 @@ services:
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/dlc_3d.html:/app/templates/dlc_3d.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/static:/app/static
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_3d_extract.html:/app/templates/partials/card_3d_extract.html
+      - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_inline_analysis_3d.html:/app/templates/partials/card_inline_analysis_3d.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_launcher.html:/app/templates/partials/card_lp_launcher.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_convert.html:/app/templates/partials/card_lp_convert.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_lp_train.html:/app/templates/partials/card_lp_train.html
