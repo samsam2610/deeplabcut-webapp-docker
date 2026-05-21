@@ -2586,11 +2586,18 @@ import { makeFileBrowser } from './components/file_browser.js';
               if (videoPath && typeof _iaDiscoverVariants === "function") {
                 // Re-scan for h5 variants near the video. The just-produced
                 // h5 will appear and _vaPickBestPrimary's defaulting picks
-                // it up. After discovery, force overlay on so markers draw.
+                // it up.
                 await _iaDiscoverVariants(videoPath);
                 if (iaOverlayToggle && !iaOverlayToggle.checked) {
                   iaOverlayToggle.checked = true;
                   iaOverlayToggle.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+                // The change-handler kicks _iaFetchPoses but that path skips
+                // the image-preload + paint barrier _iaLoadFrame provides.
+                // Force a full _iaLoadFrame so markers paint deterministically
+                // — same path the threshold slider uses to "make it show".
+                if (typeof _iaLoadFrame === "function") {
+                  await _iaLoadFrame(_iaCurrentFrame);
                 }
               }
               _iaActiveReqId = null;
