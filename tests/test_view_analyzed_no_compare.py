@@ -119,3 +119,27 @@ def test_viewer_js_keeps_marker_edit_save_path():
     assert "va-discard-adjustments-btn" in src
     assert "va-clear-frame-btn" in src
     assert "/dlc/viewer/save-marker-edits" in src
+
+
+def test_layer_errored_flag_is_cleared_on_successful_fetch():
+    """Regression guard: a successful pose fetch / h5-info load must
+    clear layer.errored. The flag is sticky otherwise — a transient
+    abort/race during the rapid video-pick sequence permanently marks
+    the primary layer errored, and every draw skips it even though
+    poses are cached. Symptom: view-only flow (toggle Show markers +
+    scrub, no Analyze) shows nothing. See session 2026-05-20.
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    for jsname in ("viewer.js", "inline_analysis_player.js"):
+        src = (root / "src" / "static" / "js" / jsname).read_text()
+        # success in the per-frame pose fetch clears errored
+        assert "layer.errored = false;" in src, (
+            f"{jsname} must clear layer.errored on a successful fetch "
+            "(otherwise a transient early error permanently hides markers)"
+        )
+        # at least two clear-sites: pose fetch + h5-info load
+        assert src.count("layer.errored = false;") >= 2, (
+            f"{jsname} must clear layer.errored in BOTH _*FetchPosesForFrame "
+            "and _*LoadLayerInfo success paths"
+        )
