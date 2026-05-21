@@ -216,3 +216,78 @@ def test_hide_no_h5_unchecked_by_default():
     assert " checked" not in tag, (
         "ia-browse-hide-no-h5 must default UNCHECKED (opposite of View-Analyzed)"
     )
+
+
+# ─── compare-layer + per-layer-threshold regression guards ───────────
+
+
+_FORBIDDEN_HTML_FRAGMENTS = (
+    "ia-overlay-compare-block",
+    "ia-overlay-add-compare",
+    "ia-overlay-add-compare-empty-hint",
+    "ia-overlay-compare-list",
+    "ia-overlay-edit-disabled-banner",
+    "ia-overlay-customize-thresholds",
+    "ia-overlay-primary-threshold-slot",
+    "ia-overlay-primary-row",
+    "ia-overlay-primary-visible",
+    "ia-overlay-primary-shape",
+    "ia-overlay-primary-label",
+    "Comparison layers",
+    "Customize threshold per layer",
+)
+
+
+_FORBIDDEN_JS_SYMBOLS = (
+    "_iaCompare(",
+    "_iaIsEditable",
+    "_iaPerLayerThresholds",
+    "_iaLayerThreshold",
+    "_iaRenderCompareRows",
+    "_iaAddCompare",
+    "_iaRemoveCompare",
+    "_iaRefreshAddComparisonOptions",
+    "_iaRenderPrimaryThresholdInline",
+    "_iaUpdateEditDisabledBanner",
+    "_iaSyncPrimaryRow",
+)
+
+
+def test_card_partial_has_no_compare_layer_markup():
+    """Compare-layer + customize-threshold DOM ids must NOT reappear in
+    the inline-analysis partial. See
+    docs/superpowers/specs/2026-05-20-remove-compare-layers-design.md.
+    """
+    html = CARD.read_text()
+    for frag in _FORBIDDEN_HTML_FRAGMENTS:
+        assert frag not in html, (
+            f"forbidden compare-layer markup reintroduced: {frag!r}"
+        )
+
+
+def test_player_js_has_no_compare_layer_symbols():
+    """Compare-layer JS functions + per-layer-threshold state must NOT
+    reappear in inline_analysis_player.js.
+    """
+    src = PLAYER_JS.read_text()
+    for sym in _FORBIDDEN_JS_SYMBOLS:
+        assert sym not in src, (
+            f"forbidden compare-layer symbol reintroduced: {sym!r}"
+        )
+
+
+def test_player_js_uses_global_threshold_directly():
+    """After collapse of _iaLayerThreshold(layer), every pose-fetch
+    URL builder must read _iaGlobalThreshold directly. No per-layer
+    threshold getter calls remain.
+    """
+    src = PLAYER_JS.read_text()
+    assert "_iaGlobalThreshold" in src, (
+        "_iaGlobalThreshold must still drive the threshold query parameter"
+    )
+    # Sanity: the three pose-cache / fetch / prefetch builders should all
+    # reference _iaGlobalThreshold rather than the removed helper.
+    assert src.count("_iaGlobalThreshold") >= 4, (
+        "expected >=4 uses of _iaGlobalThreshold (state init + 3 builders); "
+        "if fewer, the helper-collapse step probably missed a call site"
+    )
