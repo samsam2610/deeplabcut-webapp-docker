@@ -114,7 +114,30 @@ import { makeFileBrowser } from './components/file_browser.js';
           _avBatchList.splice(idx, 1);
           _avRenderBatchList();
         });
+        const initBtn = document.createElement("button");
+        initBtn.className = "btn-sm av-init-file";
+        initBtn.dataset.path = p;
+        initBtn.style.cssText = "padding:.15rem .45rem;font-size:.72rem;margin-left:.4rem";
+        initBtn.textContent = "○ Init analysis file";
+        fetch(`/dlc/project/analysis-file/status?video_path=${encodeURIComponent(p)}`)
+          .then(r => r.json()).then(d => {
+            if (d.initialized) { initBtn.textContent = "✓ Analysis file ready"; initBtn.disabled = true; }
+          }).catch(() => {});
+        initBtn.addEventListener("click", async () => {
+          initBtn.disabled = true; initBtn.textContent = "…";
+          const r = await fetch("/dlc/project/analysis-file/initialize", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ video_path: p }),
+          });
+          if (r.ok || r.status === 409) {
+            initBtn.textContent = "✓ Analysis file ready";
+          } else {
+            const e = await r.json().catch(() => ({}));
+            initBtn.textContent = `⚠ ${e.error || r.status}`; initBtn.disabled = false;
+          }
+        });
         row.appendChild(label);
+        row.appendChild(initBtn);
         row.appendChild(rm);
         avBatchList.appendChild(row);
       });
