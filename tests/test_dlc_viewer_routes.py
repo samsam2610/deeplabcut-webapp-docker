@@ -281,3 +281,29 @@ def test_dir_with_h5_403_on_disallowed_path(flask_test_client, tmp_path, monkeyp
     monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: False)
     resp = client.get(f"/dlc/viewer/dir-with-h5?path={tmp_path}")
     assert resp.status_code == 403
+
+
+def test_viewer_load_h5_invalidates_cache_on_mtime_change():
+    """Regression guard: viewer_load_h5 must invalidate its in-memory
+    cache when the .h5 file's mtime changes.
+
+    Inline Analysis (and any re-analyze) REWRITES the .h5 on disk when a
+    new frame-range is processed. A path-only cache served the
+    pre-rewrite DataFrame, so freshly-analyzed frames read back empty and
+    their markers never appeared (the dreaded "analysis finished, no
+    marker"). See session 2026-05-20.
+    """
+    from pathlib import Path as _P
+    src = (_P(__file__).resolve().parents[1] / "src" / "dlc" / "viewer.py").read_text()
+    fn_start = src.find("def viewer_load_h5(")
+    assert fn_start > 0, "viewer_load_h5 not found"
+    body = src[fn_start:fn_start + 2000]
+    assert ".st_mtime" in body, (
+        "viewer_load_h5 must read the file mtime to guard the cache"
+    )
+    assert 'cached.get("mtime")' in body, (
+        "viewer_load_h5 must compare the cached mtime before returning a hit"
+    )
+    assert '"mtime": cur_mtime' in body, (
+        "the cache entry must store the mtime it was loaded at"
+    )
