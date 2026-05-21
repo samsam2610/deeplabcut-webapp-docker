@@ -68,7 +68,9 @@ def test_write_to_canonical_creates_then_merges(tmp_path):
 
 def test_run_range_writes_canonical_not_scorer_named(monkeypatch, tmp_path):
     """_run_range must write <stem>_analyzed.h5 (canonical), not <stem><scorer>.h5."""
-    from src.dlc import tasks
+    # tasks.py imports `deeplabcut` at module load; skip on hosts without it
+    # (the worker container has it, and the live smoke covers the integration).
+    tasks = pytest.importorskip("src.dlc.tasks", reason="deeplabcut not importable on host")
     vid = tmp_path / "clipB.avi"; vid.write_bytes(b"x")
     cols = pd.MultiIndex.from_product([["SNAPSCORER"], ["nose"], ["x", "y", "likelihood"]],
                                       names=["scorer", "bodyparts", "coords"])
@@ -86,3 +88,26 @@ def test_run_range_writes_canonical_not_scorer_named(monkeypatch, tmp_path):
     assert not (tmp_path / "clipBSNAPSCORER.h5").exists()
     got = pd.read_hdf(str(tmp_path / "clipB_analyzed.h5"))
     assert got.columns.get_level_values("scorer").unique().tolist() == ["CANON"]
+
+
+# ─── UI wiring guards (canonical analysis-file init button) ────────────
+from pathlib import Path as _P
+_ROOT = _P(__file__).resolve().parents[1]
+
+
+def test_init_button_wired_in_analyze_and_inline2d():
+    analyze_js = (_ROOT / "src/static/js/analyze.js").read_text()
+    assert "/dlc/project/analysis-file/initialize" in analyze_js
+    assert "av-init-file" in analyze_js
+    ia2d = (_ROOT / "src/static/js/inline_analysis_player.js").read_text()
+    assert "ia-init-analysis-file" in ia2d
+    assert "/dlc/project/analysis-file/initialize" in ia2d
+    ia2d_html = (_ROOT / "src/templates/partials/card_inline_analysis.html").read_text()
+    assert 'id="ia-init-analysis-file"' in ia2d_html
+
+
+def test_init_routes_registered():
+    src = (_ROOT / "src/dlc/inline_analysis.py").read_text()
+    assert "/dlc/project/analysis-file/initialize" in src
+    assert "/dlc/project/analysis-file/status" in src
+    assert "already initialized" in src   # the 409 lock
