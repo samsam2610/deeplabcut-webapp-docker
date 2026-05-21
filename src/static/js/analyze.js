@@ -125,15 +125,19 @@ import { makeFileBrowser } from './components/file_browser.js';
           }).catch(() => {});
         initBtn.addEventListener("click", async () => {
           initBtn.disabled = true; initBtn.textContent = "…";
-          const r = await fetch("/dlc/project/analysis-file/initialize", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ video_path: p }),
-          });
-          if (r.ok || r.status === 409) {
-            initBtn.textContent = "✓ Analysis file ready";
-          } else {
-            const e = await r.json().catch(() => ({}));
-            initBtn.textContent = `⚠ ${e.error || r.status}`; initBtn.disabled = false;
+          try {
+            const r = await fetch("/dlc/project/analysis-file/initialize", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ video_path: p }),
+            });
+            if (r.ok || r.status === 409) {
+              initBtn.textContent = "✓ Analysis file ready";
+            } else {
+              const e = await r.json().catch(() => ({}));
+              initBtn.textContent = `⚠ ${e.error || r.status}`; initBtn.disabled = false;
+            }
+          } catch (err) {
+            initBtn.textContent = "○ Init analysis file"; initBtn.disabled = false;
           }
         });
         row.appendChild(label);

@@ -2414,12 +2414,16 @@ import { makeFileBrowser } from './components/file_browser.js';
         const v = _iaCurrentVideoPath || _iaBrowseVideoPath;
         if (!v) return;
         iaInitFileBtn.disabled = true; iaInitFileBtn.textContent = "…";
-        const r = await fetch("/dlc/project/analysis-file/initialize", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ video_path: v }),
-        });
-        if (r.ok || r.status === 409) { iaInitFileBtn.textContent = "✓ Analysis file ready"; }
-        else { const e = await r.json().catch(() => ({})); iaInitFileBtn.textContent = `⚠ ${e.error || r.status}`; iaInitFileBtn.disabled = false; }
+        try {
+          const r = await fetch("/dlc/project/analysis-file/initialize", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ video_path: v }),
+          });
+          if (r.ok || r.status === 409) { iaInitFileBtn.textContent = "✓ Analysis file ready"; }
+          else { const e = await r.json().catch(() => ({})); iaInitFileBtn.textContent = `⚠ ${e.error || r.status}`; iaInitFileBtn.disabled = false; }
+        } catch (err) {
+          iaInitFileBtn.textContent = "○ Initialize analysis file"; iaInitFileBtn.disabled = false;
+        }
       });
       if (iaFrameCounter) new MutationObserver(_iaRefreshInitFileBtn)
         .observe(iaFrameCounter, { childList: true, characterData: true, subtree: true });

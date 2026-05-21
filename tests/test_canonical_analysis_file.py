@@ -111,3 +111,21 @@ def test_init_routes_registered():
     assert "/dlc/project/analysis-file/initialize" in src
     assert "/dlc/project/analysis-file/status" in src
     assert "already initialized" in src   # the 409 lock
+
+
+def test_write_to_canonical_preserves_column_order(tmp_path):
+    """Re-merging must keep the existing canonical column order (combine_first
+    otherwise alphabetically re-sorts the MultiIndex columns)."""
+    vid = tmp_path / "clipC.avi"; vid.write_bytes(b"x")
+    # existing canonical file with bodyparts in a deliberate (non-alphabetical) order
+    bps = ["snout", "abdomen"]
+    existing = canonical.build_empty_dense_df("CANON", bps, 3)
+    canonical._atomic_write_h5(canonical.canonical_h5_path(str(vid)), existing)
+    # new range under a different scorer, same bodyparts
+    cols = pd.MultiIndex.from_product([["SNAP"], bps, ["x", "y", "likelihood"]],
+                                      names=["scorer", "bodyparts", "coords"])
+    df = pd.DataFrame([[1.0]*6], index=pd.Index([1]), columns=cols)
+    canonical.write_to_canonical(str(vid), df, source_scorer="SNAP",
+                                 canonical_scorer="CANON", save_as_csv=False)
+    got = pd.read_hdf(str(canonical.canonical_h5_path(str(vid))))
+    assert got.columns.get_level_values("bodyparts").tolist() == existing.columns.get_level_values("bodyparts").tolist()

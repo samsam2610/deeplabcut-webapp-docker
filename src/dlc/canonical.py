@@ -98,6 +98,12 @@ def write_to_canonical(video_path, df: pd.DataFrame, *, source_scorer: str,
     df = relabel_scorer(df, source_scorer, canonical_scorer)
     existing = pd.read_hdf(str(h5)) if h5.exists() else None
     merged = df if existing is None else df.combine_first(existing)
+    if existing is not None:
+        # combine_first unions + alphabetically re-sorts columns. Pin the
+        # canonical file's existing column order so the DLC (scorer, bodyparts,
+        # coords) layout that downstream positional consumers rely on is
+        # preserved across runs.
+        merged = merged.reindex(columns=existing.columns)
     if len(merged):
         max_idx = int(merged.index.max())
         merged = merged.reindex(pd.RangeIndex(start=0, stop=max_idx + 1,
