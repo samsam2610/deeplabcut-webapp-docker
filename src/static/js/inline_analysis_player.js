@@ -2398,4 +2398,29 @@ import { makeFileBrowser } from './components/file_browser.js';
           );
         }
       });
+      // ── Initialize analysis file button ─────────────────────────────
+      const iaInitFileBtn = document.getElementById("ia-init-analysis-file");
+      async function _iaRefreshInitFileBtn() {
+        if (!iaInitFileBtn) return;
+        const v = _iaCurrentVideoPath || _iaBrowseVideoPath;
+        if (!v) { iaInitFileBtn.disabled = true; iaInitFileBtn.textContent = "○ Initialize analysis file"; return; }
+        try {
+          const d = await (await fetch(`/dlc/project/analysis-file/status?video_path=${encodeURIComponent(v)}`)).json();
+          iaInitFileBtn.disabled = !!d.initialized;
+          iaInitFileBtn.textContent = d.initialized ? "✓ Analysis file ready" : "○ Initialize analysis file";
+        } catch (e) {}
+      }
+      iaInitFileBtn?.addEventListener("click", async () => {
+        const v = _iaCurrentVideoPath || _iaBrowseVideoPath;
+        if (!v) return;
+        iaInitFileBtn.disabled = true; iaInitFileBtn.textContent = "…";
+        const r = await fetch("/dlc/project/analysis-file/initialize", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ video_path: v }),
+        });
+        if (r.ok || r.status === 409) { iaInitFileBtn.textContent = "✓ Analysis file ready"; }
+        else { const e = await r.json().catch(() => ({})); iaInitFileBtn.textContent = `⚠ ${e.error || r.status}`; iaInitFileBtn.disabled = false; }
+      });
+      if (iaFrameCounter) new MutationObserver(_iaRefreshInitFileBtn)
+        .observe(iaFrameCounter, { childList: true, characterData: true, subtree: true });
     })(); // end ANALYSIS DISPATCH
