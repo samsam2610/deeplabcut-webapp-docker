@@ -301,10 +301,20 @@ def viewer_load_h5(h5_path: str) -> dict:
     """
     import pandas as pd
 
+    # File mtime guards the cache: Inline Analysis (and any re-analyze) REWRITES
+    # this .h5 on disk when a new frame-range is processed. Keying the cache by
+    # path alone served the pre-rewrite DataFrame, so freshly-analyzed frames
+    # read back empty and their markers never showed. Invalidate on mtime change.
+    try:
+        cur_mtime = Path(h5_path).stat().st_mtime
+    except OSError:
+        cur_mtime = None
+
     with _viewer_h5_lock:
-        if h5_path in _viewer_h5_cache:
+        cached = _viewer_h5_cache.get(h5_path)
+        if cached is not None and cached.get("mtime") == cur_mtime:
             _viewer_h5_cache.move_to_end(h5_path)
-            return _viewer_h5_cache[h5_path]
+            return cached
 
     # Load outside lock — can take a few seconds for large files
     df        = pd.read_hdf(h5_path)
@@ -322,7 +332,8 @@ def viewer_load_h5(h5_path: str) -> dict:
         poses_np[:, i, 1] = df[scorer][bp]["y"].values
         poses_np[:, i, 2] = df[scorer][bp]["likelihood"].values
 
-    entry = {"df": df, "scorer": scorer, "bodyparts": bodyparts, "poses_np": poses_np}
+    entry = {"df": df, "scorer": scorer, "bodyparts": bodyparts,
+             "poses_np": poses_np, "mtime": cur_mtime}
 
     with _viewer_h5_lock:
         if len(_viewer_h5_cache) >= _VIEWER_H5_CACHE_MAX:
