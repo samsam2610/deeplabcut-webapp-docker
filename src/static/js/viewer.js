@@ -84,16 +84,8 @@ import { makeFileBrowser } from './components/file_browser.js';
     //     bodyparts, errored }
     const _vaLayers = [];
     let   _vaGlobalThreshold    = 0.60;
-    let   _vaPerLayerThresholds = false;
 
     function _vaPrimary()     { return _vaLayers[0] || null; }
-    function _vaCompare()     { return _vaLayers.slice(1); }
-    function _vaIsEditable()  { return _vaLayers.length === 1; }
-    function _vaLayerThreshold(layer) {
-      return _vaPerLayerThresholds && layer.threshold != null
-        ? layer.threshold
-        : _vaGlobalThreshold;
-    }
 
     const _SHAPE_ORDER = ["circle-filled", "diamond", "square", "triangle"];
     function _vaAssignShapes() {
@@ -721,11 +713,6 @@ import { makeFileBrowser } from './components/file_browser.js';
 
     function _vaUpdateEditBanner() {
       if (!vaMarkerEditBanner) return;
-      // Force-hide while comparison layers are active — editing is disabled.
-      if (!_vaIsEditable()) {
-        vaMarkerEditBanner.classList.add("hidden");
-        return;
-      }
       const n = _vaEditCount();
       if (n === 0) {
         vaMarkerEditBanner.classList.add("hidden");
@@ -767,7 +754,6 @@ import { makeFileBrowser } from './components/file_browser.js';
 
     // Flush a single marker edit to the server (fire-and-forget)
     async function _vaFlushMarkerEdit(frame, bp, x, y) {
-      if (!_vaIsEditable()) return;     // edit disabled while compare layers active
       const layer = _vaPrimary();
       if (!layer) return;
       try {
@@ -781,7 +767,6 @@ import { makeFileBrowser } from './components/file_browser.js';
 
     // Delete a marker (set to NaN) in the server cache (fire-and-forget)
     async function _vaFlushMarkerDelete(frame, bp) {
-      if (!_vaIsEditable()) return;     // edit disabled while compare layers active
       const layer = _vaPrimary();
       if (!layer) return;
       try {
@@ -822,8 +807,7 @@ import { makeFileBrowser } from './components/file_browser.js';
           _vaSelectBp(hit);
           return;
         }
-        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
-        if (!_vaSelectedBp) return;
+          if (!_vaSelectedBp) return;
         const { x, y } = _vaCanvasToVideo(cx, cy);
         if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
         _vaLocalEdits.get(_vaCurrentFrame)[_vaSelectedBp] = { x, y };
@@ -837,8 +821,7 @@ import { makeFileBrowser } from './components/file_browser.js';
 
       // Mousedown on a marker → begin drag; otherwise ignored
       vaOverlayCanvas.addEventListener("mousedown", e => {
-        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
-        if (!_vaOverlayEnabled || !_vaCurrentPoses.length || e.button !== 0) return;
+          if (!_vaOverlayEnabled || !_vaCurrentPoses.length || e.button !== 0) return;
         const rect = vaOverlayCanvas.getBoundingClientRect();
         const hit  = _vaHitTestWithEdits(e.clientX - rect.left, e.clientY - rect.top);
         if (!hit) return;
@@ -855,8 +838,7 @@ import { makeFileBrowser } from './components/file_browser.js';
         const cy   = e.clientY - rect.top;
 
         if (_vaDragging && _vaDragBp) {
-          if (!_vaIsEditable()) return;     // edit disabled while compare layers active
-          const { x, y } = _vaCanvasToVideo(cx, cy);
+              const { x, y } = _vaCanvasToVideo(cx, cy);
           if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
           _vaLocalEdits.get(_vaCurrentFrame)[_vaDragBp] = { x, y };
           _vaSyncCanvas();
@@ -871,8 +853,7 @@ import { makeFileBrowser } from './components/file_browser.js';
       });
 
       vaOverlayCanvas.addEventListener("mouseup", async e => {
-        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
-        if (!_vaDragging || !_vaDragBp) return;
+          if (!_vaDragging || !_vaDragBp) return;
         _vaDragging = false;
         const rect  = vaOverlayCanvas.getBoundingClientRect();
         const { x, y } = _vaCanvasToVideo(e.clientX - rect.left, e.clientY - rect.top);
@@ -906,8 +887,7 @@ import { makeFileBrowser } from './components/file_browser.js';
       // Right-click → delete (NaN) the currently selected marker
       vaOverlayCanvas.addEventListener("contextmenu", e => {
         e.preventDefault();
-        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
-        if (!_vaOverlayEnabled || !_vaSelectedBp || !_vaPrimary()) return;
+          if (!_vaOverlayEnabled || !_vaSelectedBp || !_vaPrimary()) return;
         if (!_vaLocalEdits.has(_vaCurrentFrame)) _vaLocalEdits.set(_vaCurrentFrame, {});
         _vaLocalEdits.get(_vaCurrentFrame)[_vaSelectedBp] = { x: null, y: null };
         _vaSyncCanvas();
@@ -922,8 +902,7 @@ import { makeFileBrowser } from './components/file_browser.js';
     // Save Adjustments button
     if (vaSaveAdjBtn) {
       vaSaveAdjBtn.addEventListener("click", async () => {
-        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
-        const layer = _vaPrimary();
+          const layer = _vaPrimary();
         if (!layer) return;
         vaSaveAdjBtn.disabled = true;
         vaSaveAdjBtn.textContent = "Saving…";
@@ -956,8 +935,7 @@ import { makeFileBrowser } from './components/file_browser.js';
     // Discard Adjustments button
     if (vaDiscardAdjBtn) {
       vaDiscardAdjBtn.addEventListener("click", async () => {
-        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
-        const layer = _vaPrimary();
+          const layer = _vaPrimary();
         if (!layer) return;
         _vaLocalEdits.clear();
         _vaClearPoseCache();
@@ -987,8 +965,7 @@ import { makeFileBrowser } from './components/file_browser.js';
     const vaClearFrameBtn = document.getElementById("va-clear-frame-btn");
     if (vaClearFrameBtn) {
       vaClearFrameBtn.addEventListener("dblclick", async () => {
-        if (!_vaIsEditable()) return;     // edit disabled while compare layers active
-        if (!_vaOverlayEnabled || !_vaPrimary() || !_vaCurrentPoses.length) return;
+          if (!_vaOverlayEnabled || !_vaPrimary() || !_vaCurrentPoses.length) return;
         const frameMap = {};
         for (const pose of _vaCurrentPoses) {
           frameMap[pose.bp] = { x: null, y: null };
@@ -1004,7 +981,7 @@ import { makeFileBrowser } from './components/file_browser.js';
 
     // Pose cache key (per layer) — encodes everything that affects pose data.
     function _vaPoseCacheKey(layer) {
-      return `${layer.path}:${_vaLayerThreshold(layer).toFixed(2)}`;
+      return `${layer.path}:${_vaGlobalThreshold.toFixed(2)}`;
     }
 
     // Fetch poses for one (layer, frame) pair into layer.posesCache.
@@ -1015,7 +992,7 @@ import { makeFileBrowser } from './components/file_browser.js';
       if (cached && cached.key === key) return cached;
       const params = new URLSearchParams({
         h5:        layer.path,
-        threshold: _vaLayerThreshold(layer).toFixed(2),
+        threshold: _vaGlobalThreshold.toFixed(2),
       });
       try {
         const r    = await fetch(`/dlc/viewer/frame-poses/${frame}?${params}`);
@@ -1039,12 +1016,6 @@ import { makeFileBrowser } from './components/file_browser.js';
       } else {
         _vaCurrentPoses = [];
       }
-      // Also kick off comparison-layer fetches for the same frame so V/H markers appear.
-      await Promise.all(
-        _vaCompare()
-          .filter(l => l.visible && !l.errored)
-          .map(l => _vaFetchPosesForFrame(l, frameNumber))
-      );
       _vaHoverBp = null;
       _vaDrawHoverLabel();
       _vaUpdateBpChipStatus();
@@ -1081,7 +1052,7 @@ import { makeFileBrowser } from './components/file_browser.js';
         h5:        layer.path,
         start:     String(fromFrame),
         count:     String(_POSE_WINDOW),
-        threshold: _vaLayerThreshold(layer).toFixed(2),
+        threshold: _vaGlobalThreshold.toFixed(2),
       });
       try {
         const r = await fetch(`/dlc/viewer/frame-poses-batch?${params}`, { signal });
@@ -1263,12 +1234,10 @@ import { makeFileBrowser } from './components/file_browser.js';
       // Fetch every analyzable h5 near `videoPath` and populate the Primary <select>.
       // Default the primary to the first 'raw' entry, or the first variant otherwise.
       const select = document.getElementById("va-overlay-primary-select");
-      const addCmp = document.getElementById("va-overlay-add-compare");
-      if (!select || !addCmp) return;
+      if (!select) return;
 
-      // Reset both controls to their empty states.
+      // Reset the primary select to its empty state.
       select.innerHTML = '<option value="">(no h5 detected — use Browse)</option>';
-      addCmp.innerHTML = '<option value="">+ add comparison…</option>';
 
       let data;
       try {
@@ -1296,29 +1265,6 @@ import { makeFileBrowser } from './components/file_browser.js';
       if (!defaultEntry) return;
       select.value = defaultEntry.path;
       await _vaApplyPrimaryFromSelect();
-      _vaSyncPrimaryRow();
-      _vaRefreshAddComparisonOptions(data.variants);
-    }
-
-    function _vaRefreshAddComparisonOptions(variants) {
-      const addCmp = document.getElementById("va-overlay-add-compare");
-      const hint   = document.getElementById("va-overlay-add-compare-empty-hint");
-      if (!addCmp) return;
-      addCmp.innerHTML = '<option value="">+ add comparison…</option>';
-      const taken = new Set(_vaLayers.map(l => l.path));
-      const available = (variants || []).filter(v => !v.disabled && !taken.has(v.path));
-      available.forEach((v) => {
-        const opt = document.createElement("option");
-        opt.value = v.path;
-        opt.textContent = v.label;
-        opt.dataset.type  = v.type;
-        opt.dataset.label = v.label;
-        addCmp.appendChild(opt);
-      });
-      // Show the dropdown only when at least one non-taken option exists;
-      // otherwise show the inline "(no other variants)" hint.
-      addCmp.classList.toggle("hidden", available.length === 0);
-      if (hint) hint.classList.toggle("hidden", available.length > 0);
     }
 
     async function _vaApplyPrimaryFromSelect() {
@@ -1337,152 +1283,7 @@ import { makeFileBrowser } from './components/file_browser.js';
       document.getElementById("va-overlay-h5-path").value = path;
       await _vaLoadLayerInfo(layer);
       await _vaLoadEditCacheForPrimary();
-      _vaRenderCompareRows();
-      _vaRefreshAddComparisonOptions(_vaLastVariants);
-      _vaRenderPrimaryThresholdInline();
       if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
-      _vaSyncPrimaryRow();
-    }
-
-    function _vaRenderPrimaryThresholdInline() {
-      const host = document.getElementById("va-overlay-primary-select");
-      if (!host) return;
-      let slot = document.getElementById("va-overlay-primary-threshold-slot");
-      if (!_vaPerLayerThresholds) {
-        if (slot) slot.remove();
-        return;
-      }
-      if (!slot) {
-        slot = document.createElement("span");
-        slot.id = "va-overlay-primary-threshold-slot";
-        slot.style.cssText = "display:flex;align-items:center;gap:.25rem;margin-left:.4rem";
-        host.parentElement?.appendChild(slot);
-      }
-      slot.innerHTML = "";
-      const layer = _vaPrimary();
-      if (!layer) return;
-      const slider = document.createElement("input");
-      slider.type = "range"; slider.min = "0"; slider.max = "1"; slider.step = "0.05";
-      slider.value = String(layer.threshold ?? _vaGlobalThreshold);
-      slider.style.cssText = "width:60px;accent-color:var(--accent)";
-      const lbl = document.createElement("span");
-      lbl.style.cssText = "font-family:var(--mono);font-size:.7rem;min-width:2.2rem";
-      lbl.textContent = Number(slider.value).toFixed(2);
-      slider.addEventListener("input", () => {
-        layer.threshold = Number(slider.value);
-        lbl.textContent = layer.threshold.toFixed(2);
-        if (_vaOverlayEnabled) {
-          _vaFetchPosesForFrame(layer, _vaCurrentFrame).then(_vaDrawCurrentFrame);
-        }
-      });
-      slot.appendChild(slider);
-      slot.appendChild(lbl);
-    }
-
-    // ── Comparison-row UI ──────────────────────────────────────────
-    function _shapeGlyph(shape) {
-      switch (shape) {
-        case "circle-filled": return "●";
-        case "diamond":       return "◆";
-        case "square":        return "□";
-        case "triangle":      return "△";
-        default:              return "?";
-      }
-    }
-
-    function _vaRenderCompareRows() {
-      const list = document.getElementById("va-overlay-compare-list");
-      if (!list) return;
-      list.innerHTML = "";
-      _vaCompare().forEach((layer) => {
-        const row = document.createElement("div");
-        row.id = `va-layer-row-${layer.id}`;
-        row.style.cssText = "display:flex;align-items:center;gap:.35rem;font-size:.74rem;padding:.15rem .25rem;background:var(--surface);border:1px solid var(--border);border-radius:5px";
-        // visibility checkbox
-        const vis = document.createElement("input");
-        vis.type = "checkbox";
-        vis.checked = layer.visible;
-        vis.style.cssText = "accent-color:var(--accent);width:12px;height:12px;flex-shrink:0";
-        vis.addEventListener("change", () => {
-          layer.visible = vis.checked;
-          _vaDrawCurrentFrame();
-        });
-        row.appendChild(vis);
-        // shape badge
-        const badge = document.createElement("span");
-        badge.textContent = _shapeGlyph(layer.shape);
-        badge.style.cssText = "font-family:var(--mono);width:1.1rem;text-align:center;flex-shrink:0";
-        row.appendChild(badge);
-        // label
-        const lbl = document.createElement("span");
-        lbl.textContent = layer.label;
-        lbl.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-        row.appendChild(lbl);
-        // per-layer threshold (rendered conditionally when Customize is on)
-        const thrSlot = document.createElement("span");
-        thrSlot.dataset.role = "threshold";
-        thrSlot.style.cssText = "display:flex;align-items:center;gap:.25rem;flex-shrink:0";
-        if (_vaPerLayerThresholds) {
-          const slider = document.createElement("input");
-          slider.type = "range"; slider.min = "0"; slider.max = "1"; slider.step = "0.05";
-          slider.value = String(layer.threshold ?? _vaGlobalThreshold);
-          slider.style.cssText = "width:60px;accent-color:var(--accent)";
-          const lbl = document.createElement("span");
-          lbl.style.cssText = "font-family:var(--mono);font-size:.7rem;min-width:2.2rem";
-          lbl.textContent = Number(slider.value).toFixed(2);
-          slider.addEventListener("input", () => {
-            layer.threshold = Number(slider.value);
-            lbl.textContent = layer.threshold.toFixed(2);
-            if (_vaOverlayEnabled) {
-              _vaFetchPosesForFrame(layer, _vaCurrentFrame).then(_vaDrawCurrentFrame);
-            }
-          });
-          thrSlot.appendChild(slider);
-          thrSlot.appendChild(lbl);
-        }
-        row.appendChild(thrSlot);
-        // remove button
-        const rm = document.createElement("button");
-        rm.className = "btn-sm";
-        rm.style.cssText = "padding:.05rem .35rem;font-size:.7rem;flex-shrink:0";
-        rm.textContent = "×";
-        rm.title = "Remove this comparison layer";
-        rm.addEventListener("click", () => _vaRemoveCompare(layer.id));
-        row.appendChild(rm);
-        list.appendChild(row);
-      });
-      _vaUpdateEditDisabledBanner();
-    }
-
-    async function _vaAddCompare(path, label, type) {
-      if (_vaLayers.some(l => l.path === path)) return;
-      const layer = _vaMakeLayer({ path, label, type });
-      _vaLayers.push(layer);
-      _vaAssignShapes();
-      await _vaLoadLayerInfo(layer);
-      // Pre-fetch poses for the current frame so the new layer paints immediately.
-      if (_vaOverlayEnabled) await _vaFetchPosesForFrame(layer, _vaCurrentFrame);
-      _vaRenderCompareRows();
-      _vaRefreshAddComparisonOptions(_vaLastVariants);
-      _vaDrawCurrentFrame();
-    }
-
-    function _vaRemoveCompare(id) {
-      const idx = _vaLayers.findIndex(l => l.id === id);
-      if (idx < 1) return;  // never remove primary
-      _vaLayers.splice(idx, 1);
-      _vaAssignShapes();
-      _vaRenderCompareRows();
-      _vaRefreshAddComparisonOptions(_vaLastVariants);
-      _vaDrawCurrentFrame();
-    }
-
-    function _vaUpdateEditDisabledBanner() {
-      const banner = document.getElementById("va-overlay-edit-disabled-banner");
-      if (banner) banner.classList.toggle("hidden", _vaIsEditable());
-      // Re-evaluate the marker-edit banner: when compare layers are active it
-      // must be force-hidden regardless of unsaved-edit count.
-      _vaUpdateEditBanner();
     }
 
     vaOverlayToggle?.addEventListener("change", () => {
@@ -1501,39 +1302,6 @@ import { makeFileBrowser } from './components/file_browser.js';
 
     const vaOverlayPrimarySelect = document.getElementById("va-overlay-primary-select");
     vaOverlayPrimarySelect?.addEventListener("change", _vaApplyPrimaryFromSelect);
-
-    const vaOverlayAddCompare = document.getElementById("va-overlay-add-compare");
-    vaOverlayAddCompare?.addEventListener("change", async (e) => {
-      const path = e.target.value;
-      if (!path) return;
-      const opt  = e.target.options[e.target.selectedIndex];
-      await _vaAddCompare(path, opt.dataset.label, opt.dataset.type);
-      e.target.value = "";  // reset to placeholder
-    });
-
-    const vaOverlayPrimaryVisible = document.getElementById("va-overlay-primary-visible");
-    const vaOverlayPrimaryShape   = document.getElementById("va-overlay-primary-shape");
-    const vaOverlayPrimaryLabel   = document.getElementById("va-overlay-primary-label");
-
-    vaOverlayPrimaryVisible?.addEventListener("change", () => {
-      const layer = _vaPrimary();
-      if (!layer) return;
-      layer.visible = !!vaOverlayPrimaryVisible.checked;
-      _vaDrawCurrentFrame();
-    });
-
-    function _vaSyncPrimaryRow() {
-      const layer = _vaPrimary();
-      if (!layer) {
-        if (vaOverlayPrimaryShape) vaOverlayPrimaryShape.textContent = "—";
-        if (vaOverlayPrimaryLabel) vaOverlayPrimaryLabel.textContent = "(no primary)";
-        if (vaOverlayPrimaryVisible) vaOverlayPrimaryVisible.checked = false;
-        return;
-      }
-      if (vaOverlayPrimaryShape) vaOverlayPrimaryShape.textContent = _shapeGlyph(layer.shape);
-      if (vaOverlayPrimaryLabel) vaOverlayPrimaryLabel.textContent = layer.label || "";
-      if (vaOverlayPrimaryVisible) vaOverlayPrimaryVisible.checked = !!layer.visible;
-    }
 
     vaOverlayH5Clear?.addEventListener("click", () => {
       _vaSetPrimaryLayer(null);
@@ -1557,23 +1325,6 @@ import { makeFileBrowser } from './components/file_browser.js';
       // Stale per-layer cache entries are auto-skipped by _vaFetchPosesForFrame
       // (key mismatch on threshold), so we just trigger a re-fetch of the
       // current frame.
-      if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
-    });
-
-    // Customize per-layer thresholds toggle
-    const vaCustomizeThr = document.getElementById("va-overlay-customize-thresholds");
-    vaCustomizeThr?.addEventListener("change", () => {
-      _vaPerLayerThresholds = vaCustomizeThr.checked;
-      if (!_vaPerLayerThresholds) {
-        // Forget per-layer overrides; revert to global.
-        _vaLayers.forEach(l => l.threshold = null);
-      } else {
-        // Seed each layer's override with the current global so toggling on
-        // produces no immediate visual change.
-        _vaLayers.forEach(l => l.threshold = _vaGlobalThreshold);
-      }
-      _vaRenderCompareRows();
-      _vaRenderPrimaryThresholdInline();
       if (_vaOverlayEnabled) _vaLoadFrame(_vaCurrentFrame);
     });
 
