@@ -26,6 +26,7 @@ from pathlib import Path
 from flask import Blueprint, request, jsonify, session as flask_session
 
 from . import ctx as _ctx
+from . import canonical as _canonical
 from .utils import _dlc_project_security_check
 
 bp = Blueprint("dlc_inline_analysis", __name__)
@@ -307,3 +308,55 @@ def video_info():
     sibling_h5s = list(p.parent.glob(p.stem + "*.h5"))
     info["has_h5_at_snapshot"] = bool(sibling_h5s)
     return jsonify(info)
+
+
+@bp.route("/dlc/project/analysis-file/status", methods=["GET"])
+def analysis_file_status():
+    raw = (request.args.get("video_path") or "").strip()
+    if not raw:
+        return jsonify({"error": "video_path required"}), 400
+    if not _sec_check(Path(raw)):
+        return jsonify({"error": "path not allowed"}), 403
+    h5 = _canonical.canonical_h5_path(raw)
+    csv = _canonical.canonical_csv_path(raw)
+    return jsonify({
+        "initialized": h5.exists(),
+        "h5_path": str(h5),
+        "csv_path": str(csv),
+    })
+
+
+@bp.route("/dlc/project/analysis-file/initialize", methods=["POST"])
+def analysis_file_initialize():
+    body = request.get_json(silent=True) or {}
+    raw = (body.get("video_path") or "").strip()
+    if not raw:
+        return jsonify({"error": "video_path required"}), 400
+    if not _sec_check(Path(raw)):
+        return jsonify({"error": "path not allowed"}), 403
+
+    h5 = _canonical.canonical_h5_path(raw)
+    if h5.exists():
+        return jsonify({"error": "already initialized", "h5_path": str(h5)}), 409
+
+    project = _active_project()
+    if not project or not project.get("config_path"):
+        return jsonify({"error": "no active project"}), 400
+    config_path = project["config_path"]
+    bodyparts = _canonical.read_bodyparts(config_path)
+    if not bodyparts:
+        return jsonify({"error": "project has no bodyparts"}), 422
+    scorer = _canonical.canonical_scorer(config_path)
+
+    import cv2
+    cap = cv2.VideoCapture(raw)
+    nframes = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    cap.release()
+    if nframes <= 0:
+        return jsonify({"error": "could not read video frame count"}), 422
+
+    h5_path, csv_path = _canonical.write_empty(
+        raw, scorer=scorer, bodyparts=bodyparts, nframes=nframes, save_as_csv=True)
+    return jsonify({
+        "h5_path": str(h5_path), "csv_path": str(csv_path), "nframes": nframes,
+    }), 201
