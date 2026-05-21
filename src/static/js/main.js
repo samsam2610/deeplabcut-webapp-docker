@@ -10,7 +10,7 @@ import './frame_labeler.js';
 import './test_set_picker.js';
 import './analyze.js';
 import './viewer.js';
-import './inline_analysis.js';
+import './inline_analysis_player.js';
 import './postprocess.js';
 import './annotator.js';
 import './log_stream.js';     // shared SSE/poll-tail; must load before gpu_monitor.js
