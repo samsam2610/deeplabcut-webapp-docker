@@ -291,3 +291,15 @@ def test_player_js_uses_global_threshold_directly():
         "expected >=4 uses of _iaGlobalThreshold (state init + 3 builders); "
         "if fewer, the helper-collapse step probably missed a call site"
     )
+
+
+def test_section_order_browser_then_params_then_player():
+    """Layout order (user request 2026-05-21): file browser (Source tabs) →
+    Analysis Parameters → Player section."""
+    html = CARD.read_text()
+    i_tabs   = html.find("<!-- Source tabs -->")
+    i_params = html.find("Analysis Parameters")
+    i_player = html.find("Player section")
+    assert 0 < i_tabs < i_params < i_player, (
+        "order must be file browser → analysis params → player viewer"
+    )

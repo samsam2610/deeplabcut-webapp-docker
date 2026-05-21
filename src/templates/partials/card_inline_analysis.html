@@ -8,6 +8,41 @@
       </div>
       <p class="subtitle">Scrub a video, run DLC on N frames forward against a warm-in-memory model, and view the results immediately.</p>
 
+      <!-- Source tabs -->
+      <div style="display:flex;gap:.4rem;margin-bottom:.6rem">
+        <button id="ia-tab-project" class="btn-sm active" style="padding:.2rem .65rem;font-size:.75rem">Project Content</button>
+        <button id="ia-tab-browse" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Browse Folders</button>
+      </div>
+
+      <!-- Tab: Project Content -->
+      <div id="ia-tab-project-panel">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+          <label style="font-size:.78rem;color:var(--text-dim)">Labeled content</label>
+          <button class="btn-sm" id="ia-refresh-btn" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
+        </div>
+        <div id="ia-content-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
+          <p class="explorer-empty">Loading…</p>
+        </div>
+      </div>
+
+      <!-- Tab: Browse Folders -->
+      <div id="ia-tab-browse-panel" class="hidden">
+        <label style="display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--text-dim);margin-bottom:.3rem;cursor:pointer">
+          <input type="checkbox" id="ia-browse-hide-no-h5"
+                 style="accent-color:var(--accent);width:13px;height:13px"/>
+          Hide videos without h5
+        </label>
+        <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem">
+          <input id="ia-browse-breadcrumb" type="text" spellcheck="false" autocomplete="off"
+            placeholder="/paste/a/path/here"
+            style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:5px;padding:.25rem .45rem" />
+          <button class="btn-sm" id="ia-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
+        </div>
+        <div id="ia-browse-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
+          <p class="explorer-empty">Loading…</p>
+        </div>
+      </div>
+
       <!-- ── Analysis Parameters ──────────────────────────────────────── -->
       <div style="margin-bottom:.6rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:7px;background:var(--surface-2)">
         <div style="font-size:.72rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem">Analysis Parameters</div>
@@ -43,41 +78,6 @@
         </div>
         <button id="ia-btn-analyze-range" class="btn-sm" style="width:100%;margin-top:.3rem">▶ Analyze 500 frames from frame 0</button>
         <div id="ia-last-run-status" style="margin-top:.3rem;font-size:.74rem;color:var(--text-dim)"></div>
-      </div>
-
-      <!-- Source tabs -->
-      <div style="display:flex;gap:.4rem;margin-bottom:.6rem">
-        <button id="ia-tab-project" class="btn-sm active" style="padding:.2rem .65rem;font-size:.75rem">Project Content</button>
-        <button id="ia-tab-browse" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Browse Folders</button>
-      </div>
-
-      <!-- Tab: Project Content -->
-      <div id="ia-tab-project-panel">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
-          <label style="font-size:.78rem;color:var(--text-dim)">Labeled content</label>
-          <button class="btn-sm" id="ia-refresh-btn" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
-        </div>
-        <div id="ia-content-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
-          <p class="explorer-empty">Loading…</p>
-        </div>
-      </div>
-
-      <!-- Tab: Browse Folders -->
-      <div id="ia-tab-browse-panel" class="hidden">
-        <label style="display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--text-dim);margin-bottom:.3rem;cursor:pointer">
-          <input type="checkbox" id="ia-browse-hide-no-h5"
-                 style="accent-color:var(--accent);width:13px;height:13px"/>
-          Hide videos without h5
-        </label>
-        <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem">
-          <input id="ia-browse-breadcrumb" type="text" spellcheck="false" autocomplete="off"
-            placeholder="/paste/a/path/here"
-            style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:5px;padding:.25rem .45rem" />
-          <button class="btn-sm" id="ia-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
-        </div>
-        <div id="ia-browse-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
-          <p class="explorer-empty">Loading…</p>
-        </div>
       </div>
 
       <!-- Player section (shown after a selection is made) -->
