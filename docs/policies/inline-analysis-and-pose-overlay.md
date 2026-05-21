@@ -130,6 +130,39 @@ code that sets `seek.value` must use the normalised form, e.g.
 `round(targetFrame / (total-1) * 1000)`. Setting it to a raw frame index clamps
 to 1000 → wrong frame.
 
+## Invariant 7 — the viewer h5 cache must invalidate on mtime change
+
+**Symptom if violated:** you analyze an *additional* chunk of a video that was
+already analyzed (and already viewed once), the analysis finishes, but the new
+frames show no markers — while a flask restart "fixes" it.
+
+`viewer.py::viewer_load_h5` caches the parsed DataFrame + `poses_np` in an
+in-process LRU (`_viewer_h5_cache`). Inline Analysis (and any re-analyze)
+**rewrites the `.h5` on disk** when a new frame-range is processed (merge +
+dense-ify). If the cache is keyed by path alone, it keeps serving the
+pre-rewrite DataFrame, so the freshly-analyzed frames read back empty.
+
+Confirmed via A/B: `/frame-poses/59937` returned 0 poses from the stale cache
+while the on-disk h5 (101560 rows) had data at 59937; after a flask restart the
+same request returned the pose.
+
+**Invariant:** `viewer_load_h5` stats the file's mtime, stores it on the cache
+entry, and only returns a cache hit when the stored mtime matches the current
+mtime — otherwise it reloads. (The save-marker-edits route also pops the entry
+explicitly; the mtime guard covers the worker-rewrite path that can't reach
+flask's memory.)
+
+Guard: `tests/test_dlc_viewer_routes.py::test_viewer_load_h5_invalidates_cache_on_mtime_change`.
+
+## Body-part chips build in the primary flow
+
+The `*-bp-chips` toggle list is built by `_*RebuildPartsChecklist()`. That call
+must live in `_*LoadLayerInfo` (the discover/select path), not only in the
+legacy `_*LoadH5Info` (manual "Browse for h5" path) — otherwise the chips never
+appear in the everyday flow.
+
+Guard: `tests/test_view_analyzed_no_compare.py::test_loadlayerinfo_builds_bodypart_chips`.
+
 ## Things that are intentionally NOT in these cards
 
 Removed 2026-05-20 (see `docs/superpowers/specs/2026-05-20-remove-compare-layers-design.md`):
@@ -160,6 +193,10 @@ sliders all stay.
    `*-overlay-canvas` via `getImageData`. > 100 px ⇒ markers painted. Test BOTH:
    - **view-only** (pick video, tick Show markers, scrub) — exercises invariant 1
    - **analyze** (scrub, click Analyze, wait for "Last run:") — exercises invariant 5
+   - **additional-chunk** (view a video once, then analyze a *different*
+     frame-range and check markers there *without* a flask restart) —
+     exercises invariant 7 (the stale-cache trap). A flask restart masks this
+     bug, so the no-restart path is the meaningful test.
 4. Server side is untouched by frontend changes — `/dlc/viewer/*` and
    `/dlc/project/inline-analysis/*` routes own the data contract.
 
