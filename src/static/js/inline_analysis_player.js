@@ -1132,6 +1132,11 @@ import { makeFileBrowser } from './components/file_browser.js';
           // Keep the legacy globals in sync for any code path not yet migrated.
           _iaAllBodyParts = layer.bodyparts.slice();
           _iaNBodyparts   = _iaAllBodyParts.length;
+          // Build the body-part toggle chips. The legacy _iaLoadH5Info
+          // path did this, but the primary discover/select flow goes
+          // through here instead — without this the chip list never
+          // appears in the normal flow.
+          _iaRebuildPartsChecklist();
         }
       } catch (e) { layer.errored = true; }
     }
