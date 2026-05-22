@@ -2227,19 +2227,6 @@ import { makeFileBrowser } from './components/file_browser.js';
       iaShuffle?.addEventListener("change", _iaLoadSnapshots);
       iaOpenBtn?.addEventListener("click", _iaLoadSnapshots);
 
-      // ── Live label on the Analyze button ────────────────────────────
-      function _iaSyncLabel() {
-        const n = parseInt(iaFramesPerCk?.value, 10) || 500;
-        const k = _iaCurrentFrame || 0;
-        iaBtnAnalyze.textContent = `▶ Analyze ${n} frames from frame ${k}`;
-      }
-      iaFramesPerCk?.addEventListener("input", _iaSyncLabel);
-      // Keep in sync with the player's frame counter via MutationObserver.
-      if (iaFrameCounter) {
-        new MutationObserver(_iaSyncLabel)
-          .observe(iaFrameCounter, { childList: true, characterData: true, subtree: true });
-      }
-
       // ── Warm-worker session start + status poll ─────────────────────
       async function _iaEnsureSession() {
         const snapshot = iaSnapshotSel?.value;

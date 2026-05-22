@@ -317,3 +317,12 @@ def test_analyze_button_matches_start_analysis_style():
         "must include the outline play-triangle icon"
     assert "Start Analysis" in btn, "label must read 'Start Analysis'"
     assert "width:100%" not in btn, "drop full-width so it matches the compact reference"
+
+
+def test_player_does_not_rewrite_analyze_button_text():
+    """After the restyle, nothing may overwrite the Analyze button's
+    textContent (it would wipe the SVG icon). The old dynamic label is gone."""
+    src = PLAYER_JS.read_text()
+    assert "_iaSyncLabel" not in src, "dynamic label fn must be removed"
+    assert "iaBtnAnalyze.textContent" not in src, \
+        "nothing may set the Analyze button textContent"
