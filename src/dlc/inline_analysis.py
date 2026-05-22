@@ -122,6 +122,23 @@ def _hgetall(redis_, key):
     return h or {}
 
 
+def _finalize_range_to_canonical(video_path, source_h5, start_frame, n_frames, config_path):
+    """Copy rows [start_frame, start_frame+n_frames) from a layer h5 into the
+    canonical _analyzed file. Curated range wins; frames already in canonical
+    outside the curated range are preserved;
+    _analyzed created dense if missing. Returns (h5_path, csv_path, n_written)."""
+    import pandas as pd
+    df = pd.read_hdf(str(source_h5))
+    source_scorer = df.columns.get_level_values(0)[0]
+    wanted = set(range(int(start_frame), int(start_frame) + int(n_frames)))
+    sliced = df[df.index.isin(wanted)]
+    canon = _canonical.canonical_scorer(config_path)
+    h5_path, csv_path = _canonical.write_to_canonical(
+        video_path, sliced,
+        source_scorer=source_scorer, canonical_scorer=canon, save_as_csv=True)
+    return h5_path, csv_path, int(len(sliced))
+
+
 # ── Routes ────────────────────────────────────────────────────────────────
 
 @bp.route("/dlc/project/inline-analysis/session/start", methods=["POST"])
@@ -360,3 +377,34 @@ def analysis_file_initialize():
     return jsonify({
         "h5_path": str(h5_path), "csv_path": str(csv_path), "nframes": nframes,
     }), 201
+
+
+@bp.route("/dlc/project/inline-analysis/finalize-range", methods=["POST"])
+def finalize_range():
+    project = _active_project()
+    if not project or not project.get("config_path"):
+        return jsonify({"error": "No active DLC project."}), 400
+    body = request.get_json(silent=True) or {}
+    video_path = (body.get("video_path") or "").strip()
+    source_h5  = (body.get("source_h5") or "").strip()
+    if not video_path or not source_h5:
+        return jsonify({"error": "video_path and source_h5 required"}), 400
+    vp, sp = Path(video_path), Path(source_h5)
+    if not vp.is_file() or not sp.is_file():
+        return jsonify({"error": "video_path or source_h5 not found"}), 400
+    if not _sec_check(vp) or not _sec_check(sp):
+        return jsonify({"error": "path outside the data root"}), 403
+    try:
+        start_frame = int(body.get("start_frame", 0))
+        n_frames    = int(body.get("n_frames", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "start_frame and n_frames must be ints"}), 400
+    if start_frame < 0 or n_frames <= 0 or n_frames > 10_000:
+        return jsonify({"error": "start_frame >= 0 and n_frames in 1..10000"}), 400
+    try:
+        h5_path, csv_path, n_written = _finalize_range_to_canonical(
+            video_path, source_h5, start_frame, n_frames, project["config_path"])
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"h5_path": str(h5_path), "csv_path": str(csv_path),
+                    "n_frames_written": n_written}), 200
