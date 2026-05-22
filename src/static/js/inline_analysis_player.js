@@ -170,6 +170,13 @@ import { makeFileBrowser } from './components/file_browser.js';
       if (iaBpChips)    iaBpChips.innerHTML = "";
       if (iaOverlayCanvas) iaOverlayCanvas.style.cursor = "default";
       if (typeof _iaLocalEdits !== "undefined") _iaLocalEdits.clear();
+      // Reset Finalize-analysis state when switching videos.
+      _iaFinalizeEnabled = false;
+      _iaLastRunStart    = null;
+      _iaLastRunN        = null;
+      const _iaFinTog = document.getElementById("ia-finalize-toggle");
+      if (_iaFinTog) _iaFinTog.checked = false;
+      document.getElementById("ia-finalize-controls")?.classList.add("hidden");
       _iaUpdateEditBanner();
       _iaClearPoseCache();
       if (iaOverlayCtx) iaOverlayCtx.clearRect(0, 0, iaOverlayCanvas.width, iaOverlayCanvas.height);
@@ -854,6 +861,7 @@ import { makeFileBrowser } from './components/file_browser.js';
       });
 
       iaOverlayCanvas.addEventListener("mouseup", async e => {
+          if (!_iaEditingAllowed()) { _iaDragging = false; _iaDragBp = null; return; }
           if (!_iaDragging || !_iaDragBp) return;
         _iaDragging = false;
         const rect  = iaOverlayCanvas.getBoundingClientRect();
