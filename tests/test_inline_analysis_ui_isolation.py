@@ -375,3 +375,17 @@ def test_js_finalize_flow_and_autopopulate():
     assert "/dlc/viewer/save-marker-edits" in src                 # commit-to-layer step
     assert "_iaLastRunStart" in src and "_iaLastRunN" in src       # autopopulate source
     assert "_iaPopulateFinalizeFields" in src
+
+
+def test_btn_sm_disabled_styling_exists():
+    css = (ROOT / "src" / "static" / "css" / "layout.css").read_text()
+    assert ".btn-sm:disabled" in css, "disabled .btn-sm must be visually greyed (e.g. Init button)"
+
+
+def test_finalize_confirms_before_overwrite():
+    src = PLAYER_JS.read_text()
+    i = src.find('iaFinalizeAddBtn?.addEventListener')
+    assert i > 0
+    body = src[i:i + 1600]
+    assert "window.confirm" in body, "finalize must confirm before overwriting _analyzed"
+    assert "analysis-file/status" in body, "confirm must be gated on whether _analyzed already exists"

@@ -102,9 +102,14 @@
   text-decoration: none;
 }
 
-.btn-sm:hover {
+.btn-sm:hover:not(:disabled) {
   border-color: var(--border-lit);
   background: var(--border);
+}
+
+.btn-sm:disabled {
+  opacity: .5;
+  cursor: not-allowed;
 }
 
 .btn-sm.btn-create {

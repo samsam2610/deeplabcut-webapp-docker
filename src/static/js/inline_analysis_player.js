@@ -1025,7 +1025,21 @@ import { makeFileBrowser } from './components/file_browser.js';
       }
       const startFrame = parseInt(document.getElementById("ia-finalize-start")?.value, 10) || 0;
       const nFrames    = parseInt(document.getElementById("ia-finalize-count")?.value, 10) || 0;
+      const videoPath  = _iaCurrentVideoPath || _iaBrowseVideoPath;
       iaFinalizeAddBtn.disabled = true;
+      // Confirm before overwriting an existing _analyzed file (only prompts when
+      // one already exists — the curated range overwrites those frames).
+      try {
+        const st = await (await fetch(
+          `/dlc/project/analysis-file/status?video_path=${encodeURIComponent(videoPath)}`)).json();
+        if (st.initialized && !window.confirm(
+            `Overwrite frames ${startFrame}–${startFrame + nFrames - 1} in the existing _analyzed file?\n\n` +
+            `This replaces any curated values already saved for those frames.`)) {
+          if (iaFinalizeStatus) { iaFinalizeStatus.textContent = "Cancelled."; iaFinalizeStatus.className = "fe-extract-status"; }
+          iaFinalizeAddBtn.disabled = false;
+          return;
+        }
+      } catch (_) { /* status check failed — fall through and let finalize proceed */ }
       if (iaFinalizeStatus) { iaFinalizeStatus.textContent = "Finalizing…"; iaFinalizeStatus.className = "fe-extract-status"; }
       try {
         const saveRes = await fetch("/dlc/viewer/save-marker-edits", {
@@ -1042,7 +1056,7 @@ import { makeFileBrowser } from './components/file_browser.js';
         const r = await fetch("/dlc/project/inline-analysis/finalize-range", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            video_path: _iaCurrentVideoPath || _iaBrowseVideoPath,
+            video_path: videoPath,
             source_h5:  layer.path,
             start_frame: startFrame, n_frames: nFrames,
           }),
