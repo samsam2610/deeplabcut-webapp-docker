@@ -326,3 +326,11 @@ def test_player_does_not_rewrite_analyze_button_text():
     assert "_iaSyncLabel" not in src, "dynamic label fn must be removed"
     assert "iaBtnAnalyze.textContent" not in src, \
         "nothing may set the Analyze button textContent"
+
+
+def test_init_button_shows_file_exists_note_when_initialized():
+    """When the analysis file already exists the Init button is disabled and
+    its label reads 'Analysis file exist'."""
+    src = PLAYER_JS.read_text()
+    assert "Analysis file exist" in src, "disabled-state label must be 'Analysis file exist'"
+    assert "Analysis file ready" not in src, "old 'ready' wording must be replaced"
