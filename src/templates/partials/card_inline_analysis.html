@@ -375,5 +375,29 @@
         </div>
         <!-- ── end Dataset Curation Panel ──────────────────────────── -->
 
+        <!-- ── Finalize Analysis Panel ─────────────────────────────── -->
+        <div id="ia-finalize-panel" style="margin-top:.65rem;padding:.5rem .65rem;background:var(--surface-2);border:1px solid var(--border);border-radius:7px">
+          <label style="display:flex;align-items:center;gap:.45rem;font-size:.8rem;font-weight:500;cursor:pointer;user-select:none">
+            <input type="checkbox" id="ia-finalize-toggle" style="accent-color:var(--accent);width:14px;height:14px"/>
+            Finalize analysis
+          </label>
+          <div id="ia-finalize-controls" class="hidden" style="margin-top:.5rem">
+            <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.4rem">
+              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">Start frame</label>
+              <input type="number" id="ia-finalize-start" value="0" min="0"
+                style="width:5rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem" />
+              <label style="font-size:.76rem;color:var(--text-dim);white-space:nowrap">Frames</label>
+              <input type="number" id="ia-finalize-count" value="500" min="1" max="10000"
+                style="width:5rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem" />
+              <button class="btn-sm btn-create" id="ia-finalize-add-btn"
+                title="Save marker edits to the current layer, then copy this frame range into the _analyzed file">
+                Add range to _analyzed
+              </button>
+            </div>
+            <div id="ia-finalize-status" class="fe-extract-status"></div>
+          </div>
+        </div>
+        <!-- ── end Finalize Analysis Panel ─────────────────────────── -->
+
       </div>
     </section>

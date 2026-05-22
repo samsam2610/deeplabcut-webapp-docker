@@ -334,3 +334,12 @@ def test_init_button_shows_file_exists_note_when_initialized():
     src = PLAYER_JS.read_text()
     assert "Analysis file exists" in src, "disabled-state label must be 'Analysis file exists'"
     assert "Analysis file ready" not in src, "old 'ready' wording must be replaced"
+
+
+def test_finalize_minicard_present_after_curation():
+    html = CARD.read_text()
+    for needed in ["ia-finalize-toggle", "ia-finalize-controls", "ia-finalize-start",
+                   "ia-finalize-count", "ia-finalize-add-btn", "ia-finalize-status"]:
+        assert f'id="{needed}"' in html, f"missing {needed!r}"
+    assert html.find('id="ia-curation-panel"') < html.find('id="ia-finalize-toggle"'), \
+        "finalize panel must come after the curation panel"
