@@ -15,7 +15,6 @@ import deeplabcut as dlc
 
 from celery_app import celery  # shared Celery instance
 from dlc._log_stream import stream_log_lines_to_redis as _stream_log_lines_to_redis
-from dlc import canonical as _canonical
 
 
 def _sanitize_dlc_config_yaml(config_path: str | Path) -> None:
@@ -3020,7 +3019,7 @@ def _blpop(redis_, queue_key, timeout):
     return val
 
 
-def _run_range(runner, *, scorer, model_cfg, multi_animal, canonical_scorer, req):
+def _run_range(runner, *, scorer, model_cfg, multi_animal, req):
     """Inference + merge for one range request.
 
     Uses DLC's canonical create_df_from_prediction to build the DataFrame
@@ -3030,7 +3029,7 @@ def _run_range(runner, *, scorer, model_cfg, multi_animal, canonical_scorer, req
     Returns (n_analyzed, n_skipped). Raises on hard failure (caught by the
     task loop, which publishes status=error).
     """
-    h5_path  = _canonical.canonical_h5_path(req["video_path"])
+    h5_path  = _resolve_h5_path(req["video_path"], scorer)
     existing = _ia_pd.read_hdf(str(h5_path)) if h5_path.exists() else None
 
     target     = list(range(req["start_frame"], req["start_frame"] + req["n_frames"]))
@@ -3077,13 +3076,27 @@ def _run_range(runner, *, scorer, model_cfg, multi_animal, canonical_scorer, req
         )
     # create_df_from_prediction indexes rows 0..N-1. Re-key to absolute frames.
     df_range.index = _ia_pd.Index(to_analyze, name=df_range.index.name)
-    _canonical.write_to_canonical(
-        req["video_path"], df_range,
-        source_scorer=scorer, canonical_scorer=canonical_scorer,
-        save_as_csv=bool(req.get("save_as_csv")),
-    )
+
+    df_merge = df_range if existing is None else df_range.combine_first(existing)
+    if existing is not None:
+        # combine_first unions + alphabetically re-sorts columns. Pin the
+        # existing file's column order so the DLC (scorer, bodyparts, coords)
+        # layout that positional consumers (frame-poses-batch,
+        # create_labeled_video, filterpredictions) rely on is preserved.
+        df_merge = df_merge.reindex(columns=existing.columns)
+    # Dense-ify: reindex to a contiguous 0..max range with NaN for unanalyzed
+    # frames. DLC's analyze_videos h5 is dense (one row per video frame), and
+    # downstream tools index rows POSITIONALLY (`poses_np[fn]`), so a sparse h5
+    # silently returns nothing for gap frames. NaN rows compress well in HDF5.
+    if len(df_merge):
+        max_idx = int(df_merge.index.max())
+        df_merge = df_merge.reindex(_ia_pd.RangeIndex(
+            start=0, stop=max_idx + 1, name=df_merge.index.name))
+    _atomic_write_h5(h5_path, df_merge)
+    if req.get("save_as_csv"):
+        _atomic_write_csv(h5_path.with_suffix(".csv"), df_merge)
     meta_path = _resolve_meta_path(h5_path)
-    _update_meta_pickle(meta_path, df_range, snapshot=req["snapshot_path"])
+    _update_meta_pickle(meta_path, df_merge, snapshot=req["snapshot_path"])
     return len(to_analyze), n_skipped
 
 
@@ -3137,7 +3150,6 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
         project=str(_IAPath(config_path).parent.name),
     )
 
-    canonical_scorer = _canonical.canonical_scorer(config_path)
     cached_batch_size = batch_size
     exit_reason = "expired"
     while True:
@@ -3170,7 +3182,7 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
         try:
             n_analyzed, n_skipped = _run_range(
                 runner, scorer=scorer, model_cfg=model_cfg,
-                multi_animal=multi_animal, canonical_scorer=canonical_scorer, req=req,
+                multi_animal=multi_animal, req=req,
             )
             _publish_result(
                 redis_, req["req_id"], "done",
