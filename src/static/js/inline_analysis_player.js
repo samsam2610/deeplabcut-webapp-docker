@@ -2394,7 +2394,7 @@ import { makeFileBrowser } from './components/file_browser.js';
         try {
           const d = await (await fetch(`/dlc/project/analysis-file/status?video_path=${encodeURIComponent(v)}`)).json();
           iaInitFileBtn.disabled = !!d.initialized;
-          iaInitFileBtn.textContent = d.initialized ? "Analysis file exist" : "○ Initialize analysis file";
+          iaInitFileBtn.textContent = d.initialized ? "Analysis file exists" : "○ Initialize analysis file";
         } catch (e) {}
       }
       iaInitFileBtn?.addEventListener("click", async () => {
@@ -2406,7 +2406,7 @@ import { makeFileBrowser } from './components/file_browser.js';
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ video_path: v }),
           });
-          if (r.ok || r.status === 409) { iaInitFileBtn.textContent = "Analysis file exist"; iaInitFileBtn.disabled = true; }
+          if (r.ok || r.status === 409) { iaInitFileBtn.textContent = "Analysis file exists"; iaInitFileBtn.disabled = true; }
           else { const e = await r.json().catch(() => ({})); iaInitFileBtn.textContent = `⚠ ${e.error || r.status}`; iaInitFileBtn.disabled = false; }
         } catch (err) {
           iaInitFileBtn.textContent = "○ Initialize analysis file"; iaInitFileBtn.disabled = false;
