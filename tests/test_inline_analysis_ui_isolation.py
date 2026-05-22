@@ -303,3 +303,17 @@ def test_section_order_browser_then_params_then_player():
     assert 0 < i_tabs < i_params < i_player, (
         "order must be file browser → analysis params → player viewer"
     )
+
+
+def test_analyze_button_matches_start_analysis_style():
+    """The inline Analyze button mirrors the Analyze-card 'Start Analysis'
+    button: btn-create class, outline play-triangle SVG, static label."""
+    html = CARD.read_text()
+    m = re.search(r'<button[^>]*id="ia-btn-analyze-range".*?</button>', html, re.S)
+    assert m, "ia-btn-analyze-range button not found"
+    btn = m.group(0)
+    assert "btn-create" in btn, "must adopt the btn-create accent style"
+    assert "<svg" in btn and 'points="5 3 19 12 5 21 5 3"' in btn, \
+        "must include the outline play-triangle icon"
+    assert "Start Analysis" in btn, "label must read 'Start Analysis'"
+    assert "width:100%" not in btn, "drop full-width so it matches the compact reference"
