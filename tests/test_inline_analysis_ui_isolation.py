@@ -357,3 +357,11 @@ def test_marker_edit_controls_moved_below_marker_list():
     for needed in ["ia-marker-edit-count", "ia-save-adjustments-btn",
                    "ia-discard-adjustments-btn", "ia-clear-frame-btn"]:
         assert f'id="{needed}"' in html, f"missing {needed!r}"
+
+
+def test_js_edit_gating_uses_finalize_flag():
+    src = PLAYER_JS.read_text()
+    assert "_iaFinalizeEnabled" in src, "finalize gating flag must exist"
+    assert "_iaEditingAllowed" in src, "editing-allowed helper must exist"
+    assert 'getElementById("ia-marker-edit-controls")' in src
+    assert 'getElementById("ia-marker-edit-banner")' not in src

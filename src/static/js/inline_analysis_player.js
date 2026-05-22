@@ -63,6 +63,9 @@ import { makeFileBrowser } from './components/file_browser.js';
     let _iaMarkerSize       = 6;
     // absolute path to the currently loaded original video (for annotated frames + companion CSV)
     let _iaCurrentVideoPath = null;
+    let _iaFinalizeEnabled = false;   // marker editing gated on the Finalize toggle
+    let _iaLastRunStart    = null;    // start_frame of the last submitted range
+    let _iaLastRunN        = null;    // n_frames of the last submitted range
     // Hook called by _iaLoadFrame so the nested curation IIFE can sync its annotation panel
     let _iaCurationFrameHook = null;
     let _iaMetadataFrameHook = null;
@@ -86,6 +89,7 @@ import { makeFileBrowser } from './components/file_browser.js';
     let   _iaGlobalThreshold    = 0.60;
 
     function _iaPrimary()     { return _iaLayers[0] || null; }
+    function _iaEditingAllowed() { return _iaOverlayEnabled && _iaFinalizeEnabled; }
 
     const _SHAPE_ORDER = ["circle-filled", "diamond", "square", "triangle"];
     function _iaAssignShapes() {
@@ -702,7 +706,7 @@ import { makeFileBrowser } from './components/file_browser.js';
     let _iaDragging    = false;
 
     // Marker-edit UI elements (may be null if not yet in DOM)
-    const iaMarkerEditBanner  = document.getElementById("ia-marker-edit-banner");
+    const iaMarkerEditBanner  = document.getElementById("ia-marker-edit-controls");
     const iaMarkerEditCount   = document.getElementById("ia-marker-edit-count");
     const iaSaveAdjBtn        = document.getElementById("ia-save-adjustments-btn");
     const iaDiscardAdjBtn     = document.getElementById("ia-discard-adjustments-btn");
@@ -713,13 +717,9 @@ import { makeFileBrowser } from './components/file_browser.js';
 
     function _iaUpdateEditBanner() {
       if (!iaMarkerEditBanner) return;
+      iaMarkerEditBanner.classList.toggle("hidden", !_iaFinalizeEnabled);
       const n = _iaEditCount();
-      if (n === 0) {
-        iaMarkerEditBanner.classList.add("hidden");
-      } else {
-        iaMarkerEditBanner.classList.remove("hidden");
-        if (iaMarkerEditCount) iaMarkerEditCount.textContent = `${n} frame${n !== 1 ? "s" : ""} edited`;
-      }
+      if (iaMarkerEditCount) iaMarkerEditCount.textContent = `${n} frame${n !== 1 ? "s" : ""} edited`;
     }
 
     // Convert canvas-display coords back to video-native coords
@@ -798,7 +798,7 @@ import { makeFileBrowser } from './components/file_browser.js';
 
       // Click: select marker near cursor OR place selected bodypart
       iaOverlayCanvas.addEventListener("click", e => {
-        if (!_iaOverlayEnabled || !_iaCurrentPoses.length) return;
+        if (!_iaEditingAllowed() || !_iaCurrentPoses.length) return;
         const rect = iaOverlayCanvas.getBoundingClientRect();
         const cx   = e.clientX - rect.left;
         const cy   = e.clientY - rect.top;
@@ -821,7 +821,7 @@ import { makeFileBrowser } from './components/file_browser.js';
 
       // Mousedown on a marker → begin drag; otherwise ignored
       iaOverlayCanvas.addEventListener("mousedown", e => {
-          if (!_iaOverlayEnabled || !_iaCurrentPoses.length || e.button !== 0) return;
+          if (!_iaEditingAllowed() || !_iaCurrentPoses.length || e.button !== 0) return;
         const rect = iaOverlayCanvas.getBoundingClientRect();
         const hit  = _iaHitTestWithEdits(e.clientX - rect.left, e.clientY - rect.top);
         if (!hit) return;
@@ -838,6 +838,7 @@ import { makeFileBrowser } from './components/file_browser.js';
         const cy   = e.clientY - rect.top;
 
         if (_iaDragging && _iaDragBp) {
+          if (!_iaEditingAllowed()) return;
               const { x, y } = _iaCanvasToVideo(cx, cy);
           if (!_iaLocalEdits.has(_iaCurrentFrame)) _iaLocalEdits.set(_iaCurrentFrame, {});
           _iaLocalEdits.get(_iaCurrentFrame)[_iaDragBp] = { x, y };
@@ -887,7 +888,7 @@ import { makeFileBrowser } from './components/file_browser.js';
       // Right-click → delete (NaN) the currently selected marker
       iaOverlayCanvas.addEventListener("contextmenu", e => {
         e.preventDefault();
-          if (!_iaOverlayEnabled || !_iaSelectedBp || !_iaPrimary()) return;
+          if (!_iaEditingAllowed() || !_iaSelectedBp || !_iaPrimary()) return;
         if (!_iaLocalEdits.has(_iaCurrentFrame)) _iaLocalEdits.set(_iaCurrentFrame, {});
         _iaLocalEdits.get(_iaCurrentFrame)[_iaSelectedBp] = { x: null, y: null };
         _iaSyncCanvas();
@@ -965,7 +966,7 @@ import { makeFileBrowser } from './components/file_browser.js';
     const iaClearFrameBtn = document.getElementById("ia-clear-frame-btn");
     if (iaClearFrameBtn) {
       iaClearFrameBtn.addEventListener("dblclick", async () => {
-          if (!_iaOverlayEnabled || !_iaPrimary() || !_iaCurrentPoses.length) return;
+          if (!_iaEditingAllowed() || !_iaPrimary() || !_iaCurrentPoses.length) return;
         const frameMap = {};
         for (const pose of _iaCurrentPoses) {
           frameMap[pose.bp] = { x: null, y: null };
