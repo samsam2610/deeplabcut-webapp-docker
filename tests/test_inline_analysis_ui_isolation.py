@@ -40,7 +40,7 @@ def test_card_partial_exists():
     for needed_id in [
         "ia-player-section", "ia-frame-img", "ia-overlay-canvas",
         "ia-overlay-toggle", "ia-overlay-threshold", "ia-overlay-marker-size",
-        "ia-marker-edit-banner",
+        "ia-marker-edit-controls",
         "ia-extract-frame-btn", "ia-add-to-dataset-btn", "ia-batch-add-btn",
     ]:
         assert f'id="{needed_id}"' in txt, f"missing inherited id {needed_id!r}"
@@ -343,3 +343,17 @@ def test_finalize_minicard_present_after_curation():
         assert f'id="{needed}"' in html, f"missing {needed!r}"
     assert html.find('id="ia-curation-panel"') < html.find('id="ia-finalize-toggle"'), \
         "finalize panel must come after the curation panel"
+
+
+def test_marker_edit_controls_moved_below_marker_list():
+    html = CARD.read_text()
+    assert 'id="ia-marker-edit-banner"' not in html, "old top banner must be removed"
+    assert 'id="ia-marker-edit-controls"' in html, "relocated controls row must exist"
+    pos_list  = html.find('id="ia-bp-list-wrap"')
+    pos_ctrls = html.find('id="ia-marker-edit-controls"')
+    pos_curil = html.find('id="ia-curation-panel"')
+    assert 0 < pos_list < pos_ctrls < pos_curil, \
+        "controls must sit after the marker list and before the curation panel"
+    for needed in ["ia-marker-edit-count", "ia-save-adjustments-btn",
+                   "ia-discard-adjustments-btn", "ia-clear-frame-btn"]:
+        assert f'id="{needed}"' in html, f"missing {needed!r}"
