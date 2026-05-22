@@ -706,7 +706,7 @@ import { makeFileBrowser } from './components/file_browser.js';
     let _iaDragging    = false;
 
     // Marker-edit UI elements (may be null if not yet in DOM)
-    const iaMarkerEditBanner  = document.getElementById("ia-marker-edit-controls");
+    const iaMarkerEditControls  = document.getElementById("ia-marker-edit-controls");
     const iaMarkerEditCount   = document.getElementById("ia-marker-edit-count");
     const iaSaveAdjBtn        = document.getElementById("ia-save-adjustments-btn");
     const iaDiscardAdjBtn     = document.getElementById("ia-discard-adjustments-btn");
@@ -716,8 +716,8 @@ import { makeFileBrowser } from './components/file_browser.js';
     }
 
     function _iaUpdateEditBanner() {
-      if (!iaMarkerEditBanner) return;
-      iaMarkerEditBanner.classList.toggle("hidden", !_iaFinalizeEnabled);
+      if (!iaMarkerEditControls) return;
+      iaMarkerEditControls.classList.toggle("hidden", !_iaFinalizeEnabled);
       const n = _iaEditCount();
       if (iaMarkerEditCount) iaMarkerEditCount.textContent = `${n} frame${n !== 1 ? "s" : ""} edited`;
     }
@@ -979,6 +979,77 @@ import { makeFileBrowser } from './components/file_browser.js';
         _iaUpdateEditBanner();
       });
     }
+
+    // ── Finalize Analysis: toggle (gates editing) + range copy ──────────
+    const iaFinalizeToggle   = document.getElementById("ia-finalize-toggle");
+    const iaFinalizeControls = document.getElementById("ia-finalize-controls");
+    const iaFinalizeAddBtn   = document.getElementById("ia-finalize-add-btn");
+    const iaFinalizeStatus   = document.getElementById("ia-finalize-status");
+
+    function _iaPopulateFinalizeFields() {
+      const startEl = document.getElementById("ia-finalize-start");
+      const countEl = document.getElementById("ia-finalize-count");
+      const fpc     = document.getElementById("ia-frames-per-click");
+      if (startEl) startEl.value = (_iaLastRunStart != null ? _iaLastRunStart : (_iaCurrentFrame || 0));
+      if (countEl) countEl.value = (_iaLastRunN != null ? _iaLastRunN : (parseInt(fpc?.value, 10) || 500));
+    }
+
+    iaFinalizeToggle?.addEventListener("change", () => {
+      _iaFinalizeEnabled = iaFinalizeToggle.checked;
+      iaFinalizeControls?.classList.toggle("hidden", !_iaFinalizeEnabled);
+      const ovToggle = document.getElementById("ia-overlay-toggle"); // const iaOverlayToggle is declared later in the file
+      if (_iaFinalizeEnabled && ovToggle && !ovToggle.checked) {
+        ovToggle.checked = true;
+        ovToggle.dispatchEvent(new Event("change"));
+      }
+      if (_iaFinalizeEnabled) _iaPopulateFinalizeFields();
+      _iaUpdateEditBanner();
+    });
+
+    iaFinalizeAddBtn?.addEventListener("click", async () => {
+      const layer = _iaPrimary();
+      if (!layer) {
+        if (iaFinalizeStatus) {
+          iaFinalizeStatus.textContent = "Select a layer first.";
+          iaFinalizeStatus.className   = "fe-extract-status err";
+        }
+        return;
+      }
+      const startFrame = parseInt(document.getElementById("ia-finalize-start")?.value, 10) || 0;
+      const nFrames    = parseInt(document.getElementById("ia-finalize-count")?.value, 10) || 0;
+      iaFinalizeAddBtn.disabled = true;
+      if (iaFinalizeStatus) { iaFinalizeStatus.textContent = "Finalizing…"; iaFinalizeStatus.className = "fe-extract-status"; }
+      try {
+        const saveRes = await fetch("/dlc/viewer/save-marker-edits", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ h5: layer.path }),
+        });
+        if (!saveRes.ok) {
+          if (iaFinalizeStatus) {
+            iaFinalizeStatus.textContent = `Could not save edits to layer (HTTP ${saveRes.status}) — finalize aborted`;
+            iaFinalizeStatus.className   = "fe-extract-status err";
+          }
+          return;   // abort: do not copy stale layer data into _analyzed
+        }
+        const r = await fetch("/dlc/project/inline-analysis/finalize-range", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            video_path: _iaCurrentVideoPath || _iaBrowseVideoPath,
+            source_h5:  layer.path,
+            start_frame: startFrame, n_frames: nFrames,
+          }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (iaFinalizeStatus) {
+          if (!r.ok) { iaFinalizeStatus.textContent = `Error: ${d.error || r.status}`; iaFinalizeStatus.className = "fe-extract-status err"; }
+          else { iaFinalizeStatus.textContent = `Added ${d.n_frames_written} frames to _analyzed`; iaFinalizeStatus.className = "fe-extract-status"; }
+        }
+      } catch (e) {
+        if (iaFinalizeStatus) { iaFinalizeStatus.textContent = `Error: ${e}`; iaFinalizeStatus.className = "fe-extract-status err"; }
+      } finally {
+        iaFinalizeAddBtn.disabled = false;
+      }
+    });
 
     // Pose cache key (per layer) — encodes everything that affects pose data.
     function _iaPoseCacheKey(layer) {
@@ -2289,6 +2360,8 @@ import { makeFileBrowser } from './components/file_browser.js';
         if (!sk) return;
         const startFrame = _iaCurrentFrame || 0;
         const nFrames    = parseInt(iaFramesPerCk?.value, 10) || 500;
+        _iaLastRunStart = startFrame;
+        _iaLastRunN     = nFrames;
         const r = await fetch("/dlc/project/inline-analysis/range", {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
@@ -2328,6 +2401,7 @@ import { makeFileBrowser } from './components/file_browser.js';
             if (d.status === "done") {
               iaLastRun.textContent =
                 `Last run: ${d.n_analyzed} analyzed, ${d.n_skipped} skipped`;
+              if (typeof _iaPopulateFinalizeFields === "function") _iaPopulateFinalizeFields();
               const videoPath = _iaCurrentVideoPath || _iaBrowseVideoPath;
               if (videoPath && typeof _iaDiscoverVariants === "function") {
                 // Re-scan for h5 variants near the video. The just-produced

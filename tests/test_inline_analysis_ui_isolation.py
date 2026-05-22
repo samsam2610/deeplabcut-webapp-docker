@@ -365,3 +365,13 @@ def test_js_edit_gating_uses_finalize_flag():
     assert "_iaEditingAllowed" in src, "editing-allowed helper must exist"
     assert 'getElementById("ia-marker-edit-controls")' in src
     assert 'getElementById("ia-marker-edit-banner")' not in src
+
+
+def test_js_finalize_flow_and_autopopulate():
+    src = PLAYER_JS.read_text()
+    assert 'getElementById("ia-finalize-toggle")' in src
+    assert 'getElementById("ia-finalize-add-btn")' in src
+    assert "/dlc/project/inline-analysis/finalize-range" in src   # copy step
+    assert "/dlc/viewer/save-marker-edits" in src                 # commit-to-layer step
+    assert "_iaLastRunStart" in src and "_iaLastRunN" in src       # autopopulate source
+    assert "_iaPopulateFinalizeFields" in src
