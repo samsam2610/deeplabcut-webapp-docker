@@ -363,6 +363,28 @@ def _coverage_buckets(poses_np, threshold: float, n_buckets: int, mode: str = "l
     return out.astype(int).tolist()
 
 
+def _coverage_first_frames(poses_np, threshold: float, n_buckets: int, mode: str = "likelihood") -> list:
+    """Earliest covered frame index in each bucket, or -1 when the bucket is
+    uncovered. Parallel to _coverage_buckets output. A bucket can span hundreds of
+    frames, so the client seeks to this REAL covered frame instead of the bucket
+    centre (which usually lands on an unlabeled frame). Same coverage rule as
+    _coverage_buckets (likelihood >= threshold, or presence = finite x)."""
+    n = int(poses_np.shape[0]) if poses_np is not None else 0
+    if n == 0:
+        return []
+    if mode == "presence":
+        covered = (~_np.isnan(poses_np[:, :, 0])).any(axis=1)
+    else:
+        covered = (poses_np[:, :, 2] >= float(threshold)).any(axis=1)  # NaN→False
+    b = max(1, min(int(n_buckets), n))
+    idx = (_np.arange(n) * b) // n            # frame → bucket
+    first = _np.full(b, n, dtype=_np.int64)   # n = "unset" sentinel (> any frame)
+    cov_frames = _np.nonzero(covered)[0]
+    _np.minimum.at(first, idx[cov_frames], cov_frames)  # earliest frame wins per bucket
+    first[first == n] = -1
+    return first.tolist()
+
+
 def _viewer_get_vcap_entry(uid: str) -> dict:
     """Return (creating if needed) the per-session vcap cache entry."""
     with _viewer_vcap_lock:
@@ -957,7 +979,9 @@ def viewer_pose_coverage():
         return jsonify({"error": f"could not load h5: {e}"}), 422
     poses_np = h5_data.get("poses_np")
     buckets  = _coverage_buckets(poses_np, threshold, n_buckets, mode=mode)
+    frames   = _coverage_first_frames(poses_np, threshold, n_buckets, mode=mode)
     return jsonify({"buckets": buckets,
+                    "frames": frames,  # first covered frame per bucket (-1 = none)
                     "n_frames": int(poses_np.shape[0]) if poses_np is not None else 0,
                     "n_buckets": len(buckets)})
 
