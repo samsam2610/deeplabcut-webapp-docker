@@ -45,5 +45,9 @@ def set_setting(project_path, key: str, value: str) -> None:
     """Insert or replace `key` = `value` (value is stored as text)."""
     with _connect(project_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, str(value)))
-        conn.execute("COMMIT")
+        try:
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, str(value)))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise

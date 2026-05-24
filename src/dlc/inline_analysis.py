@@ -404,9 +404,12 @@ def set_ui_setting():
     if not project:
         return jsonify({"error": "No active DLC project."}), 400
     body = request.get_json(silent=True) or {}
-    key, value = body.get("key", ""), body.get("value", "")
+    key = body.get("key", "")
     if key not in _UI_SETTING_KEYS:
         return jsonify({"error": "unknown key"}), 400
+    if "value" not in body:
+        return jsonify({"error": "value required"}), 400
+    value = body["value"]
     config_path = project.get("config_path", "")
     if not config_path:
         return jsonify({"error": "Active project has no path."}), 400
