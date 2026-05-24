@@ -27,6 +27,7 @@ from flask import Blueprint, request, jsonify, session as flask_session
 
 from . import ctx as _ctx
 from . import canonical as _canonical
+from . import project_settings as _project_settings
 from .utils import _dlc_project_security_check
 
 bp = Blueprint("dlc_inline_analysis", __name__)
@@ -377,6 +378,41 @@ def analysis_file_initialize():
     return jsonify({
         "h5_path": str(h5_path), "csv_path": str(csv_path), "nframes": nframes,
     }), 201
+
+
+_UI_SETTING_KEYS = {"finalize_window", "clip_window"}
+
+
+@bp.route("/dlc/project/ui-setting", methods=["GET"])
+def get_ui_setting():
+    project = _active_project()
+    if not project:
+        return jsonify({"error": "No active DLC project."}), 400
+    key = request.args.get("key", "")
+    if key not in _UI_SETTING_KEYS:
+        return jsonify({"error": "unknown key"}), 400
+    config_path = project.get("config_path", "")
+    if not config_path:
+        return jsonify({"error": "Active project has no path."}), 400
+    project_path = str(Path(config_path).parent)
+    return jsonify({"value": _project_settings.get_setting(project_path, key)})
+
+
+@bp.route("/dlc/project/ui-setting", methods=["POST"])
+def set_ui_setting():
+    project = _active_project()
+    if not project:
+        return jsonify({"error": "No active DLC project."}), 400
+    body = request.get_json(silent=True) or {}
+    key, value = body.get("key", ""), body.get("value", "")
+    if key not in _UI_SETTING_KEYS:
+        return jsonify({"error": "unknown key"}), 400
+    config_path = project.get("config_path", "")
+    if not config_path:
+        return jsonify({"error": "Active project has no path."}), 400
+    project_path = str(Path(config_path).parent)
+    _project_settings.set_setting(project_path, key, str(value))
+    return jsonify({"ok": True})
 
 
 @bp.route("/dlc/project/inline-analysis/finalize-range", methods=["POST"])
