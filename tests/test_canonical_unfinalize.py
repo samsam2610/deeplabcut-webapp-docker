@@ -17,6 +17,9 @@ def test_unfinalize_clears_range_only(tmp_path):
     assert out.loc[3].isna().all() and out.loc[4].isna().all()           # cleared
     assert not out.loc[2].isna().all() and not out.loc[5].isna().all()   # outside range untouched
     assert C.canonical_csv_path(video).is_file()                          # csv regenerated
+    csv_df = pd.read_csv(str(C.canonical_csv_path(video)), header=[0, 1, 2], index_col=0)
+    assert csv_df.loc[3].isna().all() and csv_df.loc[4].isna().all()   # csv cleared too
+    assert not csv_df.loc[2].isna().all()                              # csv outside-range intact
 
 
 def test_unfinalize_missing_file_is_noop(tmp_path):

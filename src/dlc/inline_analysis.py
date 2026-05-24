@@ -425,12 +425,22 @@ def unfinalize_range():
         return jsonify({"error": "No active DLC project."}), 400
     body = request.get_json(silent=True) or {}
     video_path = (body.get("video_path") or "").strip()
-    start_frame = body.get("start_frame")
-    n_frames = body.get("n_frames")
-    if not video_path or start_frame is None or n_frames is None:
-        return jsonify({"error": "video_path, start_frame, n_frames required"}), 400
+    if not video_path:
+        return jsonify({"error": "video_path required"}), 400
+    vp = Path(video_path)
+    if not vp.is_file():
+        return jsonify({"error": "video_path not found"}), 400
+    if not _sec_check(vp):
+        return jsonify({"error": "path outside the data root"}), 403
     try:
-        n = _canonical.unfinalize_range(video_path, int(start_frame), int(n_frames))
+        start_frame = int(body.get("start_frame", 0))
+        n_frames    = int(body.get("n_frames", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "start_frame and n_frames must be ints"}), 400
+    if start_frame < 0 or n_frames <= 0 or n_frames > 10_000:
+        return jsonify({"error": "start_frame >= 0 and n_frames in 1..10000"}), 400
+    try:
+        n = _canonical.unfinalize_range(video_path, start_frame, n_frames)
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": str(e)}), 500
     return jsonify({"n_frames_cleared": n})
