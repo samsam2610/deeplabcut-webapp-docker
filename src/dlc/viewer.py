@@ -344,6 +344,20 @@ def viewer_load_h5(h5_path: str) -> dict:
     return entry
 
 
+def _coverage_buckets(poses_np, threshold: float, n_buckets: int) -> list:
+    """Per-frame 'has >=1 bodypart at likelihood >= threshold', downsampled to
+    n_buckets (capped at n_frames). NaN likelihoods compare False. Returns 0/1 list."""
+    n = int(poses_np.shape[0]) if poses_np is not None else 0
+    if n == 0:
+        return []
+    covered = (poses_np[:, :, 2] >= float(threshold)).any(axis=1)  # (n,) bool; NaN→False
+    b = max(1, min(int(n_buckets), n))
+    idx = (_np.arange(n) * b) // n            # frame → bucket
+    out = _np.zeros(b, dtype=bool)
+    _np.logical_or.at(out, idx, covered)
+    return out.astype(int).tolist()
+
+
 def _viewer_get_vcap_entry(uid: str) -> dict:
     """Return (creating if needed) the per-session vcap cache entry."""
     with _viewer_vcap_lock:
@@ -922,6 +936,24 @@ def viewer_frame_poses_batch():
         frames_out[str(fn)] = {"poses": poses, "n_bodyparts": n_bps}
 
     return jsonify({"frames": frames_out, "bodyparts": bodyparts})
+
+
+@bp.route("/dlc/viewer/pose-coverage")
+def viewer_pose_coverage():
+    h5_path   = request.args.get("h5", "")
+    threshold = float(request.args.get("threshold", 0.6) or 0.6)
+    n_buckets = int(request.args.get("buckets", 600) or 600)
+    if not h5_path:
+        return jsonify({"error": "h5 required"}), 400
+    try:
+        h5_data = viewer_load_h5(h5_path)
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"could not load h5: {e}"}), 422
+    poses_np = h5_data.get("poses_np")
+    buckets  = _coverage_buckets(poses_np, threshold, n_buckets)
+    return jsonify({"buckets": buckets,
+                    "n_frames": int(poses_np.shape[0]) if poses_np is not None else 0,
+                    "n_buckets": len(buckets)})
 
 
 @bp.route("/dlc/viewer/frame-annotated/<int:frame_number>")
