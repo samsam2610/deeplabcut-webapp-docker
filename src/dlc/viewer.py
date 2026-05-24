@@ -344,13 +344,18 @@ def viewer_load_h5(h5_path: str) -> dict:
     return entry
 
 
-def _coverage_buckets(poses_np, threshold: float, n_buckets: int) -> list:
-    """Per-frame 'has >=1 bodypart at likelihood >= threshold', downsampled to
-    n_buckets (capped at n_frames). NaN likelihoods compare False. Returns 0/1 list."""
+def _coverage_buckets(poses_np, threshold: float, n_buckets: int, mode: str = "likelihood") -> list:
+    """Per-frame coverage downsampled to n_buckets (capped at n_frames). 0/1 list.
+    mode='likelihood' (default): >=1 bodypart with likelihood >= threshold (NaN→False).
+    mode='presence': >=1 bodypart with a finite x (threshold ignored) — for finalized
+    _analyzed files where 'has a label' is x-presence."""
     n = int(poses_np.shape[0]) if poses_np is not None else 0
     if n == 0:
         return []
-    covered = (poses_np[:, :, 2] >= float(threshold)).any(axis=1)  # (n,) bool; NaN→False
+    if mode == "presence":
+        covered = (~_np.isnan(poses_np[:, :, 0])).any(axis=1)
+    else:
+        covered = (poses_np[:, :, 2] >= float(threshold)).any(axis=1)  # (n,) bool; NaN→False
     b = max(1, min(int(n_buckets), n))
     idx = (_np.arange(n) * b) // n            # frame → bucket
     out = _np.zeros(b, dtype=bool)
@@ -943,6 +948,7 @@ def viewer_pose_coverage():
     h5_path   = request.args.get("h5", "")
     threshold = float(request.args.get("threshold", 0.6) or 0.6)
     n_buckets = int(request.args.get("buckets", 600) or 600)
+    mode      = request.args.get("mode", "likelihood")
     if not h5_path:
         return jsonify({"error": "h5 required"}), 400
     try:
@@ -950,7 +956,7 @@ def viewer_pose_coverage():
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": f"could not load h5: {e}"}), 422
     poses_np = h5_data.get("poses_np")
-    buckets  = _coverage_buckets(poses_np, threshold, n_buckets)
+    buckets  = _coverage_buckets(poses_np, threshold, n_buckets, mode=mode)
     return jsonify({"buckets": buckets,
                     "n_frames": int(poses_np.shape[0]) if poses_np is not None else 0,
                     "n_buckets": len(buckets)})
