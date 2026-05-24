@@ -88,6 +88,27 @@ def write_empty(video_path, *, scorer: str, bodyparts: list, nframes: int,
     return h5, csv
 
 
+def unfinalize_range(video_path, start_frame: int, n_frames: int) -> int:
+    """Un-finalize: set rows [start_frame, start_frame+n_frames) to NaN in the
+    canonical _analyzed file (the inverse of write_to_canonical for that range).
+    Rows outside the range are untouched; the .h5 and .csv are rewritten
+    atomically so they stay consistent. Missing file -> 0. Returns rows cleared."""
+    h5 = canonical_h5_path(video_path)
+    if not h5.exists():
+        return 0
+    df = pd.read_hdf(str(h5))
+    wanted = range(int(start_frame), int(start_frame) + int(n_frames))
+    mask = df.index.isin(wanted)
+    n = int(mask.sum())
+    if n:
+        df.loc[mask, :] = np.nan
+        _atomic_write_h5(h5, df)
+        csv = canonical_csv_path(video_path)
+        if csv.exists():
+            _atomic_write_csv(csv, df)
+    return n
+
+
 def write_to_canonical(video_path, df: pd.DataFrame, *, source_scorer: str,
                        canonical_scorer: str, save_as_csv: bool = True):
     """Re-label scorer → canonical, merge into the dense canonical h5, write.

@@ -418,6 +418,24 @@ def set_ui_setting():
     return jsonify({"ok": True})
 
 
+@bp.route("/dlc/project/inline-analysis/unfinalize-range", methods=["POST"])
+def unfinalize_range():
+    project = _active_project()
+    if not project:
+        return jsonify({"error": "No active DLC project."}), 400
+    body = request.get_json(silent=True) or {}
+    video_path = (body.get("video_path") or "").strip()
+    start_frame = body.get("start_frame")
+    n_frames = body.get("n_frames")
+    if not video_path or start_frame is None or n_frames is None:
+        return jsonify({"error": "video_path, start_frame, n_frames required"}), 400
+    try:
+        n = _canonical.unfinalize_range(video_path, int(start_frame), int(n_frames))
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"n_frames_cleared": n})
+
+
 @bp.route("/dlc/project/inline-analysis/finalize-range", methods=["POST"])
 def finalize_range():
     project = _active_project()
