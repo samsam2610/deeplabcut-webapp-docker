@@ -380,7 +380,7 @@ def analysis_file_initialize():
     }), 201
 
 
-_UI_SETTING_KEYS = {"finalize_window", "clip_window"}
+_UI_SETTING_KEYS = {"finalize_window", "clip_window", "postfix_tags", "status_tags", "note_tags"}
 
 
 @bp.route("/dlc/project/ui-setting", methods=["GET"])
