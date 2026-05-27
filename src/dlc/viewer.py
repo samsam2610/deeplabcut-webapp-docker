@@ -838,9 +838,16 @@ def viewer_h5_info():
         with pd.HDFStore(h5_path, mode="r") as store:
             key     = store.keys()[0]
             storer  = store.get_storer(key)
-            nrows   = storer.nrows
-            # Read a single row to inspect columns
+            # Read a single row to inspect columns (schema → bodyparts).
             df_head = store.select(key, start=0, stop=1)
+            nrows   = storer.nrows
+            if nrows is None:
+                # Fixed-format h5 (pandas_type='frame', e.g. _analyzed.h5 / some
+                # snapshot_best-*.h5) has no `nrows` shortcut — only table format does.
+                # int(None) used to 500 here, leaving the client with no bodyparts →
+                # empty chip list. The schema above is enough for bodyparts; read the
+                # row count from the full index (these files are modest).
+                nrows = len(store.select(key).index)
 
         scorer    = df_head.columns.get_level_values("scorer")[0]
         bodyparts = df_head[scorer].columns.get_level_values("bodyparts").unique().tolist()

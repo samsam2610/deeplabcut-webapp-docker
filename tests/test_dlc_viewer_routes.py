@@ -307,3 +307,36 @@ def test_viewer_load_h5_invalidates_cache_on_mtime_change():
     assert '"mtime": cur_mtime' in body, (
         "the cache entry must store the mtime it was loaded at"
     )
+
+
+def _make_dlc_df(bodyparts, n=7, scorer="DLC_test"):
+    """A minimal DLC-style pose DataFrame: MultiIndex (scorer, bodyparts, coords)."""
+    import numpy as np
+    import pandas as pd
+    cols = pd.MultiIndex.from_product(
+        [[scorer], bodyparts, ["x", "y", "likelihood"]],
+        names=["scorer", "bodyparts", "coords"],
+    )
+    return pd.DataFrame(np.random.rand(n, len(cols)), columns=cols)
+
+
+@pytest.mark.parametrize("fmt", ["table", "fixed"])
+def test_h5_info_handles_both_hdf_formats(flask_test_client, tmp_path, monkeypatch, fmt):
+    """h5-info must return bodyparts for BOTH table- and fixed-format h5. Fixed-format
+    files (e.g. _analyzed.h5 / some snapshot_best-*.h5) have storer.nrows == None;
+    int(None) used to 500, leaving the inline overlay with no bodyparts → empty chip
+    list. The bodyparts come from the column schema regardless of format."""
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: True)
+
+    bps = ["Snout", "Wrist", "Pellet"]
+    h5 = tmp_path / f"vid_{fmt}DLC_test.h5"
+    _make_dlc_df(bps, n=7).to_hdf(str(h5), key="df", format=fmt)
+
+    resp = client.get(f"/dlc/viewer/h5-info?h5={h5}")
+    assert resp.status_code == 200, (fmt, resp.get_json())
+    d = resp.get_json()
+    assert d["bodyparts"] == bps, d
+    assert d["frame_count"] == 7, d
