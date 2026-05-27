@@ -340,3 +340,38 @@ def test_h5_info_handles_both_hdf_formats(flask_test_client, tmp_path, monkeypat
     d = resp.get_json()
     assert d["bodyparts"] == bps, d
     assert d["frame_count"] == 7, d
+
+
+@pytest.mark.parametrize("fmt", ["table", "fixed"])
+@pytest.mark.parametrize("endpoint", ["h5-info", "frame-poses", "pose-coverage"])
+def test_viewer_h5_endpoints_survive_both_hdf_formats(
+    flask_test_client, tmp_path, monkeypatch, endpoint, fmt
+):
+    """REGRESSION GUARD (session 2026-05): every viewer endpoint that READS an h5
+    must work on BOTH table- and fixed-format HDF5. Fixed format (pandas_type='frame',
+    e.g. the curated `_analyzed.h5` and some `snapshot_best-*.h5`) has
+    storer.nrows == None and doesn't support start/stop row slicing. h5-info used to
+    `int(storer.nrows)` → 500 → the inline overlay swallowed it → empty bodypart chip
+    list (and shared the all-markers-one-color symptom). Guard all three h5-reading
+    endpoints so the next fixed-format file can't silently break the UI again."""
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: True)
+
+    bps = ["Snout", "Wrist", "Pellet"]
+    h5 = tmp_path / f"vid_{endpoint}_{fmt}DLC_test.h5"
+    _make_dlc_df(bps, n=12).to_hdf(str(h5), key="df", format=fmt)
+
+    if endpoint == "h5-info":
+        resp = client.get(f"/dlc/viewer/h5-info?h5={h5}")
+        assert resp.status_code == 200, (fmt, resp.get_json())
+        assert resp.get_json()["bodyparts"] == bps
+    elif endpoint == "frame-poses":
+        resp = client.get(f"/dlc/viewer/frame-poses/0?h5={h5}&threshold=0.0")
+        assert resp.status_code == 200, (fmt, resp.get_json())
+        assert len(resp.get_json().get("poses") or []) == len(bps)
+    else:  # pose-coverage (feeds the seek + finalized-frames timelines)
+        resp = client.get(f"/dlc/viewer/pose-coverage?h5={h5}&mode=presence&buckets=12")
+        assert resp.status_code == 200, (fmt, resp.get_json())
+        assert resp.get_json().get("n_frames") == 12
