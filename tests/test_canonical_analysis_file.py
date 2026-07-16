@@ -129,3 +129,27 @@ def test_write_to_canonical_preserves_column_order(tmp_path):
                                  canonical_scorer="CANON", save_as_csv=False)
     got = pd.read_hdf(str(canonical.canonical_h5_path(str(vid))))
     assert got.columns.get_level_values("bodyparts").tolist() == existing.columns.get_level_values("bodyparts").tolist()
+
+
+def test_labeled_frames_finite_x_included():
+    df = canonical.build_empty_dense_df("S", ["nose", "tail"], 4)  # all NaN
+    df.loc[1, ("S", "nose", "x")] = 5.0   # frame 1 finalized (finite x)
+    df.loc[3, ("S", "tail", "x")] = 9.0   # frame 3 finalized via a different bodypart
+    assert canonical.labeled_frames(df) == {1, 3}
+
+
+def test_labeled_frames_all_nan_excluded():
+    df = canonical.build_empty_dense_df("S", ["nose"], 3)  # all NaN
+    assert canonical.labeled_frames(df) == set()
+
+
+def test_labeled_frames_none_or_empty():
+    assert canonical.labeled_frames(None) == set()
+    assert canonical.labeled_frames(canonical.build_empty_dense_df("S", ["nose"], 0)) == set()
+
+
+def test_labeled_frames_ignores_likelihood_only():
+    # presence keys on x, not likelihood — a finite likelihood with NaN x is NOT labeled
+    df = canonical.build_empty_dense_df("S", ["nose"], 2)
+    df.loc[0, ("S", "nose", "likelihood")] = 0.9
+    assert canonical.labeled_frames(df) == set()

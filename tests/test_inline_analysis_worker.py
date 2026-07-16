@@ -62,6 +62,13 @@ def _df_with_index(frames, all_nan_rows=None):
     return pd.DataFrame(data, index=list(frames), columns=cols)
 
 
+def dlc_tasks_canonical_path(video_path):
+    """<stem>_analyzed.h5 next to the video — matches canonical.canonical_h5_path."""
+    from pathlib import Path as _P
+    p = _P(video_path)
+    return p.with_name(p.stem + "_analyzed.h5")
+
+
 # ── _filter_skip_already_done ─────────────────────────────────────────────
 
 class TestFilterSkipAlreadyDone:
@@ -92,6 +99,32 @@ class TestFilterSkipAlreadyDone:
     def test_overwrite_false_default_still_skips(self):
         df = _df_with_index([0, 1, 2, 3, 4])
         assert dlc_tasks._filter_skip_already_done([1, 2, 3], df) == []
+
+    def test_ignore_analyzed_wins_over_overwrite(self):
+        # overwrite would re-run everything, but finalized frames stay skipped
+        result = dlc_tasks._filter_skip_already_done(
+            [100, 101, 102], existing_df=None, overwrite=True,
+            analyzed_labeled={101}, ignore_analyzed=True)
+        assert result == [100, 102]
+
+    def test_ignore_analyzed_plus_existing_skip(self):
+        df = _df_with_index([100])  # frame 100 already predicted (finite)
+        result = dlc_tasks._filter_skip_already_done(
+            [100, 101, 102], existing_df=df, overwrite=False,
+            analyzed_labeled={101}, ignore_analyzed=True)
+        assert result == [102]      # 100 already-done, 101 finalized, 102 analyze
+
+    def test_ignore_flag_off_does_not_protect(self):
+        result = dlc_tasks._filter_skip_already_done(
+            [100, 101, 102], existing_df=None, overwrite=True,
+            analyzed_labeled={101}, ignore_analyzed=False)
+        assert result == [100, 101, 102]
+
+    def test_ignore_analyzed_empty_set_is_noop(self):
+        result = dlc_tasks._filter_skip_already_done(
+            [100, 101], existing_df=None, overwrite=True,
+            analyzed_labeled=set(), ignore_analyzed=True)
+        assert result == [100, 101]
 
 
 # ── _RangeVideoIterator ───────────────────────────────────────────────────
@@ -482,6 +515,50 @@ class TestRunRange:
         # merged rows carry the NEW (0.0) values, not the old ones.
         df = captured["df"]
         assert float(df.loc[100, ("scorer", "nose", "x")]) == 0.0
+
+    def test_run_range_ignore_analyzed_protects_finalized_under_overwrite(self, tmp_path):
+        video_path = tmp_path / "v.mp4"
+        video_path.write_bytes(b"")
+        runner = MagicMock()
+        # per-scorer h5: all three target frames already predicted (finite)
+        scorer_seed = _df_with_index([100, 101, 102])
+        # _analyzed h5: only frame 101 finalized (100 and 102 all-NaN)
+        analyzed_seed = _df_with_index([100, 101, 102], all_nan_rows={100, 102})
+        h5_path = dlc_tasks._resolve_h5_path(str(video_path), "scorer")
+        h5_path.write_bytes(b"placeholder")
+        an_path = dlc_tasks_canonical_path(str(video_path))
+        an_path.write_bytes(b"placeholder")
+
+        def _read_router(path, *a, **k):
+            return analyzed_seed if str(path).endswith("_analyzed.h5") else scorer_seed
+
+        analyzed_indices = []
+
+        def fake_video_inference(vit, pose_runner):
+            frames = list(vit)
+            analyzed_indices.extend(frames)
+            return [{} for _ in frames]
+
+        with _mock_to_hdf_writes_bytes(), \
+             patch("pandas.read_hdf", side_effect=_read_router), \
+             patch.object(dlc_tasks, "video_inference", fake_video_inference), \
+             patch.object(dlc_tasks, "_dlc_create_df_from_prediction", _stub_create_df), \
+             patch.object(dlc_tasks, "_RangeVideoIterator",
+                          lambda p, indices: iter(list(indices))):
+            req = {
+                "req_id": "r1", "video_path": str(video_path),
+                "start_frame": 100, "n_frames": 3, "batch_size": 8,
+                "save_as_csv": False, "snapshot_path": "snap.pt",
+                "overwrite": True, "ignore_analyzed": True,
+            }
+            n_analyzed, n_skipped = dlc_tasks._run_range(
+                runner, req=req, **_run_range_kw(scorer="scorer")
+            )
+        # frame 101 is finalized in _analyzed → protected even though overwrite=True
+        assert n_analyzed == 2
+        assert n_skipped == 1
+        assert 101 not in analyzed_indices
+        assert sorted(analyzed_indices) == [100, 102]
 
 
 # ── _dlc_inline_session_inner ────────────────────────────────────────────

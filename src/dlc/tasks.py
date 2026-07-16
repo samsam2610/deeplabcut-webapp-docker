@@ -2780,21 +2780,25 @@ except ImportError:
     _dlc_loader_cls = None
 
 
-def _filter_skip_already_done(target_frames, existing_df, overwrite=False):
+def _filter_skip_already_done(target_frames, existing_df, overwrite=False,
+                              analyzed_labeled=None, ignore_analyzed=False):
     """Return the subset of target_frames that need re-analysis.
 
-    A frame needs re-analysis if it's missing from existing_df or if every
-    value in its row is NaN (matches DLC's own dynamic-cropping semantics).
-    When overwrite is True, every target frame is re-analyzed regardless of any
-    existing data (the "override existing labels" batch option) — the
-    combine_first merge in _run_range then lets the fresh predictions win.
+    A frame needs re-analysis if it's missing from existing_df or if every value
+    in its row is NaN (matches DLC's dynamic-cropping semantics). overwrite=True
+    re-analyzes every frame regardless of existing data. ignore_analyzed=True
+    (with analyzed_labeled = frames finalized in <stem>_analyzed.h5) excludes
+    those finalized frames with HIGHER PRIORITY than overwrite — a finalized frame
+    is never re-analyzed while ignore_analyzed is set.
     """
-    if overwrite or existing_df is None:
-        return list(target_frames)
-    have = existing_df.index
+    labeled = analyzed_labeled if (ignore_analyzed and analyzed_labeled) else set()
+    if overwrite:
+        return [f for f in target_frames if f not in labeled]
+    have = existing_df.index if existing_df is not None else []
     return [
         f for f in target_frames
-        if f not in have or existing_df.loc[f].isna().all()
+        if f not in labeled
+        and (existing_df is None or f not in have or existing_df.loc[f].isna().all())
     ]
 
 
@@ -3036,7 +3040,17 @@ def _run_range(runner, *, scorer, model_cfg, multi_animal, req):
     existing = _ia_pd.read_hdf(str(h5_path)) if h5_path.exists() else None
 
     target     = list(range(req["start_frame"], req["start_frame"] + req["n_frames"]))
-    to_analyze = _filter_skip_already_done(target, existing, req.get("overwrite", False))
+    ignore_analyzed = req.get("ignore_analyzed", False)
+    analyzed_labeled = None
+    if ignore_analyzed:
+        from dlc import canonical
+        an_path = canonical.canonical_h5_path(req["video_path"])
+        if an_path.exists():
+            analyzed_labeled = canonical.labeled_frames(_ia_pd.read_hdf(str(an_path)))
+    to_analyze = _filter_skip_already_done(
+        target, existing, req.get("overwrite", False),
+        analyzed_labeled=analyzed_labeled, ignore_analyzed=ignore_analyzed,
+    )
     n_skipped  = len(target) - len(to_analyze)
     if not to_analyze:
         # All requested frames already analyzed. Still dense-ify the h5 if it
