@@ -130,6 +130,29 @@ def clear_edit_cache(h5_path: str) -> None:
         pass
 
 
+def _resolve_edits_to_apply(file_cache: dict, body_edits) -> dict:
+    """Decide which edits Save should apply to the H5.
+
+    The browser holds every adjustment in memory (written synchronously the
+    instant the user drags) and mirrors each one to the server JSON cache via a
+    separate, un-awaited POST. Reading only the JSON cache races that async
+    write: clicking Save before the mirror lands finds an empty cache and
+    silently no-ops. So Save now sends its in-memory edits in the request body,
+    and those are authoritative — merged OVER the file cache per (frame, bodypart)
+    so nothing already flushed is lost. Falls back to the file cache when the
+    client sends no body edits (old clients / other callers).
+
+    Both args use the cache format: {"frame_<N>": {bp: {"x":.., "y":..}}}.
+    """
+    merged = {k: dict(v) for k, v in (file_cache or {}).items() if isinstance(v, dict)}
+    if isinstance(body_edits, dict):
+        for frame_key, bp_edits in body_edits.items():
+            if not isinstance(bp_edits, dict):
+                continue
+            merged.setdefault(str(frame_key), {}).update(bp_edits)
+    return merged
+
+
 def _apply_marker_edits_to_h5(h5_path: str, cache: dict) -> dict:
     """
     Apply the JSON edit cache to the H5 DataFrame.
@@ -1151,10 +1174,16 @@ def viewer_marker_edit():
 @bp.route("/dlc/viewer/save-marker-edits", methods=["POST"])
 def viewer_save_marker_edits():
     """
-    Apply the JSON edit cache to the H5 and regenerate the companion CSV.
+    Apply pending marker edits to the H5 and regenerate the companion CSV.
     Deletes the JSON cache file on success.
 
-    Body (JSON): {"h5": absolute path to the .h5 file}
+    Body (JSON): {
+      "h5":    absolute path to the .h5 file,
+      "edits": OPTIONAL {"frame_<N>": {bp: {"x":.., "y":..}}} — the client's
+               in-memory edits. When present these are authoritative (merged over
+               the server file cache per bodypart) so a Save that outran the async
+               marker-edit mirror still persists. Omitted → the file cache is used.
+    }
 
     Response: {
       "ok": true,
@@ -1175,7 +1204,10 @@ def viewer_save_marker_edits():
     if not _viewer_sec_check(hp.parent):
         return jsonify({"error": "Access denied."}), 403
 
-    cache = load_edit_cache(h5_path)
+    # The client's in-memory edits (sent in the body) are authoritative; merge
+    # them over the server file cache so a Save that outran the async mirror
+    # still persists. Old clients omit "edits" → falls back to the file cache.
+    cache = _resolve_edits_to_apply(load_edit_cache(h5_path), data.get("edits"))
     if not cache:
         return jsonify({"ok": True, "frames_edited": 0, "bodyparts_edited": 0,
                         "csv_regenerated": False, "cache_cleared": False,

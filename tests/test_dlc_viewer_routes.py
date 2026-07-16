@@ -375,3 +375,57 @@ def test_viewer_h5_endpoints_survive_both_hdf_formats(
         resp = client.get(f"/dlc/viewer/pose-coverage?h5={h5}&mode=presence&buckets=12")
         assert resp.status_code == 200, (fmt, resp.get_json())
         assert resp.get_json().get("n_frames") == 12
+
+
+# ── save-marker-edits: client-sent edits must persist even when the server JSON
+#    edit-cache is empty (the async /marker-edit flush lost the race to Save). ──
+
+def test_resolve_edits_prefers_body_over_empty_cache():
+    from dlc import viewer as vw
+    body = {"frame_3": {"Snout": {"x": 12.0, "y": 34.0}}}
+    assert vw._resolve_edits_to_apply({}, body) == body
+
+
+def test_resolve_edits_merges_body_over_file_per_bp():
+    from dlc import viewer as vw
+    file_cache = {"frame_3": {"Snout": {"x": 1.0, "y": 1.0}, "Wrist": {"x": 5.0, "y": 5.0}}}
+    body = {"frame_3": {"Snout": {"x": 12.0, "y": 34.0}}}  # body wins for Snout; Wrist preserved
+    merged = vw._resolve_edits_to_apply(file_cache, body)
+    assert merged["frame_3"]["Snout"] == {"x": 12.0, "y": 34.0}
+    assert merged["frame_3"]["Wrist"] == {"x": 5.0, "y": 5.0}
+
+
+def test_resolve_edits_falls_back_to_file_cache_when_no_body():
+    from dlc import viewer as vw
+    file_cache = {"frame_1": {"Snout": {"x": 2.0, "y": 3.0}}}
+    assert vw._resolve_edits_to_apply(file_cache, None) == file_cache
+
+
+def test_save_marker_edits_applies_body_edits_when_cache_empty(flask_test_client, tmp_path, monkeypatch):
+    """The core race fix: the browser holds the edit in memory and sends it in the
+    request body, but the server-side JSON cache is still empty (its async write
+    lost the race). Save MUST apply the body edits to the H5, not no-op."""
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: True)
+    h5 = tmp_path / "clip.h5"
+    h5.write_bytes(b"")  # exists; content unused (apply is mocked)
+    monkeypatch.setattr(vw, "load_edit_cache", lambda h5p: {})  # server cache lost the race
+    captured = {}
+
+    def _fake_apply(h5p, cache):
+        captured["cache"] = cache
+        return {"frames_edited": len(cache),
+                "bodyparts_edited": sum(len(v) for v in cache.values())}
+
+    monkeypatch.setattr(vw, "_apply_marker_edits_to_h5", _fake_apply)
+    monkeypatch.setattr(vw, "clear_edit_cache", lambda h5p: None)
+
+    body_edits = {"frame_3": {"Snout": {"x": 12.0, "y": 34.0}}}
+    resp = client.post("/dlc/viewer/save-marker-edits",
+                       json={"h5": str(h5), "edits": body_edits})
+    assert resp.status_code == 200, resp.get_json()
+    data = resp.get_json()
+    assert data["frames_edited"] == 1, data
+    assert captured.get("cache") == body_edits  # the client's edits reached the H5 apply
