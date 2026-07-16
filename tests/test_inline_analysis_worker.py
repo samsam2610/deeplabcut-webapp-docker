@@ -85,6 +85,14 @@ class TestFilterSkipAlreadyDone:
         result = dlc_tasks._filter_skip_already_done([1, 2, 3, 4, 5], df)
         assert result == [1, 3, 5]
 
+    def test_overwrite_returns_all_target_even_when_present(self):
+        df = _df_with_index([0, 1, 2, 3, 4])  # all rows finite
+        assert dlc_tasks._filter_skip_already_done([1, 2, 3], df, overwrite=True) == [1, 2, 3]
+
+    def test_overwrite_false_default_still_skips(self):
+        df = _df_with_index([0, 1, 2, 3, 4])
+        assert dlc_tasks._filter_skip_already_done([1, 2, 3], df) == []
+
 
 # ── _RangeVideoIterator ───────────────────────────────────────────────────
 
@@ -435,6 +443,45 @@ class TestRunRange:
             )
         assert n_analyzed == 0
         assert n_skipped == 3
+
+    def test_run_range_overwrite_reanalyzes_and_overwrites_existing(self, tmp_path):
+        video_path = tmp_path / "v.mp4"
+        video_path.write_bytes(b"")
+        runner = MagicMock()
+        # Existing h5 already has finite (1.0) data for all target frames.
+        seed_df = _df_with_index([100, 101, 102])  # scorer level == "scorer"
+        h5_path = dlc_tasks._resolve_h5_path(str(video_path), "scorer")
+        h5_path.write_bytes(b"placeholder")
+
+        captured = {}
+
+        def _capture_write(path, df):
+            captured["df"] = df
+
+        def fake_video_inference(vit, pose_runner):
+            return [{}, {}, {}]  # 3 predictions → all 3 target frames
+
+        with patch("pandas.read_hdf", return_value=seed_df), \
+             patch.object(dlc_tasks, "_atomic_write_h5", _capture_write), \
+             patch.object(dlc_tasks, "video_inference", fake_video_inference), \
+             patch.object(dlc_tasks, "_dlc_create_df_from_prediction", _stub_create_df), \
+             patch.object(dlc_tasks, "_RangeVideoIterator",
+                          lambda p, indices: iter([None] * len(indices))):
+            req = {
+                "req_id": "r1", "video_path": str(video_path),
+                "start_frame": 100, "n_frames": 3, "batch_size": 8,
+                "save_as_csv": False, "snapshot_path": "snap.pt",
+                "overwrite": True,
+            }
+            n_analyzed, n_skipped = dlc_tasks._run_range(
+                runner, req=req, **_run_range_kw(scorer="scorer")
+            )
+        assert n_analyzed == 3
+        assert n_skipped == 0
+        # _stub_create_df writes 0.0; the seed was 1.0 → overwrite means the
+        # merged rows carry the NEW (0.0) values, not the old ones.
+        df = captured["df"]
+        assert float(df.loc[100, ("scorer", "nose", "x")]) == 0.0
 
 
 # ── _dlc_inline_session_inner ────────────────────────────────────────────

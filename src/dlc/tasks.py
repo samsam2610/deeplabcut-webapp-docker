@@ -2780,13 +2780,16 @@ except ImportError:
     _dlc_loader_cls = None
 
 
-def _filter_skip_already_done(target_frames, existing_df):
+def _filter_skip_already_done(target_frames, existing_df, overwrite=False):
     """Return the subset of target_frames that need re-analysis.
 
     A frame needs re-analysis if it's missing from existing_df or if every
     value in its row is NaN (matches DLC's own dynamic-cropping semantics).
+    When overwrite is True, every target frame is re-analyzed regardless of any
+    existing data (the "override existing labels" batch option) — the
+    combine_first merge in _run_range then lets the fresh predictions win.
     """
-    if existing_df is None:
+    if overwrite or existing_df is None:
         return list(target_frames)
     have = existing_df.index
     return [
@@ -3033,7 +3036,7 @@ def _run_range(runner, *, scorer, model_cfg, multi_animal, req):
     existing = _ia_pd.read_hdf(str(h5_path)) if h5_path.exists() else None
 
     target     = list(range(req["start_frame"], req["start_frame"] + req["n_frames"]))
-    to_analyze = _filter_skip_already_done(target, existing)
+    to_analyze = _filter_skip_already_done(target, existing, req.get("overwrite", False))
     n_skipped  = len(target) - len(to_analyze)
     if not to_analyze:
         # All requested frames already analyzed. Still dense-ify the h5 if it
