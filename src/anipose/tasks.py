@@ -350,6 +350,33 @@ def process_filter_3d(self, session_path: str, config_path: str):
         raise RuntimeError(traceback.format_exc()[-3000:])
 
 
+@celery.task(bind=True, name="tasks.process_triangulate_range")
+def process_triangulate_range(self, cam0_video: str, start_frame: int, n_frames: int):
+    """Triangulate only the current keyframe range [start_frame, start_frame+
+    n_frames) of the stereo pair whose cam0 video is ``cam0_video``, then apply
+    anipose's 3D median filter to that range. Results accumulate incrementally
+    into a dense canonical 3D CSV (raw) + a range-spliced filtered CSV, mirroring
+    the 2D _analyzed pattern.
+
+    CPU-only (no CUDA). The heavy lifting lives in dlc.triangulate_range so the
+    task stays thin and testable. Returns
+    ``{pair_name, start_frame, n_frames, raw_csv, filtered_csv}``."""
+    from dlc.triangulate_range import run_triangulate_range
+
+    def _update(progress, stage, log=""):
+        self.update_state(
+            state="PROGRESS",
+            meta={"progress": progress, "stage": stage, "log": log},
+        )
+
+    try:
+        _update(2, "Starting range triangulation…")
+        return run_triangulate_range(
+            cam0_video, start_frame, n_frames, update=_update)
+    except Exception:
+        raise RuntimeError(traceback.format_exc()[-3000:])
+
+
 # ── MediaPipe Preprocessing Tasks ────────────────────────────────
 @celery.task(bind=True, name="tasks.process_organize_for_anipose")
 def process_organize_for_anipose(self, session_path: str, scorer: str = "User"):

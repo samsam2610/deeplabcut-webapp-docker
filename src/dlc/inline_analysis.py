@@ -27,6 +27,7 @@ from flask import Blueprint, request, jsonify, session as flask_session
 
 from . import ctx as _ctx
 from . import canonical as _canonical
+from . import canonical_3d as _canonical_3d
 from . import project_settings as _project_settings
 from .utils import _dlc_project_security_check
 
@@ -91,6 +92,28 @@ def _disable_reason(project: dict):
 def _celery_send_task(name, *, kwargs, queue):
     """Indirection so tests can patch this single function."""
     return _ctx.celery().send_task(name, kwargs=kwargs, queue=queue)
+
+
+def _enqueue_triangulate_range(cam0_video: str, start_frame: int, n_frames: int):
+    """Enqueue the range-triangulate Celery task and return the AsyncResult.
+
+    Dispatched by name via ``send_task`` (the Flask container cannot import the
+    worker task object — anipose is worker-only — so ``.delay`` isn't available
+    here). CPU-only → default ``celery`` queue. Patchable seam for tests."""
+    return _celery_send_task(
+        "tasks.process_triangulate_range",
+        kwargs={"cam0_video": cam0_video,
+                "start_frame": int(start_frame),
+                "n_frames": int(n_frames)},
+        queue="celery",
+    )
+
+
+def _triangulate_async_result(req_id: str):
+    """Look up a Celery AsyncResult for the range-triangulate task. Patchable
+    seam so route tests can inject fake states without a live worker/backend."""
+    from celery.result import AsyncResult
+    return AsyncResult(req_id, app=_ctx.celery())
 
 
 def _probe_video(path: Path) -> dict:
@@ -475,3 +498,90 @@ def finalize_range():
         return jsonify({"error": str(exc)}), 500
     return jsonify({"h5_path": str(h5_path), "csv_path": str(csv_path),
                     "n_frames_written": n_written}), 200
+
+
+# ── Triangulate keyframe range (incremental anipose 3D) ────────────────────
+
+@bp.route("/dlc/project/triangulate/range", methods=["POST"])
+def triangulate_range_submit():
+    """Enqueue a range-triangulate Celery task for the current keyframe window
+    of the selected stereo pair. Body: {cam0_video, start_frame, n_frames}."""
+    project = _active_project()
+    if not project:
+        return jsonify({"error": "No active DLC project."}), 400
+    body = request.get_json(silent=True) or {}
+    cam0_video = (body.get("cam0_video") or "").strip()
+    if not cam0_video:
+        return jsonify({"error": "cam0_video required"}), 400
+    p = Path(cam0_video)
+    if not p.is_file():
+        return jsonify({"error": f"cam0_video not found: {cam0_video}"}), 400
+    if not _sec_check(p):
+        return jsonify({"error": "cam0_video path is outside the data root"}), 403
+    try:
+        start_frame = int(body.get("start_frame", 0))
+        n_frames    = int(body.get("n_frames", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "start_frame and n_frames must be ints"}), 400
+    if start_frame < 0:
+        return jsonify({"error": "start_frame must be >= 0"}), 400
+    if n_frames < 1 or n_frames > 10_000:
+        return jsonify({"error": "n_frames must be in 1..10000"}), 400
+
+    task = _enqueue_triangulate_range(str(p), start_frame, n_frames)
+    return jsonify({"req_id": task.id}), 202
+
+
+@bp.route("/dlc/project/triangulate/range/status", methods=["GET"])
+def triangulate_range_status():
+    """Map the Celery task state → the API contract
+    {state, progress, stage, error, result}."""
+    req_id = (request.args.get("req_id") or "").strip()
+    if not req_id:
+        return jsonify({"error": "req_id required"}), 400
+    res = _triangulate_async_result(req_id)
+    state = res.state
+    out = {"state": state, "progress": 0, "stage": "", "error": None, "result": None}
+    if state == "PENDING":
+        out["stage"] = "Queued — waiting for a worker…"
+    elif state == "STARTED":
+        out["progress"] = 5
+        out["stage"] = "Worker picked up the task…"
+    elif state == "PROGRESS":
+        meta = res.info if isinstance(res.info, dict) else {}
+        out["progress"] = int(meta.get("progress", 0) or 0)
+        out["stage"] = meta.get("stage", "Processing…")
+    elif state == "SUCCESS":
+        out["progress"] = 100
+        out["stage"] = "Complete"
+        out["result"] = res.result
+    elif state == "FAILURE":
+        out["stage"] = "Failed"
+        out["error"] = str(res.info)
+    else:
+        out["stage"] = state
+    return jsonify(out)
+
+
+@bp.route("/dlc/project/triangulate/coverage", methods=["GET"])
+def triangulate_coverage():
+    """Return the 3D coverage bar buckets for the pair derived from cam0_video.
+    Absent/empty canonical → all-zero buckets (not an error)."""
+    cam0_video = (request.args.get("cam0_video") or "").strip()
+    if not cam0_video:
+        return jsonify({"error": "cam0_video required"}), 400
+    if not _sec_check(Path(cam0_video)):
+        return jsonify({"error": "cam0_video path is outside the data root"}), 403
+    try:
+        buckets = int(request.args.get("buckets", 100))
+    except (TypeError, ValueError):
+        return jsonify({"error": "buckets must be an int"}), 400
+    if buckets < 1 or buckets > 10_000:
+        return jsonify({"error": "buckets must be in 1..10000"}), 400
+
+    session_dir = Path(cam0_video).parent
+    pair_name = _canonical_3d.pair_name_from_cam0(cam0_video)
+    return jsonify({
+        "buckets":  _canonical_3d.read_3d_coverage(session_dir, pair_name, buckets),
+        "nframes":  _canonical_3d.canonical_3d_nframes(session_dir, pair_name),
+    })

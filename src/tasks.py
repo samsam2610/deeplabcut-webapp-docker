@@ -11,6 +11,7 @@ from anipose.tasks import (  # noqa: F401
     process_calibrate,
     process_filter_2d,
     process_triangulate,
+    process_triangulate_range,
     process_filter_3d,
     process_organize_for_anipose,
     process_convert_mediapipe_csv_to_h5,
