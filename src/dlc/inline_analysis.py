@@ -593,3 +593,23 @@ def triangulate_coverage():
         "nframes":  total_frames or _canonical_3d.canonical_3d_nframes(
             session_dir, pair_name),
     })
+
+
+@bp.route("/dlc/project/triangulate/poses-3d", methods=["GET"])
+def triangulate_poses_3d():
+    """Return the populated 3D poses + derived skeleton for the pair derived
+    from cam0_video, per the frozen viewer contract. ``source=filtered``
+    (default) reads pose-3d-filtered/; ``source=raw`` reads pose-3d/. Absent /
+    empty canonical → empty frames with bounds=null (200, not an error)."""
+    cam0_video = (request.args.get("cam0_video") or "").strip()
+    if not cam0_video:
+        return jsonify({"error": "cam0_video required"}), 400
+    if not _sec_check(Path(cam0_video)):
+        return jsonify({"error": "cam0_video path is outside the data root"}), 403
+    source = (request.args.get("source") or "filtered").strip().lower()
+    if source not in ("filtered", "raw"):
+        source = "filtered"
+
+    session_dir = Path(cam0_video).parent
+    pair_name = _canonical_3d.pair_name_from_cam0(cam0_video)
+    return jsonify(_canonical_3d.read_poses_3d(session_dir, pair_name, source))

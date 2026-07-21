@@ -210,3 +210,93 @@ class TestTriangulateCoverage:
         resp = client.get(
             "/dlc/project/triangulate/coverage?cam0_video=/etc/x.avi&buckets=4")
         assert resp.status_code == 403
+
+
+def _write_pose_canonical(v, *, source="filtered"):
+    """Write a small 3D canonical for the pair derived from cam0 video ``v``.
+    Two bodyparts (Wrist, MCP-1 → one bone), frames 0..2 populated."""
+    from dlc import canonical_3d as c3d
+    import numpy as np
+    import pandas as pd
+    pair = c3d.pair_name_from_cam0(str(v))
+    bps = ("Wrist", "MCP-1")
+    cols = {}
+    for i, bp in enumerate(bps):
+        cols[f"{bp}_x"] = [float(i)] * 3
+        cols[f"{bp}_y"] = [float(i + 1)] * 3
+        cols[f"{bp}_z"] = [float(i * 2)] * 3
+        cols[f"{bp}_error"] = [1.0] * 3
+    df = pd.DataFrame(cols, index=pd.Index(range(3), name="fnum"))
+    if source == "raw":
+        c3d.write_range_to_canonical_3d(v.parent, pair, df)
+    else:
+        c3d.write_range_to_canonical_3d(v.parent, pair, df)
+        c3d.medfilt_range_and_splice(
+            v.parent, pair, 0, 3, {"filter3d": {"medfilt": 3}})
+    return pair
+
+
+class TestTriangulatePoses3d:
+    def test_absent_canonical_empty_at_200(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        resp = client.get(f"/dlc/project/triangulate/poses-3d?cam0_video={v}")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body == {"bodyparts": [], "skeleton": [],
+                        "frames": [], "points": [], "bounds": None}
+
+    def test_returns_populated_poses_and_skeleton(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        _write_pose_canonical(v, source="filtered")
+        resp = client.get(f"/dlc/project/triangulate/poses-3d?cam0_video={v}")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["bodyparts"] == ["MCP-1", "Wrist"]
+        assert body["skeleton"] == [["Wrist", "MCP-1"]]
+        assert body["frames"] == [0, 1, 2]
+        assert len(body["points"]) == 3
+        # each row aligned to bodyparts, each point a [x,y,z] triple
+        for row in body["points"]:
+            assert len(row) == 2
+            assert all(len(p) == 3 for p in row)
+        assert body["bounds"] is not None
+        assert "center" in body["bounds"] and "size" in body["bounds"]
+
+    def test_source_raw_vs_filtered(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        from dlc import canonical_3d as c3d
+        import pandas as pd
+        pair = c3d.pair_name_from_cam0(str(v))
+        # raw spans 0..4; filtered only splices 1..2
+        cols = {}
+        for i, bp in enumerate(("Wrist", "MCP-1")):
+            cols[f"{bp}_x"] = [float(i)] * 5
+            cols[f"{bp}_y"] = [float(i)] * 5
+            cols[f"{bp}_z"] = [float(i)] * 5
+            cols[f"{bp}_error"] = [1.0] * 5
+        df = pd.DataFrame(cols, index=pd.Index(range(5), name="fnum"))
+        c3d.write_range_to_canonical_3d(v.parent, pair, df)
+        c3d.medfilt_range_and_splice(
+            v.parent, pair, 1, 2, {"filter3d": {"medfilt": 3}})
+        raw = client.get(
+            f"/dlc/project/triangulate/poses-3d?cam0_video={v}&source=raw"
+        ).get_json()
+        filt = client.get(
+            f"/dlc/project/triangulate/poses-3d?cam0_video={v}&source=filtered"
+        ).get_json()
+        assert raw["frames"] == [0, 1, 2, 3, 4]
+        assert filt["frames"] == [1, 2]
+
+    def test_400_missing_cam0(self, ia_client):
+        client, _app, _r, _p = ia_client
+        resp = client.get("/dlc/project/triangulate/poses-3d")
+        assert resp.status_code == 400
+
+    def test_403_path_outside_root(self, ia_client):
+        client, _app, _r, _p = ia_client
+        resp = client.get(
+            "/dlc/project/triangulate/poses-3d?cam0_video=/etc/x.avi")
+        assert resp.status_code == 403

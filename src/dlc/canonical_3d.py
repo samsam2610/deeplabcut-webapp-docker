@@ -33,6 +33,9 @@ _CAM_RE = re.compile(r"_cam(\d+)_")
 _INDEX_NAME = "fnum"
 _COORD_SUFFIXES = ("_x", "_y", "_z")
 
+# Finger-chain joints: MCP-<k> / PIP-<k> / DIP-<k>. ``k`` is any integer suffix.
+_FINGER_JOINT_RE = re.compile(r"^(?:MCP|PIP|DIP)-(\d+)$")
+
 
 # ── pair name / paths ──────────────────────────────────────────────────────
 
@@ -262,3 +265,105 @@ def read_3d_coverage(session_dir, pair_name, buckets, total_frames=None) -> list
         hi = (b + 1) * nframes // buckets
         out.append(float(present[lo:hi].mean()) if hi > lo else 0.0)
     return out
+
+
+# ── 3D pose viewer (skeleton + populated poses) ────────────────────────────
+
+def derive_skeleton(bodyparts) -> list:
+    """Return finger-chain bones ``[[a, b], ...]`` derived purely from bodypart
+    names. For each finger ``k`` present on an ``MCP-<k>`` / ``PIP-<k>`` /
+    ``DIP-<k>`` name, connect ``Wrist→MCP-k``, ``MCP-k→PIP-k``, ``PIP-k→DIP-k``
+    — but only emit a bone when BOTH endpoints are in ``bodyparts``. ``k`` is
+    derived generically from the naming (any integer suffix), not hardcoded.
+    Bodyparts not on a finger chain (Snout, Left-Paw, Pellet, …) get no bones."""
+    names = set(bodyparts)
+    ks = set()
+    for bp in bodyparts:
+        m = _FINGER_JOINT_RE.match(str(bp))
+        if m:
+            ks.add(int(m.group(1)))
+    bones = []
+    for k in sorted(ks):
+        chain = ["Wrist", f"MCP-{k}", f"PIP-{k}", f"DIP-{k}"]
+        for a, b in zip(chain, chain[1:]):
+            if a in names and b in names:
+                bones.append([a, b])
+    return bones
+
+
+def _round(v: float, nd: int = 4) -> float:
+    return float(round(float(v), nd))
+
+
+def read_poses_3d(session_dir, pair_name, source="filtered") -> dict:
+    """Read a canonical 3D CSV and build the frozen poses-3d payload.
+
+    ``source='raw'`` → ``pose-3d/`` canonical; anything else → ``pose-3d-filtered/``.
+
+    Returns ``{bodyparts, skeleton, frames, points, bounds}``:
+      * ``bodyparts`` — sorted unique bp names having ``_x``/``_y``/``_z`` columns.
+      * ``skeleton``  — ``derive_skeleton(bodyparts)``.
+      * ``frames``    — populated fnums only (rows where any bodypart is fully
+                        present, i.e. finite x/y/z).
+      * ``points``    — per populated frame, a list aligned to ``bodyparts``:
+                        ``[x, y, z]`` (rounded) if that bodypart is present,
+                        else ``None``.
+      * ``bounds``    — ``{center:[cx,cy,cz], size:s}`` over all populated finite
+                        points (center = min/max midpoint, size = max axis range),
+                        or ``None`` when nothing is populated.
+
+    Absent / unreadable / empty canonical → empty frames+points, ``bounds=None``
+    (never raises)."""
+    path = (canonical_3d_csv_path(session_dir, pair_name)
+            if str(source) == "raw"
+            else filtered_3d_csv_path(session_dir, pair_name))
+
+    empty = {"bodyparts": [], "skeleton": [], "frames": [],
+             "points": [], "bounds": None}
+    if not Path(path).exists():
+        return empty
+    try:
+        df = _read_csv(path)
+    except Exception:
+        return empty
+
+    cols = set(df.columns)
+    bodyparts = sorted(
+        c[:-2] for c in df.columns
+        if c.endswith("_x") and f"{c[:-2]}_y" in cols and f"{c[:-2]}_z" in cols
+    )
+    skeleton = derive_skeleton(bodyparts)
+    base = {"bodyparts": bodyparts, "skeleton": skeleton,
+            "frames": [], "points": [], "bounds": None}
+    if not bodyparts or len(df) == 0:
+        return base
+
+    X = df[[f"{bp}_x" for bp in bodyparts]].to_numpy(dtype=float)
+    Y = df[[f"{bp}_y" for bp in bodyparts]].to_numpy(dtype=float)
+    Z = df[[f"{bp}_z" for bp in bodyparts]].to_numpy(dtype=float)
+    present = np.isfinite(X) & np.isfinite(Y) & np.isfinite(Z)  # (nframes, nbp)
+    row_pop = present.any(axis=1)
+    if not row_pop.any():
+        return base
+
+    index = df.index.to_numpy()
+    frames, points = [], []
+    for i in np.nonzero(row_pop)[0]:
+        frames.append(int(index[i]))
+        row = []
+        for j in range(len(bodyparts)):
+            if present[i, j]:
+                row.append([_round(X[i, j]), _round(Y[i, j]), _round(Z[i, j])])
+            else:
+                row.append(None)
+        points.append(row)
+
+    xs, ys, zs = X[present], Y[present], Z[present]
+    cx = (xs.min() + xs.max()) / 2.0
+    cy = (ys.min() + ys.max()) / 2.0
+    cz = (zs.min() + zs.max()) / 2.0
+    size = max(xs.max() - xs.min(), ys.max() - ys.min(), zs.max() - zs.min())
+    bounds = {"center": [_round(cx), _round(cy), _round(cz)], "size": _round(size)}
+
+    return {"bodyparts": bodyparts, "skeleton": skeleton,
+            "frames": frames, "points": points, "bounds": bounds}

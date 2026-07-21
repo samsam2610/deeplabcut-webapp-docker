@@ -193,3 +193,155 @@ class TestCoverage:
         c3d.write_range_to_canonical_3d(tmp_path, "p", _range_df(range(0, 20)))
         cov = c3d.read_3d_coverage(tmp_path, "p", 4)
         assert cov == [1.0, 1.0, 1.0, 1.0]
+
+
+# ── skeleton derivation ──────────────────────────────────────────────────────
+
+class TestDeriveSkeleton:
+    def test_single_finger_full_chain(self):
+        bps = ["Wrist", "MCP-1", "PIP-1", "DIP-1"]
+        assert c3d.derive_skeleton(bps) == [
+            ["Wrist", "MCP-1"], ["MCP-1", "PIP-1"], ["PIP-1", "DIP-1"]]
+
+    def test_multiple_fingers_generic_k(self):
+        # k derived from names, not hardcoded 1..4 — include k=7.
+        bps = ["Wrist", "MCP-1", "PIP-1", "DIP-1", "MCP-7", "PIP-7", "DIP-7"]
+        bones = c3d.derive_skeleton(bps)
+        assert ["Wrist", "MCP-7"] in bones
+        assert ["MCP-7", "PIP-7"] in bones
+        assert ["PIP-7", "DIP-7"] in bones
+        assert ["Wrist", "MCP-1"] in bones
+
+    def test_absent_joints_omitted(self):
+        # No PIP-1 → the MCP-1→PIP-1 and PIP-1→DIP-1 bones must be dropped.
+        bps = ["Wrist", "MCP-1", "DIP-1"]
+        bones = c3d.derive_skeleton(bps)
+        assert ["Wrist", "MCP-1"] in bones
+        assert ["MCP-1", "PIP-1"] not in bones
+        assert ["PIP-1", "DIP-1"] not in bones
+
+    def test_missing_wrist_drops_first_bone(self):
+        bps = ["MCP-1", "PIP-1", "DIP-1"]
+        bones = c3d.derive_skeleton(bps)
+        assert ["Wrist", "MCP-1"] not in bones
+        assert ["MCP-1", "PIP-1"] in bones
+        assert ["PIP-1", "DIP-1"] in bones
+
+    def test_non_chain_parts_unconnected(self):
+        bps = ["Snout", "Left-Paw", "Pellet"]
+        assert c3d.derive_skeleton(bps) == []
+
+    def test_mixed_parts_only_chain_bones(self):
+        bps = ["Snout", "Pellet", "Wrist", "MCP-2", "PIP-2", "DIP-2", "Left-Paw"]
+        bones = c3d.derive_skeleton(bps)
+        # only the finger-2 chain, nothing touching Snout/Pellet/Left-Paw
+        assert bones == [["Wrist", "MCP-2"], ["MCP-2", "PIP-2"], ["PIP-2", "DIP-2"]]
+
+    def test_empty_input(self):
+        assert c3d.derive_skeleton([]) == []
+
+
+# ── poses-3d payload ─────────────────────────────────────────────────────────
+
+_POSE_BPS = ("Wrist", "MCP-1", "PIP-1", "DIP-1", "Snout")
+_POSE_COLS = []
+for _bp in _POSE_BPS:
+    _POSE_COLS += [f"{_bp}_x", f"{_bp}_y", f"{_bp}_z",
+                   f"{_bp}_error", f"{_bp}_ncams", f"{_bp}_score"]
+
+
+def _pose_df(frames, base=0.0):
+    """Build a pose-3d frame; each bp/frame gets distinct x/y/z so bounds are
+    non-degenerate. bp index i, frame offset f → x=base+i, y=base+i+f, z=i*2."""
+    rows = {c: [] for c in _POSE_COLS}
+    for f_off, _fr in enumerate(frames):
+        for i, bp in enumerate(_POSE_BPS):
+            rows[f"{bp}_x"].append(base + i)
+            rows[f"{bp}_y"].append(base + i + f_off)
+            rows[f"{bp}_z"].append(i * 2.0)
+            rows[f"{bp}_error"].append(1.0)
+            rows[f"{bp}_ncams"].append(2.0)
+            rows[f"{bp}_score"].append(0.9)
+    df = pd.DataFrame(rows, index=pd.Index(list(frames), name="fnum"))
+    return df[_POSE_COLS]
+
+
+class TestReadPoses3d:
+    def test_absent_canonical_empty_at_bounds_null(self, tmp_path):
+        out = c3d.read_poses_3d(tmp_path, "p", source="filtered")
+        assert out == {"bodyparts": [], "skeleton": [],
+                       "frames": [], "points": [], "bounds": None}
+
+    def test_bodyparts_sorted_and_skeleton(self, tmp_path):
+        c3d.write_range_to_canonical_3d(tmp_path, "p", _pose_df(range(0, 3)))
+        c3d.medfilt_range_and_splice(
+            tmp_path, "p", 0, 3, {"filter3d": {"medfilt": 3}})
+        out = c3d.read_poses_3d(tmp_path, "p", source="filtered")
+        assert out["bodyparts"] == sorted(_POSE_BPS)
+        # skeleton derived from those bodyparts (Snout unconnected)
+        assert out["skeleton"] == [
+            ["Wrist", "MCP-1"], ["MCP-1", "PIP-1"], ["PIP-1", "DIP-1"]]
+
+    def test_populated_frames_only(self, tmp_path):
+        # raw spans 0..9 but only 3..6 have data (rest NaN).
+        df = _pose_df(range(0, 10))
+        df.loc[0:2, _POSE_COLS] = np.nan
+        df.loc[7:9, _POSE_COLS] = np.nan
+        c3d.write_range_to_canonical_3d(tmp_path, "p", df)
+        out = c3d.read_poses_3d(tmp_path, "p", source="raw")
+        assert out["frames"] == [3, 4, 5, 6]
+        assert len(out["points"]) == 4
+
+    def test_points_shape_and_null_for_nan_bodypart(self, tmp_path):
+        df = _pose_df(range(0, 2))
+        # blank out Snout's coords on the first frame only
+        df.loc[0, ["Snout_x", "Snout_y", "Snout_z"]] = np.nan
+        c3d.write_range_to_canonical_3d(tmp_path, "p", df)
+        out = c3d.read_poses_3d(tmp_path, "p", source="raw")
+        bps = out["bodyparts"]
+        snout_j = bps.index("Snout")
+        # frame 0 → Snout null, all others present (list aligned to bodyparts)
+        row0 = out["points"][0]
+        assert len(row0) == len(bps)
+        assert row0[snout_j] is None
+        assert all(isinstance(p, list) and len(p) == 3
+                   for j, p in enumerate(row0) if j != snout_j)
+        # frame 1 → Snout present
+        assert out["points"][1][snout_j] is not None
+
+    def test_source_raw_vs_filtered_reads_right_file(self, tmp_path):
+        # raw has frames 0..4; filtered only has 2..3 (median-spliced subset).
+        c3d.write_range_to_canonical_3d(tmp_path, "p", _pose_df(range(0, 5)))
+        c3d.medfilt_range_and_splice(
+            tmp_path, "p", 2, 2, {"filter3d": {"medfilt": 3}})
+        raw = c3d.read_poses_3d(tmp_path, "p", source="raw")
+        filt = c3d.read_poses_3d(tmp_path, "p", source="filtered")
+        assert raw["frames"] == [0, 1, 2, 3, 4]
+        assert filt["frames"] == [2, 3]
+
+    def test_bounds_center_and_size(self, tmp_path):
+        # Single frame, known coords: bp i → (i, i, 2i) for i in 0..4.
+        c3d.write_range_to_canonical_3d(tmp_path, "p", _pose_df([0]))
+        out = c3d.read_poses_3d(tmp_path, "p", source="raw")
+        b = out["bounds"]
+        # x,y span 0..4 (mid 2), z spans 0..8 (mid 4); size = max range = 8.
+        assert b["center"] == [2.0, 2.0, 4.0]
+        assert b["size"] == 8.0
+
+    def test_default_source_is_filtered(self, tmp_path):
+        # Only filtered exists → default (no source arg) must find it.
+        c3d.write_range_to_canonical_3d(tmp_path, "p", _pose_df(range(0, 3)))
+        c3d.medfilt_range_and_splice(
+            tmp_path, "p", 0, 3, {"filter3d": {"medfilt": 3}})
+        out = c3d.read_poses_3d(tmp_path, "p")
+        assert out["frames"] == [0, 1, 2]
+
+    def test_all_nan_canonical_bounds_null(self, tmp_path):
+        df = _pose_df(range(0, 5))
+        df.loc[:, _POSE_COLS] = np.nan
+        c3d.write_range_to_canonical_3d(tmp_path, "p", df)
+        out = c3d.read_poses_3d(tmp_path, "p", source="raw")
+        assert out["bodyparts"] == sorted(_POSE_BPS)  # columns still present
+        assert out["frames"] == []
+        assert out["points"] == []
+        assert out["bounds"] is None
