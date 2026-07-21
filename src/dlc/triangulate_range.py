@@ -49,6 +49,24 @@ def _get_cam_name(config, path):
         return m.group(0) if m else Path(path).stem
 
 
+def _filter_pose2d(config, in_h5, out_h5) -> Path:
+    """Anipose 2D pose filter (worker-only imports inside). Loads points from
+    ``in_h5``, runs ``filter_pose_medfilt`` or ``filter_pose_viterbi`` per
+    ``config['filter']['type']`` (default ``medfilt``), writes to ``out_h5``.
+    Patchable seam so the wiring is unit-testable without anipose."""
+    from anipose.common import load_pose_2d, write_pose_2d
+    from anipose_src.filter_2d_funcs import (
+        filter_pose_medfilt, filter_pose_viterbi, wrap_points)
+    model_type = (config or {}).get("model_type", "deeplabcut")
+    all_points, metadata = load_pose_2d(model_type, str(in_h5))
+    ftype = (config or {}).get("filter", {}).get("type", "medfilt")
+    fn = filter_pose_viterbi if ftype == "viterbi" else filter_pose_medfilt
+    points, scores = fn(config, all_points, metadata["bodyparts"])
+    all_points = wrap_points(points, scores)
+    write_pose_2d(model_type, all_points[:, :, 0], metadata, str(out_h5))
+    return Path(out_h5)
+
+
 # ── helpers ────────────────────────────────────────────────────────────────
 
 def _resolve_cam1(cam0: Path):
@@ -133,9 +151,21 @@ def run_triangulate_range(cam0_video, start_frame, n_frames, update=None) -> dic
         _slice_pose2d_h5(h5_0, start_frame, n_frames, s0)
         _slice_pose2d_h5(h5_1, start_frame, n_frames, s1)
 
+        pose_by_cam = {cam0: s0, cam1: s1}
+        if (config or {}).get("filter", {}).get("enabled"):
+            _emit(update, 35, "Filtering pose-2d (anipose 2D filter)…")
+            for cam, sliced in list(pose_by_cam.items()):
+                filtered = td / f"{cam.stem}_filtered.h5"
+                try:
+                    _filter_pose2d(config, sliced, filtered)
+                    pose_by_cam[cam] = filtered
+                except Exception as exc:  # noqa: BLE001
+                    _emit(update, 35, "2D filter failed — using raw slice",
+                          f"{cam.name}: {exc}")
+
         fname_dict = {
-            _get_cam_name(config, cam0): str(s0),
-            _get_cam_name(config, cam1): str(s1),
+            _get_cam_name(config, cam0): str(pose_by_cam[cam0]),
+            _get_cam_name(config, cam1): str(pose_by_cam[cam1]),
         }
         tmp_out = td / f"{pair_name}_3d.csv"
         _emit(update, 45, "Triangulating range…")

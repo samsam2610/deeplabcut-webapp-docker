@@ -29,6 +29,7 @@ from . import ctx as _ctx
 from . import canonical as _canonical
 from . import canonical_3d as _canonical_3d
 from . import project_settings as _project_settings
+from . import anipose_config as _anipose_config
 from .utils import _dlc_project_security_check
 
 bp = Blueprint("dlc_inline_analysis", __name__)
@@ -613,6 +614,45 @@ def triangulate_poses_3d():
     session_dir = Path(cam0_video).parent
     pair_name = _canonical_3d.pair_name_from_cam0(cam0_video)
     return jsonify(_canonical_3d.read_poses_3d(session_dir, pair_name, source))
+
+
+@bp.route("/dlc/project/triangulate/config", methods=["GET"])
+def triangulate_config_get():
+    """Return the editable anipose params for the config.toml governing the
+    session of ``cam0_video``. config path = parent(session)/config.toml."""
+    cam0_video = (request.args.get("cam0_video") or "").strip()
+    if not cam0_video:
+        return jsonify({"error": "cam0_video required"}), 400
+    p = Path(cam0_video)
+    if not _sec_check(p):
+        return jsonify({"error": "cam0_video path is outside the data root"}), 403
+    config_path = p.parent.parent / "config.toml"
+    if not config_path.is_file():
+        return jsonify({"error": f"config.toml not found at {config_path}"}), 400
+    return jsonify(_anipose_config.read_params(config_path)), 200
+
+
+@bp.route("/dlc/project/triangulate/config", methods=["POST"])
+def triangulate_config_post():
+    """Persist edited anipose params (targeted, formatting-preserving writes)
+    and echo the re-read result. Body: {cam0_video, params}."""
+    body = request.get_json(silent=True) or {}
+    cam0_video = (body.get("cam0_video") or "").strip()
+    if not cam0_video:
+        return jsonify({"error": "cam0_video required"}), 400
+    p = Path(cam0_video)
+    if not _sec_check(p):
+        return jsonify({"error": "cam0_video path is outside the data root"}), 403
+    config_path = p.parent.parent / "config.toml"
+    if not config_path.is_file():
+        return jsonify({"error": f"config.toml not found at {config_path}"}), 400
+    params = body.get("params") or {}
+    errs = _anipose_config.validate_params(params)
+    if errs:
+        return jsonify({"error": "; ".join(errs)}), 400
+    _anipose_config.write_params(config_path, params)
+    return jsonify({"ok": True,
+                    "params": _anipose_config.read_params(config_path)}), 200
 
 
 @bp.route("/dlc/project/triangulate/refilter", methods=["POST"])

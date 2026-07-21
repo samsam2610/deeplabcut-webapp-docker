@@ -253,7 +253,7 @@ class TestTriangulatePoses3d:
         resp = client.get(f"/dlc/project/triangulate/poses-3d?cam0_video={v}")
         assert resp.status_code == 200
         body = resp.get_json()
-        assert body["bodyparts"] == ["MCP-1", "Wrist"]
+        assert body["bodyparts"] == ["Wrist", "MCP-1"]  # native CSV column order
         assert body["skeleton"] == [["Wrist", "MCP-1"]]
         assert body["frames"] == [0, 1, 2]
         assert len(body["points"]) == 3
@@ -300,6 +300,118 @@ class TestTriangulatePoses3d:
         resp = client.get(
             "/dlc/project/triangulate/poses-3d?cam0_video=/etc/x.avi")
         assert resp.status_code == 403
+
+
+_CONFIG_TOML = """\
+# anipose config
+[labeling]
+scheme = [["Wrist", "MCP-1"]]
+
+[triangulation]
+cam_regex = "cam([0-9])"
+ransac = false
+scale_smooth = 2.0
+
+[filter]
+enabled = false
+type = "medfilt"
+medfilt = 7
+
+[filter3d]
+enabled = true
+medfilt = 5
+offset_threshold = 15
+"""
+
+
+def _write_config_toml(project):
+    """config.toml lives at parent(session)/config.toml. cam0 is under
+    project/videos/, so parent.parent == project → project/config.toml."""
+    p = project / "config.toml"
+    p.write_text(_CONFIG_TOML)
+    return p
+
+
+class TestTriangulateConfig:
+    def test_get_returns_params(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        _write_config_toml(project)
+        resp = client.get(f"/dlc/project/triangulate/config?cam0_video={v}")
+        assert resp.status_code == 200, resp.get_json()
+        body = resp.get_json()
+        assert set(body) == {"triangulation", "filter", "filter3d"}
+        assert body["triangulation"]["cam_regex"] == "cam([0-9])"
+        assert body["filter"]["medfilt"] == 7
+        assert body["filter3d"]["enabled"] is True
+
+    def test_post_persists_and_echoes(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        cfg = _write_config_toml(project)
+        before = cfg.read_text()
+        resp = client.post("/dlc/project/triangulate/config", json={
+            "cam0_video": str(v),
+            "params": {"filter": {"medfilt": 11, "enabled": True},
+                       "filter3d": {"offset_threshold": 42}},
+        })
+        assert resp.status_code == 200, resp.get_json()
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert body["params"]["filter"]["medfilt"] == 11
+        assert body["params"]["filter"]["enabled"] is True
+        assert body["params"]["filter3d"]["offset_threshold"] == 42
+        # persisted to disk + scheme/comment preserved
+        after = cfg.read_text()
+        assert "# anipose config" in after
+        assert 'scheme = [["Wrist", "MCP-1"]]' in after
+        assert before != after
+
+    def test_get_absent_config_400(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)  # no config.toml written
+        resp = client.get(f"/dlc/project/triangulate/config?cam0_video={v}")
+        assert resp.status_code == 400
+        assert "config.toml not found" in resp.get_json()["error"]
+
+    def test_post_absent_config_400(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        resp = client.post("/dlc/project/triangulate/config", json={
+            "cam0_video": str(v), "params": {"filter": {"medfilt": 7}}})
+        assert resp.status_code == 400
+
+    def test_get_400_missing_cam0(self, ia_client):
+        client, _app, _r, _p = ia_client
+        resp = client.get("/dlc/project/triangulate/config")
+        assert resp.status_code == 400
+
+    def test_post_400_missing_cam0(self, ia_client):
+        client, _app, _r, _p = ia_client
+        resp = client.post("/dlc/project/triangulate/config", json={
+            "params": {"filter": {"medfilt": 7}}})
+        assert resp.status_code == 400
+
+    def test_get_403_path_outside_root(self, ia_client):
+        client, _app, _r, _p = ia_client
+        resp = client.get(
+            "/dlc/project/triangulate/config?cam0_video=/etc/x.avi")
+        assert resp.status_code == 403
+
+    def test_post_403_path_outside_root(self, ia_client):
+        client, _app, _r, _p = ia_client
+        resp = client.post("/dlc/project/triangulate/config", json={
+            "cam0_video": "/etc/x.avi", "params": {"filter": {"medfilt": 7}}})
+        assert resp.status_code == 403
+
+    def test_post_invalid_params_400(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        _write_config_toml(project)
+        resp = client.post("/dlc/project/triangulate/config", json={
+            "cam0_video": str(v), "params": {"filter": {"medfilt": 8}}})
+        assert resp.status_code == 400
+        assert "medfilt" in resp.get_json()["error"]
 
 
 class TestTriangulateRefilter:

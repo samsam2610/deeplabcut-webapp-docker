@@ -151,3 +151,83 @@ class TestRunTriangulateRange:
     def test_cam1_sibling_resolves(self, anipose_session):
         parent, session, cam0, cam1 = anipose_session
         assert tr._resolve_cam1(cam0) == cam1
+
+
+def _config_with_filter(enabled, ftype="medfilt"):
+    cfg = _config()
+    cfg["filter"] = {"enabled": enabled, "type": ftype}
+    return cfg
+
+
+def _fake_filter(config, in_h5, out_h5):
+    """Stand-in for the real anipose 2D filter: just copy the slice through."""
+    import shutil
+    shutil.copyfile(str(in_h5), str(out_h5))
+    return Path(out_h5)
+
+
+class TestFilter2dStep:
+    def test_filter_called_per_cam_and_filtered_h5_used(self, anipose_session):
+        parent, session, cam0, cam1 = anipose_session
+        captured = {}
+        writer = _fake_triangulate_writer(4)
+
+        def _capturing(config, calib, video, pose, fname_dict, out):
+            captured["fname_dict"] = dict(fname_dict)
+            writer(config, calib, video, pose, fname_dict, out)
+
+        with patch.object(tr, "_load_config",
+                          return_value=_config_with_filter(True)), \
+             patch.object(tr, "_triangulate", side_effect=_capturing), \
+             patch.object(tr, "_filter_pose2d",
+                          side_effect=_fake_filter) as mk_filter:
+            tr.run_triangulate_range(str(cam0), 0, 4)
+
+        # one filter call per camera
+        assert mk_filter.call_count == 2
+        # the filtered h5 (not the raw slice) is threaded into fname_dict
+        assert captured["fname_dict"]
+        assert all(v.endswith("_filtered.h5")
+                   for v in captured["fname_dict"].values())
+
+    def test_filter_not_called_when_disabled(self, anipose_session):
+        parent, session, cam0, cam1 = anipose_session
+        captured = {}
+        writer = _fake_triangulate_writer(4)
+
+        def _capturing(config, calib, video, pose, fname_dict, out):
+            captured["fname_dict"] = dict(fname_dict)
+            writer(config, calib, video, pose, fname_dict, out)
+
+        with patch.object(tr, "_load_config",
+                          return_value=_config_with_filter(False)), \
+             patch.object(tr, "_triangulate", side_effect=_capturing), \
+             patch.object(tr, "_filter_pose2d",
+                          side_effect=_fake_filter) as mk_filter:
+            tr.run_triangulate_range(str(cam0), 0, 4)
+
+        assert mk_filter.call_count == 0
+        # raw slices used
+        assert all(v.endswith("_analyzed.h5")
+                   for v in captured["fname_dict"].values())
+
+    def test_triangulation_continues_when_filter_raises(self, anipose_session):
+        parent, session, cam0, cam1 = anipose_session
+        captured = {}
+        writer = _fake_triangulate_writer(4)
+
+        def _capturing(config, calib, video, pose, fname_dict, out):
+            captured["fname_dict"] = dict(fname_dict)
+            writer(config, calib, video, pose, fname_dict, out)
+
+        with patch.object(tr, "_load_config",
+                          return_value=_config_with_filter(True)), \
+             patch.object(tr, "_triangulate", side_effect=_capturing), \
+             patch.object(tr, "_filter_pose2d",
+                          side_effect=RuntimeError("boom")):
+            result = tr.run_triangulate_range(str(cam0), 0, 4)
+
+        # falls back to the raw slice; triangulation still completes
+        assert result["n_frames"] == 4
+        assert all(v.endswith("_analyzed.h5")
+                   for v in captured["fname_dict"].values())
