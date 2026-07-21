@@ -613,3 +613,45 @@ def triangulate_poses_3d():
     session_dir = Path(cam0_video).parent
     pair_name = _canonical_3d.pair_name_from_cam0(cam0_video)
     return jsonify(_canonical_3d.read_poses_3d(session_dir, pair_name, source))
+
+
+@bp.route("/dlc/project/triangulate/refilter", methods=["POST"])
+def triangulate_refilter():
+    """Re-run the anipose 3D median filter over the populated raw-3d span with a
+    new medfilt/offset_threshold, rewriting the filtered canonical. Runs
+    synchronously in flask (scipy present); NOT dispatched to Celery.
+
+    Body: {cam0_video, medfilt, offset_threshold}."""
+    body = request.get_json(silent=True) or {}
+    cam0_video = (body.get("cam0_video") or "").strip()
+    if not cam0_video:
+        return jsonify({"error": "cam0_video required"}), 400
+    if not _sec_check(Path(cam0_video)):
+        return jsonify({"error": "cam0_video path is outside the data root"}), 403
+
+    try:
+        medfilt = int(body.get("medfilt"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "medfilt must be an odd int in 1..199"}), 400
+    if medfilt < 1 or medfilt > 199 or medfilt % 2 == 0:
+        return jsonify({"error": "medfilt must be an odd int in 1..199"}), 400
+
+    try:
+        offset_threshold = float(body.get("offset_threshold"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "offset_threshold must be a number >= 0"}), 400
+    if not (offset_threshold >= 0):
+        return jsonify({"error": "offset_threshold must be a number >= 0"}), 400
+
+    session_dir = Path(cam0_video).parent
+    pair_name = _canonical_3d.pair_name_from_cam0(cam0_video)
+    span = _canonical_3d.populated_span(session_dir, pair_name, "raw")
+    if span is None:
+        return jsonify({
+            "error": "no triangulated 3D yet — triangulate a range first"}), 400
+    start, n = span
+    _canonical_3d.medfilt_range_and_splice(
+        session_dir, pair_name, start, n,
+        {"filter3d": {"medfilt": medfilt, "offset_threshold": offset_threshold}})
+    return jsonify({"ok": True, "start": start, "n": n,
+                    "medfilt": medfilt, "offset_threshold": offset_threshold}), 200

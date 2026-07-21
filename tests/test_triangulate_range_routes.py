@@ -300,3 +300,82 @@ class TestTriangulatePoses3d:
         resp = client.get(
             "/dlc/project/triangulate/poses-3d?cam0_video=/etc/x.avi")
         assert resp.status_code == 403
+
+
+class TestTriangulateRefilter:
+    def _write_raw_with_spike(self, v):
+        """Raw canonical spanning frames 0..10, all coords 0.0 except a spike at
+        frame 5 (Wrist_x=100). Returns the pair name."""
+        from dlc import canonical_3d as c3d
+        import pandas as pd
+        pair = c3d.pair_name_from_cam0(str(v))
+        cols = {}
+        for i, bp in enumerate(("Wrist", "MCP-1")):
+            cols[f"{bp}_x"] = [0.0] * 11
+            cols[f"{bp}_y"] = [0.0] * 11
+            cols[f"{bp}_z"] = [0.0] * 11
+            cols[f"{bp}_error"] = [1.0] * 11
+        df = pd.DataFrame(cols, index=pd.Index(range(11), name="fnum"))
+        df.loc[5, "Wrist_x"] = 100.0  # spike
+        c3d.write_range_to_canonical_3d(v.parent, pair, df)
+        return pair
+
+    def test_refilter_rewrites_filtered_and_smooths_spike(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        pair = self._write_raw_with_spike(v)
+        from dlc import canonical_3d as c3d
+        assert not c3d.filtered_3d_csv_path(v.parent, pair).exists()
+        resp = client.post("/dlc/project/triangulate/refilter", json={
+            "cam0_video": str(v), "medfilt": 5, "offset_threshold": 50})
+        assert resp.status_code == 200, resp.get_json()
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert body["start"] == 0 and body["n"] == 11
+        assert body["medfilt"] == 5
+        # filtered canonical was (re)written and the spike is smoothed away
+        import pandas as pd
+        filt = pd.read_csv(
+            c3d.filtered_3d_csv_path(v.parent, pair), index_col=0)
+        assert abs(filt.loc[5, "Wrist_x"]) < 1.0
+
+    def test_absent_raw_returns_400(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        resp = client.post("/dlc/project/triangulate/refilter", json={
+            "cam0_video": str(v), "medfilt": 5, "offset_threshold": 15})
+        assert resp.status_code == 400
+        assert "triangulate" in resp.get_json()["error"]
+
+    def test_400_missing_cam0(self, ia_client):
+        client, _app, _r, _p = ia_client
+        resp = client.post("/dlc/project/triangulate/refilter", json={
+            "medfilt": 5, "offset_threshold": 15})
+        assert resp.status_code == 400
+
+    def test_403_path_outside_root(self, ia_client):
+        client, _app, _r, _p = ia_client
+        resp = client.post("/dlc/project/triangulate/refilter", json={
+            "cam0_video": "/etc/x.avi", "medfilt": 5, "offset_threshold": 15})
+        assert resp.status_code == 403
+
+    def test_400_even_medfilt(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        resp = client.post("/dlc/project/triangulate/refilter", json={
+            "cam0_video": str(v), "medfilt": 4, "offset_threshold": 15})
+        assert resp.status_code == 400
+
+    def test_400_medfilt_out_of_range(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        resp = client.post("/dlc/project/triangulate/refilter", json={
+            "cam0_video": str(v), "medfilt": 201, "offset_threshold": 15})
+        assert resp.status_code == 400
+
+    def test_400_negative_offset(self, ia_client):
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        resp = client.post("/dlc/project/triangulate/refilter", json={
+            "cam0_video": str(v), "medfilt": 5, "offset_threshold": -1})
+        assert resp.status_code == 400

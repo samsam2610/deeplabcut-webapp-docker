@@ -277,7 +277,7 @@ class TestReadPoses3d:
         c3d.medfilt_range_and_splice(
             tmp_path, "p", 0, 3, {"filter3d": {"medfilt": 3}})
         out = c3d.read_poses_3d(tmp_path, "p", source="filtered")
-        assert out["bodyparts"] == sorted(_POSE_BPS)
+        assert out["bodyparts"] == list(_POSE_BPS)
         # skeleton derived from those bodyparts (Snout unconnected)
         assert out["skeleton"] == [
             ["Wrist", "MCP-1"], ["MCP-1", "PIP-1"], ["PIP-1", "DIP-1"]]
@@ -341,7 +341,76 @@ class TestReadPoses3d:
         df.loc[:, _POSE_COLS] = np.nan
         c3d.write_range_to_canonical_3d(tmp_path, "p", df)
         out = c3d.read_poses_3d(tmp_path, "p", source="raw")
-        assert out["bodyparts"] == sorted(_POSE_BPS)  # columns still present
+        assert out["bodyparts"] == list(_POSE_BPS)  # columns still present
         assert out["frames"] == []
         assert out["points"] == []
         assert out["bounds"] is None
+
+    def test_scores_errors_aligned_to_points(self, tmp_path):
+        df = _pose_df(range(0, 2))
+        # blank out Snout's coords on frame 0 → its point is null there
+        df.loc[0, ["Snout_x", "Snout_y", "Snout_z"]] = np.nan
+        c3d.write_range_to_canonical_3d(tmp_path, "p", df)
+        out = c3d.read_poses_3d(tmp_path, "p", source="raw")
+        bps = out["bodyparts"]
+        snout_j = bps.index("Snout")
+        # scores/errors have the same shape as points
+        assert len(out["scores"]) == len(out["points"]) == 2
+        assert len(out["errors"]) == len(out["points"])
+        for srow, erow, prow in zip(out["scores"], out["errors"], out["points"]):
+            assert len(srow) == len(erow) == len(prow) == len(bps)
+        # frame 0: Snout point null → score & error null there too
+        assert out["points"][0][snout_j] is None
+        assert out["scores"][0][snout_j] is None
+        assert out["errors"][0][snout_j] is None
+        # other bodyparts on frame 0 carry the CSV values (score 0.9, error 1.0)
+        for j in range(len(bps)):
+            if j != snout_j:
+                assert out["scores"][0][j] == 0.9
+                assert out["errors"][0][j] == 1.0
+        # frame 1: Snout present → its score & error are present
+        assert out["points"][1][snout_j] is not None
+        assert out["scores"][1][snout_j] == 0.9
+        assert out["errors"][1][snout_j] == 1.0
+
+    def test_error_max_is_max_finite_error(self, tmp_path):
+        df = _pose_df(range(0, 3))
+        df.loc[1, "Wrist_error"] = 7.5  # the max across all populated errors
+        c3d.write_range_to_canonical_3d(tmp_path, "p", df)
+        out = c3d.read_poses_3d(tmp_path, "p", source="raw")
+        assert out["error_max"] == 7.5
+
+    def test_error_max_null_when_all_errors_nan(self, tmp_path):
+        df = _pose_df(range(0, 3))
+        df.loc[:, [f"{bp}_error" for bp in _POSE_BPS]] = np.nan
+        c3d.write_range_to_canonical_3d(tmp_path, "p", df)
+        out = c3d.read_poses_3d(tmp_path, "p", source="raw")
+        # points still populated (x/y/z finite), but no finite errors → null
+        assert out["points"][0][0] is not None
+        assert out["errors"][0][0] is None
+        assert out["error_max"] is None
+
+
+class TestPopulatedSpan:
+    def test_span_raw_min_to_max_populated(self, tmp_path):
+        df = _pose_df(range(0, 10))
+        df.loc[0:2, _POSE_COLS] = np.nan   # frames 0..2 empty
+        df.loc[8:9, _POSE_COLS] = np.nan   # frames 8..9 empty
+        c3d.write_range_to_canonical_3d(tmp_path, "p", df)
+        # populated frames 3..7 → start=3, n=5
+        assert c3d.populated_span(tmp_path, "p", "raw") == (3, 5)
+
+    def test_span_filtered_source(self, tmp_path):
+        c3d.write_range_to_canonical_3d(tmp_path, "p", _pose_df(range(0, 6)))
+        c3d.medfilt_range_and_splice(
+            tmp_path, "p", 2, 2, {"filter3d": {"medfilt": 3}})
+        assert c3d.populated_span(tmp_path, "p", "filtered") == (2, 2)
+
+    def test_absent_returns_none(self, tmp_path):
+        assert c3d.populated_span(tmp_path, "p", "raw") is None
+
+    def test_all_nan_returns_none(self, tmp_path):
+        df = _pose_df(range(0, 5))
+        df.loc[:, _POSE_COLS] = np.nan
+        c3d.write_range_to_canonical_3d(tmp_path, "p", df)
+        assert c3d.populated_span(tmp_path, "p", "raw") is None

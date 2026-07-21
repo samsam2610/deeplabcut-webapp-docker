@@ -301,7 +301,7 @@ def read_poses_3d(session_dir, pair_name, source="filtered") -> dict:
     ``source='raw'`` → ``pose-3d/`` canonical; anything else → ``pose-3d-filtered/``.
 
     Returns ``{bodyparts, skeleton, frames, points, bounds}``:
-      * ``bodyparts`` — sorted unique bp names having ``_x``/``_y``/``_z`` columns.
+      * ``bodyparts`` — bp names (native CSV column order) having ``_x``/``_y``/``_z``.
       * ``skeleton``  — ``derive_skeleton(bodyparts)``.
       * ``frames``    — populated fnums only (rows where any bodypart is fully
                         present, i.e. finite x/y/z).
@@ -328,10 +328,13 @@ def read_poses_3d(session_dir, pair_name, source="filtered") -> dict:
         return empty
 
     cols = set(df.columns)
-    bodyparts = sorted(
+    # Preserve the CSV's NATIVE column order (== the DLC / 2D-overlay bodypart
+    # order) rather than sorting, so the 3D joint colours (labelerColor by index)
+    # line up with the 2D marker colours for the same bodypart.
+    bodyparts = [
         c[:-2] for c in df.columns
         if c.endswith("_x") and f"{c[:-2]}_y" in cols and f"{c[:-2]}_z" in cols
-    )
+    ]
     skeleton = derive_skeleton(bodyparts)
     base = {"bodyparts": bodyparts, "skeleton": skeleton,
             "frames": [], "points": [], "bounds": None}
@@ -346,17 +349,44 @@ def read_poses_3d(session_dir, pair_name, source="filtered") -> dict:
     if not row_pop.any():
         return base
 
+    nrows = len(df)
+
+    def _aux(suffix):
+        """(nrows, nbp) matrix of a per-bodypart auxiliary column (score/error);
+        columns absent for a bodypart are filled with NaN."""
+        return np.column_stack([
+            (df[f"{bp}{suffix}"].to_numpy(dtype=float)
+             if f"{bp}{suffix}" in cols else np.full(nrows, np.nan))
+            for bp in bodyparts
+        ])
+
+    S = _aux("_score")
+    E = _aux("_error")
+
     index = df.index.to_numpy()
-    frames, points = [], []
+    frames, points, scores, errors = [], [], [], []
+    error_max = None
     for i in np.nonzero(row_pop)[0]:
         frames.append(int(index[i]))
-        row = []
+        row, srow, erow = [], [], []
         for j in range(len(bodyparts)):
             if present[i, j]:
                 row.append([_round(X[i, j]), _round(Y[i, j]), _round(Z[i, j])])
+                sv = S[i, j]
+                srow.append(_round(sv) if np.isfinite(sv) else None)
+                ev = E[i, j]
+                if np.isfinite(ev):
+                    erow.append(_round(ev))
+                    error_max = ev if error_max is None else max(error_max, ev)
+                else:
+                    erow.append(None)
             else:
                 row.append(None)
+                srow.append(None)
+                erow.append(None)
         points.append(row)
+        scores.append(srow)
+        errors.append(erow)
 
     xs, ys, zs = X[present], Y[present], Z[present]
     cx = (xs.min() + xs.max()) / 2.0
@@ -366,4 +396,36 @@ def read_poses_3d(session_dir, pair_name, source="filtered") -> dict:
     bounds = {"center": [_round(cx), _round(cy), _round(cz)], "size": _round(size)}
 
     return {"bodyparts": bodyparts, "skeleton": skeleton,
-            "frames": frames, "points": points, "bounds": bounds}
+            "frames": frames, "points": points,
+            "scores": scores, "errors": errors,
+            "error_max": (_round(error_max) if error_max is not None else None),
+            "bounds": bounds}
+
+
+def populated_span(session_dir, pair_name, source="raw"):
+    """Min/max populated frame span of a canonical 3D CSV.
+
+    ``source='raw'`` → ``pose-3d/`` canonical; anything else → the filtered one.
+    A frame is populated when it has any non-NaN ``_x``/``_y``/``_z`` value.
+    Returns ``(start, n)`` where ``n = max_fnum - min_fnum + 1``, or ``None``
+    when the file is absent, unreadable, or has no populated rows."""
+    path = (canonical_3d_csv_path(session_dir, pair_name)
+            if str(source) == "raw"
+            else filtered_3d_csv_path(session_dir, pair_name))
+    if not Path(path).exists():
+        return None
+    try:
+        df = _read_csv(path)
+    except Exception:
+        return None
+    if len(df) == 0:
+        return None
+    coord_cols = [c for c in df.columns if c.endswith(_COORD_SUFFIXES)]
+    if not coord_cols:
+        return None
+    present = df[coord_cols].notna().any(axis=1).to_numpy()
+    pop = df.index.to_numpy()[present]
+    if len(pop) == 0:
+        return None
+    lo, hi = int(pop.min()), int(pop.max())
+    return (lo, hi - lo + 1)
