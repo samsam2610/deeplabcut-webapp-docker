@@ -181,6 +181,25 @@ class TestTriangulateCoverage:
         assert body["nframes"] == 10
         assert body["buckets"] == [1.0, 1.0]
 
+    def test_nframes_param_scales_bar_to_full_video(self, ia_client):
+        # 3D only at frames 0..9, but the video is 100 frames → the bar must
+        # scale to 100 (aligns with the seek bar), not the canonical's len 10.
+        client, _app, _r, project = ia_client
+        v = _make_cam0(project)
+        from dlc import canonical_3d as c3d
+        import pandas as pd
+        pair = c3d.pair_name_from_cam0(str(v))
+        df = pd.DataFrame(
+            {"nose_x": [1.0] * 10, "nose_error": [1.0] * 10},
+            index=pd.Index(range(10), name="fnum"))
+        c3d.write_range_to_canonical_3d(v.parent, pair, df)
+        resp = client.get(
+            f"/dlc/project/triangulate/coverage?cam0_video={v}&buckets=10&nframes=100")
+        body = resp.get_json()
+        assert body["nframes"] == 100
+        assert body["buckets"][0] > 0.0                      # frames 0..9 → first bucket
+        assert sum(1 for b in body["buckets"] if b > 0) == 1  # only the first region
+
     def test_400_missing_cam0(self, ia_client):
         client, _app, _r, _p = ia_client
         resp = client.get("/dlc/project/triangulate/coverage?buckets=4")

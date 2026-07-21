@@ -578,10 +578,18 @@ def triangulate_coverage():
         return jsonify({"error": "buckets must be an int"}), 400
     if buckets < 1 or buckets > 10_000:
         return jsonify({"error": "buckets must be in 1..10000"}), 400
+    # Full video frame count (from the seek-bar's _frameCount) so the 3D bar
+    # scales to the whole video, not the last-triangulated frame.
+    try:
+        total_frames = int(request.args.get("nframes", 0)) or None
+    except (TypeError, ValueError):
+        total_frames = None
 
     session_dir = Path(cam0_video).parent
     pair_name = _canonical_3d.pair_name_from_cam0(cam0_video)
     return jsonify({
-        "buckets":  _canonical_3d.read_3d_coverage(session_dir, pair_name, buckets),
-        "nframes":  _canonical_3d.canonical_3d_nframes(session_dir, pair_name),
+        "buckets":  _canonical_3d.read_3d_coverage(
+            session_dir, pair_name, buckets, total_frames),
+        "nframes":  total_frames or _canonical_3d.canonical_3d_nframes(
+            session_dir, pair_name),
     })

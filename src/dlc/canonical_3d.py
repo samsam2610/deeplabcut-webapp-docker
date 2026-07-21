@@ -217,10 +217,17 @@ def canonical_3d_nframes(session_dir, pair_name) -> int:
         return 0
 
 
-def read_3d_coverage(session_dir, pair_name, buckets) -> list:
+def read_3d_coverage(session_dir, pair_name, buckets, total_frames=None) -> list:
     """Return ``buckets`` presence values in ``0..1`` describing which frame
     regions have non-NaN 3D rows (any x/y/z column present). Absent canonical
-    → all zeros."""
+    → all zeros.
+
+    ``total_frames`` is the FULL video frame count. Presence is placed by
+    absolute frame number (``fnum`` = the canonical's index) and scaled over
+    ``total_frames`` so the bar aligns with the seek / finalized timelines —
+    the canonical is only dense up to the last-triangulated frame, so its own
+    length is NOT the video length. When ``total_frames`` is missing/invalid,
+    fall back to the canonical's dense length (legacy behaviour)."""
     buckets = int(buckets)
     if buckets <= 0:
         return []
@@ -236,11 +243,19 @@ def read_3d_coverage(session_dir, pair_name, buckets) -> list:
 
     coord_cols = [c for c in df.columns if c.endswith(_COORD_SUFFIXES)]
     if coord_cols:
-        present = df[coord_cols].notna().any(axis=1).to_numpy()
+        row_present = df[coord_cols].notna().any(axis=1).to_numpy()
     else:
-        present = df.notna().any(axis=1).to_numpy()
+        row_present = df.notna().any(axis=1).to_numpy()
 
-    nframes = len(present)
+    # Scale over the true video length; place each row at its absolute frame.
+    canon_len = int(df.index.max()) + 1
+    tf = int(total_frames) if total_frames and int(total_frames) > 0 else 0
+    nframes = max(tf, canon_len) if tf else canon_len
+    present = np.zeros(nframes, dtype=bool)
+    fn = df.index.to_numpy()
+    valid = (fn >= 0) & (fn < nframes)
+    present[fn[valid]] = row_present[valid]
+
     out = []
     for b in range(buckets):
         lo = b * nframes // buckets

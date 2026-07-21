@@ -177,3 +177,19 @@ class TestCoverage:
         assert c3d.canonical_3d_nframes(tmp_path, "p") == 0
         c3d.write_range_to_canonical_3d(tmp_path, "p", _range_df(range(0, 12)))
         assert c3d.canonical_3d_nframes(tmp_path, "p") == 12
+
+    def test_coverage_scales_to_total_frames(self, tmp_path):
+        # 3D only at frames 100..109; the real video is 1000 frames long. The
+        # bar must scale to the full video (so it aligns with the seek/finalized
+        # timelines), NOT to the canonical's own length (110).
+        c3d.write_range_to_canonical_3d(tmp_path, "p", _range_df(range(100, 110)))
+        cov = c3d.read_3d_coverage(tmp_path, "p", 10, total_frames=1000)
+        assert cov[1] > 0.0                       # frames 100..109 → bucket 1 (100..199)
+        assert cov[9] == 0.0                      # far right MUST be empty (the bug)
+        assert sum(1 for b in cov if b > 0) == 1  # exactly one region lit
+
+    def test_coverage_without_total_frames_uses_canonical_len(self, tmp_path):
+        # Back-compat: no total_frames → scale to the canonical's dense length.
+        c3d.write_range_to_canonical_3d(tmp_path, "p", _range_df(range(0, 20)))
+        cov = c3d.read_3d_coverage(tmp_path, "p", 4)
+        assert cov == [1.0, 1.0, 1.0, 1.0]
