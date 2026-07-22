@@ -86,13 +86,19 @@ def _resolve_cam1(cam0: Path):
     return None
 
 
-def _slice_pose2d_h5(src_h5, start, n, out_h5) -> Path:
+def _slice_pose2d_h5(src_h5, start, n, out_h5) -> tuple[Path, int]:
     """Write a temp pose-2d h5 covering ``[start, start+n)`` with rows
-    re-indexed to ``0..n-1`` (positional slice of the source _analyzed.h5)."""
+    re-indexed to ``0..m-1`` (positional slice of the source _analyzed.h5).
+
+    Returns ``(out_path, m)`` where ``m`` is the number of rows written. ``m`` is
+    0 when the range lies entirely beyond the analyzed data (``start >= len(df)``);
+    the caller must skip such ranges, since anipose cannot read a 0-row pose file
+    (``pd.read_hdf`` raises an opaque "no datasets found" error)."""
     df = pd.read_hdf(str(src_h5))
-    sliced = df.iloc[int(start):int(start) + int(n)].reset_index(drop=True)
+    start = max(0, int(start))
+    sliced = df.iloc[start:start + int(n)].reset_index(drop=True)
     sliced.to_hdf(str(out_h5), key="df_with_missing", mode="w", format="fixed")
-    return Path(out_h5)
+    return Path(out_h5), len(sliced)
 
 
 def _emit(update, progress: int, stage: str, log: str = "") -> None:
@@ -148,8 +154,26 @@ def run_triangulate_range(cam0_video, start_frame, n_frames, update=None) -> dic
         s0 = td / f"{cam0.stem}_analyzed.h5"
         s1 = td / f"{cam1.stem}_analyzed.h5"
         _emit(update, 25, "Slicing pose-2d range…")
-        _slice_pose2d_h5(h5_0, start_frame, n_frames, s0)
-        _slice_pose2d_h5(h5_1, start_frame, n_frames, s1)
+        _, m0 = _slice_pose2d_h5(h5_0, start_frame, n_frames, s0)
+        _, m1 = _slice_pose2d_h5(h5_1, start_frame, n_frames, s1)
+        # A range entirely beyond the analyzed 2D data slices to 0 rows — anipose
+        # then chokes on the empty pose file with an opaque HDF error, which would
+        # crash the whole task (and abort a Triangulate-all-for-tag batch). Skip it
+        # gracefully: a tag placed on a frame that was never finalized has no 2D
+        # poses to triangulate.
+        if min(m0, m1) == 0:
+            _emit(update, 100, "Skipped — no 2D data in range")
+            return {
+                "pair_name":    pair_name,
+                "start_frame":  start_frame,
+                "n_frames":     n_frames,
+                "raw_csv":      None,
+                "filtered_csv": None,
+                "skipped":      True,
+                "reason":       (f"range [{start_frame}, {start_frame + n_frames}) "
+                                 f"has no 2D pose data (analyzed source has "
+                                 f"{max(m0, m1)} frames)"),
+            }
 
         pose_by_cam = {cam0: s0, cam1: s1}
         if (config or {}).get("filter", {}).get("enabled"):

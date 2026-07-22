@@ -211,6 +211,40 @@ class TestFilter2dStep:
         assert all(v.endswith("_analyzed.h5")
                    for v in captured["fname_dict"].values())
 
+    def test_range_beyond_analyzed_data_is_skipped(self, anipose_session):
+        """A range whose positional slice is empty (start >= analyzed rows) must
+        be skipped gracefully — NOT passed to anipose, which chokes on a 0-row
+        pose file with an opaque 'no datasets found' HDF error. The source h5 has
+        200 rows, so start=250 slices to nothing."""
+        parent, session, cam0, cam1 = anipose_session
+        with patch.object(tr, "_load_config", return_value=_config()), \
+             patch.object(tr, "_triangulate",
+                          side_effect=_fake_triangulate_writer(6)) as mk_tri:
+            result = tr.run_triangulate_range(str(cam0), 250, 6)
+
+        assert result["skipped"] is True
+        assert result["raw_csv"] is None and result["filtered_csv"] is None
+        assert result["start_frame"] == 250 and result["n_frames"] == 6
+        assert "no 2D pose data" in result["reason"]
+        # anipose triangulate must never see the empty slice, and no canonical
+        # 3D file may be written for a skipped range.
+        assert mk_tri.call_count == 0
+        pair = c3d.pair_name_from_cam0(str(cam0))
+        assert not c3d.canonical_3d_csv_path(session, pair).exists()
+
+    def test_partial_range_at_tail_still_triangulates(self, anipose_session):
+        """A range straddling the end (start < rows < start+n) keeps the valid
+        rows — only fully-out-of-range slices are skipped. Source has 200 rows;
+        start=198 slices to 2 rows, so triangulation still runs (not skipped)."""
+        parent, session, cam0, cam1 = anipose_session
+        with patch.object(tr, "_load_config", return_value=_config()), \
+             patch.object(tr, "_triangulate",
+                          side_effect=_fake_triangulate_writer(6)) as mk_tri:
+            result = tr.run_triangulate_range(str(cam0), 198, 6)
+
+        assert not result.get("skipped")
+        assert mk_tri.call_count == 1
+
     def test_triangulation_continues_when_filter_raises(self, anipose_session):
         parent, session, cam0, cam1 = anipose_session
         captured = {}
