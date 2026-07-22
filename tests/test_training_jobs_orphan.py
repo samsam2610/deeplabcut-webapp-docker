@@ -66,7 +66,7 @@ def test_orphan_zset_entry_surfaces_as_synthetic_stub(monkeypatch):
 
     monkeypatch.setattr(monitoring._ctx, "redis_client", lambda: fake)
     monkeypatch.setattr(monitoring._ctx, "celery",       lambda: object())
-    monkeypatch.setattr(monitoring, "AsyncResult", _FakeAsyncResultModule)
+    monkeypatch.setattr(monitoring, "_celery_task_status", lambda jid: "FAILURE")
 
     from flask import Flask
     app = Flask(__name__)
@@ -106,7 +106,7 @@ def test_normal_jobs_still_returned(monkeypatch):
     )
     monkeypatch.setattr(monitoring._ctx, "redis_client", lambda: fake)
     monkeypatch.setattr(monitoring._ctx, "celery",       lambda: object())
-    monkeypatch.setattr(monitoring, "AsyncResult", _FakeAsyncResultModule)
+    monkeypatch.setattr(monitoring, "_celery_task_status", lambda jid: "FAILURE")
 
     from flask import Flask
     app = Flask(__name__)

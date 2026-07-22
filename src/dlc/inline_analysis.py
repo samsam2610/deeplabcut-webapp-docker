@@ -117,6 +117,20 @@ def _triangulate_async_result(req_id: str):
     return AsyncResult(req_id, app=_ctx.celery())
 
 
+def _triangulate_task_meta(req_id: str) -> dict:
+    """Read the range-triangulate task's stored meta straight from the result
+    backend (a plain redis GET) — NOT via Celery ``AsyncResult``.
+
+    ``AsyncResult``'s redis result-consumer registers a pubsub subscription that is
+    torn down in ``__del__``; in gunicorn *sync* workers the heavy per-range polling
+    of a triangulate batch (hundreds of status reads) accumulates until a worker
+    deadlocks on the pubsub lock during GC → the 300s WORKER TIMEOUT → SIGKILL →
+    a 502 on whatever request that worker held (aborting the batch). ``get_task_meta``
+    never touches the ResultConsumer, so it can't leak. Returns
+    ``{status, result, traceback, …}``. Patchable seam for tests."""
+    return _ctx.celery().backend.get_task_meta(req_id)
+
+
 def _probe_video(path: Path) -> dict:
     """Cheap video metadata probe (nframes, fps, width, height)."""
     import cv2
@@ -540,8 +554,12 @@ def triangulate_range_status():
     req_id = (request.args.get("req_id") or "").strip()
     if not req_id:
         return jsonify({"error": "req_id required"}), 400
-    res = _triangulate_async_result(req_id)
-    state = res.state
+    # Read the task meta directly from the backend (no AsyncResult/pubsub — see
+    # _triangulate_task_meta). meta = {status, result, traceback, …}; `result`
+    # holds the custom PROGRESS dict, the SUCCESS return value, or the exception.
+    meta = _triangulate_task_meta(req_id) or {}
+    state = meta.get("status")
+    info = meta.get("result")
     out = {"state": state, "progress": 0, "stage": "", "error": None, "result": None}
     if state == "PENDING":
         out["stage"] = "Queued — waiting for a worker…"
@@ -549,16 +567,16 @@ def triangulate_range_status():
         out["progress"] = 5
         out["stage"] = "Worker picked up the task…"
     elif state == "PROGRESS":
-        meta = res.info if isinstance(res.info, dict) else {}
-        out["progress"] = int(meta.get("progress", 0) or 0)
-        out["stage"] = meta.get("stage", "Processing…")
+        m = info if isinstance(info, dict) else {}
+        out["progress"] = int(m.get("progress", 0) or 0)
+        out["stage"] = m.get("stage", "Processing…")
     elif state == "SUCCESS":
         out["progress"] = 100
         out["stage"] = "Complete"
-        out["result"] = res.result
+        out["result"] = info
     elif state == "FAILURE":
         out["stage"] = "Failed"
-        out["error"] = str(res.info)
+        out["error"] = str(info)
     else:
         out["stage"] = state
     return jsonify(out)

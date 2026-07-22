@@ -226,6 +226,14 @@ def dlc_machine_label_reapply():
     return jsonify({"task_id": task.id, "operation": "machine_label_reapply"}), 202
 
 
+def _celery_task_status(jid: str) -> str:
+    """Task state via the result backend directly (a redis GET) — NOT Celery
+    ``AsyncResult``, whose pubsub result-consumer leaks in gunicorn *sync* workers
+    and deadlocks one under heavy polling (this route reconciles up to 100 jobs per
+    refresh). See ``dlc.inline_analysis._triangulate_task_meta``. Patchable seam."""
+    return _ctx.celery().backend.get_task_meta(jid).get("status")
+
+
 @bp.route("/dlc/training/jobs")
 def dlc_training_jobs():
     """Return all training and analyze jobs (running + recent) stored in Redis.
@@ -244,7 +252,7 @@ def dlc_training_jobs():
             # Surface a stub so the UI can show + clear it instead of
             # silently hiding running-but-untracked work.
             return {"task_id": jid, "status": "orphaned"}
-        celery_state = AsyncResult(jid, app=_ctx.celery()).state
+        celery_state = _celery_task_status(jid)
         if job.get("status") == "running" and celery_state not in _LIVE_CELERY_STATES:
             _ctx.redis_client().hset(redis_key, "status", "dead")
             job["status"] = "dead"

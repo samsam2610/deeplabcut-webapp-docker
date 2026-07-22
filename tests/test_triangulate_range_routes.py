@@ -99,17 +99,15 @@ class TestTriangulateRangeEnqueue:
 
 
 class TestTriangulateRangeStatus:
-    def _fake_res(self, state, info=None, result=None):
-        r = MagicMock()
-        r.state = state
-        r.info = info
-        r.result = result
-        return r
+    def _fake_meta(self, status, result=None):
+        # Mirrors celery backend.get_task_meta(): a dict with status + result
+        # (result holds the PROGRESS meta dict / SUCCESS return / FAILURE exception).
+        return {"status": status, "result": result, "traceback": None}
 
     def test_pending(self, ia_client):
         client, _app, _r, _p = ia_client
-        with patch("dlc.inline_analysis._triangulate_async_result",
-                   return_value=self._fake_res("PENDING")):
+        with patch("dlc.inline_analysis._triangulate_task_meta",
+                   return_value=self._fake_meta("PENDING")):
             resp = client.get("/dlc/project/triangulate/range/status?req_id=abc")
         body = resp.get_json()
         assert resp.status_code == 200
@@ -120,8 +118,8 @@ class TestTriangulateRangeStatus:
     def test_progress(self, ia_client):
         client, _app, _r, _p = ia_client
         info = {"progress": 42, "stage": "Triangulating…"}
-        with patch("dlc.inline_analysis._triangulate_async_result",
-                   return_value=self._fake_res("PROGRESS", info=info)):
+        with patch("dlc.inline_analysis._triangulate_task_meta",
+                   return_value=self._fake_meta("PROGRESS", result=info)):
             resp = client.get("/dlc/project/triangulate/range/status?req_id=abc")
         body = resp.get_json()
         assert body["state"] == "PROGRESS"
@@ -131,8 +129,8 @@ class TestTriangulateRangeStatus:
     def test_success_includes_result(self, ia_client):
         client, _app, _r, _p = ia_client
         result = {"pair_name": "p", "raw_csv": "/x/pose-3d/p_3d.csv"}
-        with patch("dlc.inline_analysis._triangulate_async_result",
-                   return_value=self._fake_res("SUCCESS", result=result)):
+        with patch("dlc.inline_analysis._triangulate_task_meta",
+                   return_value=self._fake_meta("SUCCESS", result=result)):
             resp = client.get("/dlc/project/triangulate/range/status?req_id=abc")
         body = resp.get_json()
         assert body["state"] == "SUCCESS"
@@ -141,8 +139,8 @@ class TestTriangulateRangeStatus:
 
     def test_failure_includes_error(self, ia_client):
         client, _app, _r, _p = ia_client
-        with patch("dlc.inline_analysis._triangulate_async_result",
-                   return_value=self._fake_res("FAILURE", info=RuntimeError("boom"))):
+        with patch("dlc.inline_analysis._triangulate_task_meta",
+                   return_value=self._fake_meta("FAILURE", result=RuntimeError("boom"))):
             resp = client.get("/dlc/project/triangulate/range/status?req_id=abc")
         body = resp.get_json()
         assert body["state"] == "FAILURE"
