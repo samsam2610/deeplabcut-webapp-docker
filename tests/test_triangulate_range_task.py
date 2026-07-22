@@ -225,12 +225,40 @@ class TestFilter2dStep:
         assert result["skipped"] is True
         assert result["raw_csv"] is None and result["filtered_csv"] is None
         assert result["start_frame"] == 250 and result["n_frames"] == 6
-        assert "no 2D pose data" in result["reason"]
+        assert "no 2D poses" in result["reason"]
         # anipose triangulate must never see the empty slice, and no canonical
         # 3D file may be written for a skipped range.
         assert mk_tri.call_count == 0
         pair = c3d.pair_name_from_cam0(str(cam0))
         assert not c3d.canonical_3d_csv_path(session, pair).exists()
+
+    def test_all_nan_2d_range_is_skipped(self, anipose_session):
+        """A range that IS within the analyzed data but whose 2D poses are all-NaN
+        (frames finalized into _analyzed but never analyzed) has nothing to
+        triangulate — it must be skipped, NOT sent to anipose (which would write
+        all-NaN 3D → no coverage, inflating the batch's done count)."""
+        parent, session, cam0, cam1 = anipose_session
+        # Overwrite both cams' _analyzed.h5 with a NaN region in frames 100..199.
+        cols = pd.MultiIndex.from_product(
+            [["DLC"], _BPS, ["x", "y", "likelihood"]],
+            names=["scorer", "bodyparts", "coords"])
+        for cam in (cam0, cam1):
+            data = np.arange(200 * len(cols), dtype=float).reshape(200, len(cols))
+            df = pd.DataFrame(data, index=pd.RangeIndex(200), columns=cols)
+            df.iloc[100:200, :] = np.nan   # frames 100..199: no 2D poses
+            df.to_hdf(str(session / "pose-2d" / f"{cam.stem}_analyzed.h5"),
+                      key="df_with_missing", mode="w", format="fixed")
+
+        with patch.object(tr, "_load_config", return_value=_config()), \
+             patch.object(tr, "_triangulate",
+                          side_effect=_fake_triangulate_writer(6)) as mk_tri:
+            skipped = tr.run_triangulate_range(str(cam0), 120, 6)   # all-NaN window
+            ran     = tr.run_triangulate_range(str(cam0), 0, 6)     # real 2D window
+
+        assert skipped["skipped"] is True, "all-NaN 2D range must be skipped"
+        assert "no 2D poses" in skipped["reason"]
+        assert not ran.get("skipped"), "a range with real 2D must still triangulate"
+        assert mk_tri.call_count == 1, "anipose must run only for the real-data range"
 
     def test_partial_range_at_tail_still_triangulates(self, anipose_session):
         """A range straddling the end (start < rows < start+n) keeps the valid
