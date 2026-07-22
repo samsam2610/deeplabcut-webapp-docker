@@ -102,7 +102,12 @@ services:
       - USER_DATA_DIR=/user-data
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    command: celery -A tasks worker --loglevel=info --concurrency=1 --pool=prefork -Q celery,pytorch
+    # concurrency=2 so a CPU-only triangulate task (queue `celery`) can run alongside a
+    # GPU labeling/analyze task (queue `pytorch`) instead of queueing behind it.
+    # Caveat: this also lets TWO `pytorch` GPU tasks run at once, which can contend for
+    # GPU 0 (RTX 5090). If that ever OOMs, split into a dedicated CPU worker for `-Q celery`
+    # and keep this worker on `-Q pytorch --concurrency=1`.
+    command: celery -A tasks worker --loglevel=info --concurrency=2 --pool=prefork -Q celery,pytorch
     depends_on:
       redis:
         condition: service_healthy
