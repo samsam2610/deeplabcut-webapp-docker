@@ -93,6 +93,7 @@ function _renderRail(jobs) {
           <span>GPU${_escapeHtml(j.gpu_id || "?")}</span>
           <span>${_escapeHtml(_formatRuntime(j.started_at))}</span>
         </div>
+        ${j.stage ? `<div class="jobs-row-stage" style="color:var(--text-dim)">${_escapeHtml(j.stage)}</div>` : ""}
       </div>`;
   }).join("");
   rail.querySelectorAll(".jobs-row").forEach(row => {
@@ -158,6 +159,7 @@ function _renderDetailHeader(job) {
         <span>started: ${_escapeHtml(startedTxt)}</span>
         <span>status: ${_escapeHtml(status)}</span>
       </div>
+      ${job.stage ? `<div class="jobs-detail-stage" style="color:var(--text-dim)">${_escapeHtml(job.stage)}</div>` : ""}
       ${showStop ? `<button class="jobs-stop-btn" data-action="stop">Stop</button>` : ""}
     </div>
     <pre id="jobs-terminal" class="jobs-terminal"></pre>

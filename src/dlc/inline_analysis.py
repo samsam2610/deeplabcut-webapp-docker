@@ -564,6 +564,78 @@ def triangulate_range_status():
     return jsonify(out)
 
 
+@bp.route("/dlc/project/triangulate/batch", methods=["POST"])
+def triangulate_batch():
+    """Register/update ONE aggregate triangulate-batch job in the main Jobs
+    surface. The frontend owns a `batch_id` and drives this route with
+    start/progress/done actions. Reuses the `dlc_analyze_jobs` category so
+    `/dlc/training/jobs` surfaces it with no monitor-route change — a synthetic
+    batch_id reconciles as PENDING (a live state) so it stays "running" until
+    `done` sets "complete". Best-effort; 503 if redis is down.
+    """
+    body = request.get_json(silent=True) or {}
+    batch_id = (body.get("batch_id") or "").strip()
+    if not batch_id:
+        return jsonify({"error": "batch_id required"}), 400
+    action = (body.get("action") or "").strip()
+    if action not in ("start", "progress", "done"):
+        return jsonify({"error": "action must be one of start/progress/done"}), 400
+
+    video = body.get("video")
+    if video and not _sec_check(Path(video)):
+        return jsonify({"error": "video path is outside the data root"}), 403
+
+    redis = _ctx.redis_client()
+    if redis is None:
+        return jsonify({"error": "redis unavailable"}), 503
+
+    job_key = "dlc_analyze_job:" + batch_id
+    jobs_zset = "dlc_analyze_jobs"
+
+    if action == "start":
+        try:
+            total = int(body.get("total") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        now = time.time()
+        redis.hset(job_key, mapping={
+            "task_id":     batch_id,
+            "operation":   "triangulate",
+            "project":     (Path(video).parent.name if video else ""),
+            "target_path": video or "",
+            "started_at":  str(now),
+            "status":      "running",
+            "total":       int(total),
+            "done":        0,
+            "stage":       f"0/{total}",
+        })
+        redis.expire(job_key, 7200)
+        redis.zadd(jobs_zset, {batch_id: now})
+
+    elif action == "progress":
+        # Only update an existing hash; ignore if the batch is unknown/expired.
+        if redis.exists(job_key):
+            mapping = {}
+            if body.get("done") is not None:
+                mapping["done"] = body.get("done")
+            if body.get("skipped") is not None:
+                mapping["skipped"] = body.get("skipped")
+            if body.get("stage") is not None:
+                mapping["stage"] = body.get("stage")
+            if mapping:
+                redis.hset(job_key, mapping=mapping)
+
+    else:  # action == "done"
+        mapping = {"status": "complete"}
+        stage = body.get("error") or body.get("stage")
+        if stage is not None:
+            mapping["stage"] = stage
+        redis.hset(job_key, mapping=mapping)
+        redis.expire(job_key, 3600)
+
+    return jsonify({"ok": True}), 200
+
+
 @bp.route("/dlc/project/triangulate/coverage", methods=["GET"])
 def triangulate_coverage():
     """Return the 3D coverage bar buckets for the pair derived from cam0_video.
