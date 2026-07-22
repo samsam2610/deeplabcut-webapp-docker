@@ -391,6 +391,95 @@ class TestReadPoses3d:
         assert out["error_max"] is None
 
 
+class TestReadPoses3dRawGating:
+    """Filtered display must source score/error from the RAW canonical (aligned
+    by fnum), keeping positions from the filtered canonical."""
+
+    def _write_filtered(self, tmp_path, df):
+        c3d._atomic_write_csv(c3d.filtered_3d_csv_path(tmp_path, "p"), df)
+
+    def test_filtered_scores_errors_come_from_raw(self, tmp_path):
+        # RAW: frames 0..4; Wrist at frame 2 has a LOW score + high error.
+        raw = _pose_df(range(0, 5))
+        raw.loc[2, "Wrist_score"] = 0.1
+        raw.loc[2, "Wrist_error"] = 5.0
+        c3d.write_range_to_canonical_3d(tmp_path, "p", raw)
+        # FILTERED: same frames, DIFFERENT positions (base=10) and DIFFERENT
+        # score/error values (0.95 / 2.0) — proving they are NOT used.
+        filt = _pose_df(range(0, 5), base=10.0)
+        filt.loc[:, [f"{bp}_score" for bp in _POSE_BPS]] = 0.95
+        filt.loc[:, [f"{bp}_error" for bp in _POSE_BPS]] = 2.0
+        self._write_filtered(tmp_path, filt)
+
+        out = c3d.read_poses_3d(tmp_path, "p", source="filtered")
+        bps = out["bodyparts"]
+        wj = bps.index("Wrist")
+        fi = out["frames"].index(2)
+        # score/error for Wrist@2 come from RAW (0.1 / 5.0), not filtered.
+        assert out["scores"][fi][wj] == 0.1
+        assert out["errors"][fi][wj] == 5.0
+        # position comes from the FILTERED canonical (base=10 → Wrist x=10).
+        assert out["points"][fi][wj][0] == 10.0
+        # a non-gated bp keeps the raw default score (0.9), not filtered 0.95.
+        other = next(j for j, b in enumerate(bps) if b != "Wrist")
+        assert out["scores"][fi][other] == 0.9
+        # error_max reflects the RAW errors (5.0 is the max), not filtered 2.0.
+        assert out["error_max"] == 5.0
+
+    def test_filtered_point_masked_where_raw_absent(self, tmp_path):
+        # RAW: frames 0..2 detected; 3..4 NOT detected (all-NaN → the animal
+        # dropped out). FILTERED holds/interpolates a value at 3..4.
+        raw = _pose_df(range(0, 5))
+        raw.loc[[3, 4], :] = np.nan
+        c3d.write_range_to_canonical_3d(tmp_path, "p", raw)
+        filt = _pose_df(range(0, 5), base=10.0)   # filtered has a value everywhere
+        self._write_filtered(tmp_path, filt)
+
+        out = c3d.read_poses_3d(tmp_path, "p", source="filtered")
+        # Frames with NO raw detection are masked out — never shown at the held
+        # position. Only raw-detected frames remain.
+        assert out["frames"] == [0, 1, 2]
+        for row in out["points"]:
+            assert any(p is not None for p in row)
+
+    def test_filtered_frame_absent_from_raw_is_masked(self, tmp_path):
+        # RAW only covers frames 0..2; FILTERED has 0..4 (interpolated tail).
+        c3d.write_range_to_canonical_3d(tmp_path, "p", _pose_df(range(0, 3)))
+        filt = _pose_df(range(0, 5), base=10.0)
+        self._write_filtered(tmp_path, filt)
+
+        out = c3d.read_poses_3d(tmp_path, "p", source="filtered")
+        # Frames 3,4 are absent from raw (no detection) → masked out entirely.
+        assert out["frames"] == [0, 1, 2]
+        wj = out["bodyparts"].index("Wrist")
+        # frame 2 is in raw → real score.
+        assert out["scores"][out["frames"].index(2)][wj] == 0.9
+
+    def test_source_raw_scores_from_raw_regression(self, tmp_path):
+        raw = _pose_df(range(0, 3))
+        raw.loc[1, "Wrist_score"] = 0.2
+        raw.loc[1, "Wrist_error"] = 6.0
+        c3d.write_range_to_canonical_3d(tmp_path, "p", raw)
+        out = c3d.read_poses_3d(tmp_path, "p", source="raw")
+        wj = out["bodyparts"].index("Wrist")
+        fi = out["frames"].index(1)
+        assert out["scores"][fi][wj] == 0.2
+        assert out["errors"][fi][wj] == 6.0
+        assert out["error_max"] == 6.0
+
+    def test_absent_raw_filtered_scores_all_null(self, tmp_path):
+        # Only the FILTERED canonical exists — no raw to gate against.
+        filt = _pose_df(range(0, 3), base=10.0)
+        self._write_filtered(tmp_path, filt)
+        out = c3d.read_poses_3d(tmp_path, "p", source="filtered")
+        assert out["frames"] == [0, 1, 2]
+        # positions returned, but every score/error is null and error_max None.
+        assert all(p is not None for row in out["points"] for p in row)
+        assert all(s is None for row in out["scores"] for s in row)
+        assert all(e is None for row in out["errors"] for e in row)
+        assert out["error_max"] is None
+
+
 class TestPopulatedSpan:
     def test_span_raw_min_to_max_populated(self, tmp_path):
         df = _pose_df(range(0, 10))

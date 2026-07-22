@@ -351,17 +351,54 @@ def read_poses_3d(session_dir, pair_name, source="filtered") -> dict:
 
     nrows = len(df)
 
-    def _aux(suffix):
-        """(nrows, nbp) matrix of a per-bodypart auxiliary column (score/error);
-        columns absent for a bodypart are filled with NaN."""
+    def _aux(src_df, suffix):
+        """(nrows, nbp) matrix of a per-bodypart auxiliary column (score/error),
+        aligned positionally to ``df``'s rows; columns absent for a bodypart (or
+        a source row missing) are filled with NaN."""
+        src_cols = set(src_df.columns)
         return np.column_stack([
-            (df[f"{bp}{suffix}"].to_numpy(dtype=float)
-             if f"{bp}{suffix}" in cols else np.full(nrows, np.nan))
+            (src_df[f"{bp}{suffix}"].to_numpy(dtype=float)
+             if f"{bp}{suffix}" in src_cols else np.full(nrows, np.nan))
             for bp in bodyparts
         ])
 
-    S = _aux("_score")
-    E = _aux("_error")
+    # scores/errors are GATED BY RAW QUALITY when displaying filtered coords:
+    # keep the filtered positions but source score/error from the RAW canonical,
+    # aligned by frame number (fnum). ``source='raw'`` keeps both from ``df``.
+    raw_available = False
+    if str(source) == "raw":
+        aux_df = df
+    else:
+        raw_df = None
+        raw_path = canonical_3d_csv_path(session_dir, pair_name)
+        if Path(raw_path).exists():
+            try:
+                raw_df = _read_csv(raw_path)
+            except Exception:
+                raw_df = None
+        raw_available = raw_df is not None
+        # Reindex raw to the filtered frame order so aux[i] lines up with df row i.
+        # Missing raw frames → all-NaN rows → null score/error. Absent raw → an
+        # empty (no-column) frame → the _aux fallback yields all-NaN.
+        aux_df = (raw_df.reindex(df.index) if raw_df is not None
+                  else pd.DataFrame(index=df.index))
+
+    S = _aux(aux_df, "_score")
+    E = _aux(aux_df, "_error")
+
+    # In the filtered view, mask out any joint with NO raw detection at that frame
+    # (raw x/y/z all NaN) — the median-filter interpolation HOLDS the last known
+    # value, so an undetected joint would otherwise be shown at its stale position.
+    # Positions still come from the filtered canonical; only raw-detected joints show.
+    # Only when a raw canonical is actually available (else we can't tell → show as-is).
+    if raw_available:
+        raw_present = (np.isfinite(_aux(aux_df, "_x"))
+                       & np.isfinite(_aux(aux_df, "_y"))
+                       & np.isfinite(_aux(aux_df, "_z")))
+        present = present & raw_present
+        row_pop = present.any(axis=1)
+        if not row_pop.any():
+            return base
 
     index = df.index.to_numpy()
     frames, points, scores, errors = [], [], [], []
