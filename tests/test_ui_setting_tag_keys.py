@@ -61,3 +61,17 @@ def test_pose3d_bg_color_round_trip(tag_client):
     got = tag_client.get("/dlc/project/ui-setting?key=pose3d_bg_color")
     assert got.status_code == 200
     assert got.get_json()["value"] == value
+
+
+def test_pose3d_view_prefs_key_allowed():
+    from dlc import inline_analysis
+    assert "pose3d_view_prefs" in inline_analysis._UI_SETTING_KEYS
+
+
+def test_pose3d_view_prefs_round_trip(tag_client):
+    value = '{"w":800,"h":600,"flipX":true,"flipY":false,"flipZ":false}'
+    post = tag_client.post("/dlc/project/ui-setting", json={"key": "pose3d_view_prefs", "value": value})
+    assert post.status_code == 200, post.get_json()
+    got = tag_client.get("/dlc/project/ui-setting?key=pose3d_view_prefs")
+    assert got.status_code == 200
+    assert got.get_json()["value"] == value
