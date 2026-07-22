@@ -47,3 +47,17 @@ def test_tag_keys_round_trip(tag_client, key):
 def test_unknown_tag_key_still_rejected(tag_client):
     resp = tag_client.post("/dlc/project/ui-setting", json={"key": "bogus_tags", "value": "[]"})
     assert resp.status_code == 400
+
+
+def test_pose3d_bg_color_key_allowed():
+    from dlc import inline_analysis
+    assert "pose3d_bg_color" in inline_analysis._UI_SETTING_KEYS
+
+
+def test_pose3d_bg_color_round_trip(tag_client):
+    value = "#101820"
+    post = tag_client.post("/dlc/project/ui-setting", json={"key": "pose3d_bg_color", "value": value})
+    assert post.status_code == 200, post.get_json()
+    got = tag_client.get("/dlc/project/ui-setting?key=pose3d_bg_color")
+    assert got.status_code == 200
+    assert got.get_json()["value"] == value
