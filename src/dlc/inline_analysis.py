@@ -622,6 +622,7 @@ def triangulate_batch():
             "project":     (Path(video).parent.name if video else ""),
             "target_path": video or "",
             "started_at":  str(now),
+            "updated_at":  str(now),   # heartbeat — see monitoring._reconcile stale check
             "status":      "running",
             "total":       int(total),
             "done":        0,
@@ -633,15 +634,14 @@ def triangulate_batch():
     elif action == "progress":
         # Only update an existing hash; ignore if the batch is unknown/expired.
         if redis.exists(job_key):
-            mapping = {}
+            mapping = {"updated_at": str(time.time())}   # heartbeat
             if body.get("done") is not None:
                 mapping["done"] = body.get("done")
             if body.get("skipped") is not None:
                 mapping["skipped"] = body.get("skipped")
             if body.get("stage") is not None:
                 mapping["stage"] = body.get("stage")
-            if mapping:
-                redis.hset(job_key, mapping=mapping)
+            redis.hset(job_key, mapping=mapping)
 
     else:  # action == "done"
         mapping = {"status": "complete"}

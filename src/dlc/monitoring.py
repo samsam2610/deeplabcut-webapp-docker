@@ -13,6 +13,7 @@ Routes:
 from __future__ import annotations
 import json
 import re
+import time
 import uuid
 from pathlib import Path
 from flask import Blueprint, request, jsonify, session as flask_session
@@ -22,6 +23,11 @@ from . import ctx as _ctx
 from dlc.utils import _get_engine_queue, _dlc_project_security_check
 
 bp = Blueprint("dlc_monitoring", __name__)
+
+# A frontend-driven `triangulate` batch heartbeats every completed range (~8s). If
+# no heartbeat lands in this long, the browser tab that drove it is gone (closed /
+# reloaded mid-batch) → mark the aggregate row dead instead of "running" forever.
+_BATCH_STALE_SECS = 180
 
 
 def _user_id() -> str:
@@ -252,6 +258,21 @@ def dlc_training_jobs():
             # Surface a stub so the UI can show + clear it instead of
             # silently hiding running-but-untracked work.
             return {"task_id": jid, "status": "orphaned"}
+        # A `triangulate` batch is a FRONTEND-driven aggregate — its id is not a
+        # Celery task, so the Celery reconcile below never applies (a synthetic id
+        # reads as PENDING = "live" forever, which would pin it "running" even after
+        # the browser tab that drove it closed/reloaded mid-batch). Instead, treat a
+        # stale heartbeat (no progress update in _BATCH_STALE_SECS) as abandoned.
+        if job.get("operation") == "triangulate":
+            if job.get("status") == "running":
+                try:
+                    last = float(job.get("updated_at") or job.get("started_at") or 0)
+                except (TypeError, ValueError):
+                    last = 0.0
+                if last and (time.time() - last) > _BATCH_STALE_SECS:
+                    _ctx.redis_client().hset(redis_key, "status", "dead")
+                    job["status"] = "dead"
+            return job
         celery_state = _celery_task_status(jid)
         if job.get("status") == "running" and celery_state not in _LIVE_CELERY_STATES:
             _ctx.redis_client().hset(redis_key, "status", "dead")

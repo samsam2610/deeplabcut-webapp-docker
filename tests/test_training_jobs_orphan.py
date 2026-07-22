@@ -117,3 +117,64 @@ def test_normal_jobs_still_returned(monkeypatch):
     body = resp.get_json()
     assert resp.status_code == 200
     assert any(j["task_id"] == jid and j["status"] == "complete" for j in body["jobs"])
+
+
+class _FakeAnalyzeRedis:
+    """Fake redis for the analyze-zset side, with a mutable hash + hset."""
+
+    def __init__(self, analyze_zset, hashes):
+        self._z = list(analyze_zset)
+        self._h = {k: dict(v) for k, v in hashes.items()}
+
+    def zrevrange(self, key, start, stop):
+        if key == "dlc_analyze_jobs":
+            return list(reversed(self._z))[start : stop + 1]
+        return []
+
+    def hgetall(self, key):
+        return dict(self._h.get(key, {}))
+
+    def hset(self, key, field, value):
+        self._h.setdefault(key, {})[field] = value
+
+
+def _run_triangulate_reconcile(monkeypatch, updated_ago_secs):
+    import time
+    from dlc import monitoring
+    bid = "batch-abcdef"
+    fake = _FakeAnalyzeRedis(
+        analyze_zset=[bid],
+        hashes={
+            "dlc_analyze_job:" + bid: {
+                "task_id":    bid,
+                "operation":  "triangulate",
+                "status":     "running",
+                "started_at": str(time.time() - updated_ago_secs),
+                "updated_at": str(time.time() - updated_ago_secs),
+                "stage":      "43/119 · Median-filtering range… 85%",
+            },
+        },
+    )
+    monkeypatch.setattr(monitoring._ctx, "redis_client", lambda: fake)
+    monkeypatch.setattr(monitoring._ctx, "celery", lambda: object())
+    # A triangulate batch must NOT consult Celery — fail loudly if it does.
+    monkeypatch.setattr(monitoring, "_celery_task_status",
+                        lambda jid: (_ for _ in ()).throw(AssertionError("triangulate must not hit Celery")))
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(monitoring.bp)
+    resp = app.test_client().get("/dlc/training/jobs")
+    return next(j for j in resp.get_json()["jobs"] if j["task_id"] == bid)
+
+
+def test_stale_triangulate_batch_marked_dead(monkeypatch):
+    """An abandoned batch (browser gone → no heartbeat) must flip to 'dead', not
+    stay 'running' forever (its synthetic id has no Celery task to reconcile)."""
+    row = _run_triangulate_reconcile(monkeypatch, updated_ago_secs=1000)
+    assert row["status"] == "dead"
+
+
+def test_fresh_triangulate_batch_stays_running(monkeypatch):
+    """A live batch (recent heartbeat) keeps running."""
+    row = _run_triangulate_reconcile(monkeypatch, updated_ago_secs=5)
+    assert row["status"] == "running"
