@@ -69,6 +69,30 @@ def _filter_pose2d(config, in_h5, out_h5) -> Path:
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
+def _refresh_pose2d_from_source(video: Path, pose_folder: Path) -> None:
+    """Refresh ``pose-2d/<stem>_analyzed.h5`` (+ .csv) from the fresh source
+    ``<stem>_analyzed.h5`` sitting next to the video (written by finalize/analyze).
+
+    anipose-init copies the source into pose-2d ONCE; frames analyzed afterwards land
+    only in the source, so without this the triangulate reads a stale copy and misses
+    them (→ all-NaN 3D for windows that were actually analyzed). Copy is mtime-gated —
+    a whole batch refreshes once (the first range), then skips — and best-effort
+    (a copy failure leaves the existing pose-2d copy in place). Patchable seam."""
+    import shutil
+    for ext in (".h5", ".csv"):
+        src = video.with_name(video.stem + "_analyzed" + ext)
+        dst = pose_folder / f"{video.stem}_analyzed{ext}"
+        if not src.is_file():
+            continue
+        try:
+            if dst.is_file() and src.stat().st_mtime <= dst.stat().st_mtime:
+                continue
+            pose_folder.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src), str(dst))
+        except OSError:
+            pass  # keep whatever pose-2d copy already exists
+
+
 def _resolve_cam1(cam0: Path):
     """Find the sibling camera video in the same folder (any cam index != cam0),
     matching the dlc-3D module's filesystem sibling logic."""
@@ -150,6 +174,11 @@ def run_triangulate_range(cam0_video, start_frame, n_frames, update=None) -> dic
             f"anipose format first.")
 
     pose_folder = current_folder / "pose-2d"
+    # Pull the latest finalized 2D poses into pose-2d before triangulating, so a
+    # triangulate (or Triangulate-all-for-tag) always uses frames analyzed since the
+    # last anipose-init — not a stale copy. mtime-gated → one copy per batch.
+    _refresh_pose2d_from_source(cam0, pose_folder)
+    _refresh_pose2d_from_source(cam1, pose_folder)
     h5_0 = pose_folder / f"{cam0.stem}_analyzed.h5"
     h5_1 = pose_folder / f"{cam1.stem}_analyzed.h5"
     for h in (h5_0, h5_1):

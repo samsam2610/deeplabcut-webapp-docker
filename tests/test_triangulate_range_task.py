@@ -232,6 +232,44 @@ class TestFilter2dStep:
         pair = c3d.pair_name_from_cam0(str(cam0))
         assert not c3d.canonical_3d_csv_path(session, pair).exists()
 
+    def test_pose2d_refreshed_from_fresh_source(self, anipose_session):
+        """The pose-2d copy is refreshed from the fresh <stem>_analyzed.h5 next to
+        the video before triangulating. A window that's all-NaN in the STALE pose-2d
+        copy but present in the NEWER source must triangulate (not be skipped)."""
+        import os, time
+        parent, session, cam0, cam1 = anipose_session
+        cols = pd.MultiIndex.from_product(
+            [["DLC"], _BPS, ["x", "y", "likelihood"]],
+            names=["scorer", "bodyparts", "coords"])
+        old = time.time() - 10_000
+        for cam in (cam0, cam1):
+            # STALE pose-2d copy: all-NaN in frames 100..199, back-dated mtime.
+            stale = pd.DataFrame(
+                np.arange(200 * len(cols), dtype=float).reshape(200, len(cols)),
+                index=pd.RangeIndex(200), columns=cols)
+            stale.iloc[100:200, :] = np.nan
+            pcopy = session / "pose-2d" / f"{cam.stem}_analyzed.h5"
+            stale.to_hdf(str(pcopy), key="df_with_missing", mode="w", format="fixed")
+            os.utime(str(pcopy), (old, old))
+            # FRESH source next to the video: real data everywhere (newer mtime = now).
+            fresh = pd.DataFrame(
+                np.arange(200 * len(cols), dtype=float).reshape(200, len(cols)),
+                index=pd.RangeIndex(200), columns=cols)
+            fresh.to_hdf(str(cam.with_name(cam.stem + "_analyzed.h5")),
+                         key="df_with_missing", mode="w", format="fixed")
+
+        with patch.object(tr, "_load_config", return_value=_config()), \
+             patch.object(tr, "_triangulate",
+                          side_effect=_fake_triangulate_writer(6)) as mk_tri:
+            result = tr.run_triangulate_range(str(cam0), 120, 6)   # window 100..199
+
+        assert not result.get("skipped"), "refreshed pose-2d has 2D here → must triangulate"
+        assert mk_tri.call_count == 1
+        refreshed = pd.read_hdf(str(session / "pose-2d" / f"{cam0.stem}_analyzed.h5"))
+        xy = [c for c in refreshed.columns if str(c[-1]).lower() in ("x", "y")]
+        assert refreshed[xy].iloc[100:200].notna().any().any(), \
+            "pose-2d must be refreshed from the fresh source (2D present in the new window)"
+
     def test_all_nan_2d_range_is_skipped(self, anipose_session):
         """A range that IS within the analyzed data but whose 2D poses are all-NaN
         (frames finalized into _analyzed but never analyzed) has nothing to
