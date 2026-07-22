@@ -367,44 +367,74 @@ def viewer_load_h5(h5_path: str) -> dict:
     return entry
 
 
-def _coverage_buckets(poses_np, threshold: float, n_buckets: int, mode: str = "likelihood") -> list:
-    """Per-frame coverage downsampled to n_buckets (capped at n_frames). 0/1 list.
+def _coverage_covered_mask(poses_np, threshold: float, mode: str):
+    """Per-ROW covered bool: mode='likelihood' → >=1 bp likelihood >= threshold
+    (NaN→False); mode='presence' → >=1 bp with a finite x (threshold ignored)."""
+    if mode == "presence":
+        return (~_np.isnan(poses_np[:, :, 0])).any(axis=1)
+    return (poses_np[:, :, 2] >= float(threshold)).any(axis=1)  # (n,) bool; NaN→False
+
+
+def _coverage_frame_scale(poses_np, frame_ids, total_frames: int):
+    """Return (frame_ids array, N) where each ROW is placed at its ABSOLUTE video
+    frame and buckets span N frames.
+
+    frame_ids: absolute video-frame index per row (df.index). Default (None) =
+    positional row index — correct only when the h5 is a contiguous 0..n-1 prefix.
+    total_frames: the VIDEO/seek frame count. When given, buckets span the whole
+    video (N = max(total_frames, last_frame+1)); the seek playhead uses the same
+    scale, so marks land at their true frame even when the h5 has FEWER rows than
+    the video has frames (DLC analyzed a prefix) or a non-contiguous index."""
+    n = int(poses_np.shape[0])
+    fids = _np.arange(n, dtype=_np.int64) if frame_ids is None \
+        else _np.asarray(frame_ids).astype(_np.int64)
+    span = int(fids.max()) + 1 if n else 0
+    tf = int(total_frames) if total_frames and int(total_frames) > 0 else 0
+    N = max(max(tf, span), 1)
+    return fids, N
+
+
+def _coverage_buckets(poses_np, threshold: float, n_buckets: int, mode: str = "likelihood",
+                      frame_ids=None, total_frames: int = 0) -> list:
+    """Per-frame coverage downsampled to n_buckets. 0/1 list.
     mode='likelihood' (default): >=1 bodypart with likelihood >= threshold (NaN→False).
     mode='presence': >=1 bodypart with a finite x (threshold ignored) — for finalized
-    _analyzed files where 'has a label' is x-presence."""
+    _analyzed files where 'has a label' is x-presence.
+
+    Each ROW is placed at its ABSOLUTE video frame (frame_ids, default = row i) and
+    bucketed over the video length (total_frames, default = last frame + 1), so the
+    coverage bar aligns with the seek playhead even when the h5 has fewer rows than
+    the video has frames or a non-contiguous index. See _coverage_frame_scale."""
     n = int(poses_np.shape[0]) if poses_np is not None else 0
     if n == 0:
         return []
-    if mode == "presence":
-        covered = (~_np.isnan(poses_np[:, :, 0])).any(axis=1)
-    else:
-        covered = (poses_np[:, :, 2] >= float(threshold)).any(axis=1)  # (n,) bool; NaN→False
-    b = max(1, min(int(n_buckets), n))
-    idx = (_np.arange(n) * b) // n            # frame → bucket
+    covered = _coverage_covered_mask(poses_np, threshold, mode)
+    fids, N = _coverage_frame_scale(poses_np, frame_ids, total_frames)
+    b = max(1, min(int(n_buckets), N))
+    idx = _np.minimum((fids * b) // N, b - 1)   # abs frame → bucket (clamped)
     out = _np.zeros(b, dtype=bool)
     _np.logical_or.at(out, idx, covered)
     return out.astype(int).tolist()
 
 
-def _coverage_first_frames(poses_np, threshold: float, n_buckets: int, mode: str = "likelihood") -> list:
-    """Earliest covered frame index in each bucket, or -1 when the bucket is
+def _coverage_first_frames(poses_np, threshold: float, n_buckets: int, mode: str = "likelihood",
+                           frame_ids=None, total_frames: int = 0) -> list:
+    """Earliest covered ABSOLUTE video frame in each bucket, or -1 when the bucket is
     uncovered. Parallel to _coverage_buckets output. A bucket can span hundreds of
     frames, so the client seeks to this REAL covered frame instead of the bucket
-    centre (which usually lands on an unlabeled frame). Same coverage rule as
-    _coverage_buckets (likelihood >= threshold, or presence = finite x)."""
+    centre (which usually lands on an unlabeled frame). Same coverage rule +
+    frame-scale as _coverage_buckets (see _coverage_frame_scale)."""
     n = int(poses_np.shape[0]) if poses_np is not None else 0
     if n == 0:
         return []
-    if mode == "presence":
-        covered = (~_np.isnan(poses_np[:, :, 0])).any(axis=1)
-    else:
-        covered = (poses_np[:, :, 2] >= float(threshold)).any(axis=1)  # NaN→False
-    b = max(1, min(int(n_buckets), n))
-    idx = (_np.arange(n) * b) // n            # frame → bucket
-    first = _np.full(b, n, dtype=_np.int64)   # n = "unset" sentinel (> any frame)
-    cov_frames = _np.nonzero(covered)[0]
-    _np.minimum.at(first, idx[cov_frames], cov_frames)  # earliest frame wins per bucket
-    first[first == n] = -1
+    covered = _coverage_covered_mask(poses_np, threshold, mode)
+    fids, N = _coverage_frame_scale(poses_np, frame_ids, total_frames)
+    b = max(1, min(int(n_buckets), N))
+    idx = _np.minimum((fids * b) // N, b - 1)   # abs frame → bucket (clamped)
+    first = _np.full(b, N, dtype=_np.int64)   # N = "unset" sentinel (> any frame)
+    cov_rows = _np.nonzero(covered)[0]
+    _np.minimum.at(first, idx[cov_rows], fids[cov_rows])  # earliest ABS frame wins per bucket
+    first[first == N] = -1
     return first.tolist()
 
 
@@ -1001,6 +1031,7 @@ def viewer_pose_coverage():
     threshold = float(request.args.get("threshold", 0.6) or 0.6)
     n_buckets = int(request.args.get("buckets", 600) or 600)
     mode      = request.args.get("mode", "likelihood")
+    nframes   = int(request.args.get("nframes", 0) or 0)   # VIDEO/seek frame count
     if not h5_path:
         return jsonify({"error": "h5 required"}), 400
     try:
@@ -1008,8 +1039,23 @@ def viewer_pose_coverage():
     except Exception as e:  # noqa: BLE001
         return jsonify({"error": f"could not load h5: {e}"}), 422
     poses_np = h5_data.get("poses_np")
-    buckets  = _coverage_buckets(poses_np, threshold, n_buckets, mode=mode)
-    frames   = _coverage_first_frames(poses_np, threshold, n_buckets, mode=mode)
+    # Absolute video-frame id per row (df.index), so marks land at their true frame
+    # even when the h5 index is non-contiguous or the h5 is shorter than the video
+    # (DLC analyzed a prefix). Fall back to positional rows if the index isn't a
+    # plain 1-D integer index.
+    frame_ids = None
+    df = h5_data.get("df")
+    if df is not None:
+        try:
+            fi = df.index.to_numpy()
+            if fi.ndim == 1 and _np.issubdtype(fi.dtype, _np.integer):
+                frame_ids = fi
+        except Exception:  # noqa: BLE001
+            frame_ids = None
+    buckets  = _coverage_buckets(poses_np, threshold, n_buckets, mode=mode,
+                                 frame_ids=frame_ids, total_frames=nframes)
+    frames   = _coverage_first_frames(poses_np, threshold, n_buckets, mode=mode,
+                                      frame_ids=frame_ids, total_frames=nframes)
     return jsonify({"buckets": buckets,
                     "frames": frames,  # first covered frame per bucket (-1 = none)
                     "n_frames": int(poses_np.shape[0]) if poses_np is not None else 0,

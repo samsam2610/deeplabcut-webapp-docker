@@ -377,6 +377,45 @@ def test_viewer_h5_endpoints_survive_both_hdf_formats(
         assert resp.get_json().get("n_frames") == 12
 
 
+def test_pose_coverage_nframes_places_marks_in_video_frame_space(
+    flask_test_client, tmp_path, monkeypatch
+):
+    """The seek bar is drawn over the VIDEO frame count, but an h5 often has FEWER
+    rows than the video has frames (DLC analyzed a prefix). With ?nframes=<video>
+    the coverage must bucket over the video length so a covered frame near the h5
+    end lands at its true video fraction, not compressed to ~1.0."""
+    import numpy as np
+    client, _app, _redis, _data, _user = flask_test_client
+    _auth(client)
+    from dlc import viewer as vw
+    monkeypatch.setattr(vw, "_viewer_sec_check", lambda p: True)
+
+    bps = ["Snout", "Wrist"]
+    df = _make_dlc_df(bps, n=6)                 # h5 rows = video frames 0..5
+    df.iloc[:, :] = np.nan                      # presence = finite x → all absent
+    # only the LAST row is "present" (finite x) → one covered frame at abs frame 5
+    df.iloc[5, 0] = 42.0
+    h5 = tmp_path / "vid_covscaleDLC_test.h5"
+    df.to_hdf(str(h5), key="df", format="table")
+
+    # video has 12 frames (h5 covers only the first 6)
+    resp = client.get(f"/dlc/viewer/pose-coverage?h5={h5}&mode=presence&buckets=12&nframes=12")
+    assert resp.status_code == 200, resp.get_json()
+    d = resp.get_json()
+    frames = d["frames"]
+    assert len(frames) == 12                    # bucketed over the VIDEO length
+    covered = [f for f in frames if f >= 0]
+    assert covered == [5]                       # the real covered frame index
+    # frame 5 of 12 → bucket 5, i.e. fraction 5/12 ≈ 0.42, NOT the h5 tail (~1.0)
+    assert frames.index(5) == 5
+
+    # Without nframes: buckets span only the h5 length (6) → same frame, different scale
+    resp2 = client.get(f"/dlc/viewer/pose-coverage?h5={h5}&mode=presence&buckets=12")
+    d2 = resp2.get_json()
+    assert len(d2["frames"]) == 6
+    assert [f for f in d2["frames"] if f >= 0] == [5]
+
+
 # ── save-marker-edits: client-sent edits must persist even when the server JSON
 #    edit-cache is empty (the async /marker-edit flush lost the race to Save). ──
 
