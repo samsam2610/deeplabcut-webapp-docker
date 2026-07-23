@@ -25,6 +25,7 @@ _SCHEMA = {
         "scale_smooth", "scale_length", "scale_length_weak",
         "reproj_error_threshold", "score_threshold",
         "n_deriv_smooth", "optim_chunking_size",
+        "constraints", "constraints_weak",
     ],
     "filter": [
         "enabled", "spline", "multiprocessing", "type",
@@ -46,6 +47,12 @@ _STR_FIELDS = {
     "filter": {"type"},
     "filter3d": set(),
 }
+# List-of-pairs fields (the anipose skeleton constraints): [[a, b], ...].
+_LIST_FIELDS = {
+    "triangulation": {"constraints", "constraints_weak"},
+    "filter": set(),
+    "filter3d": set(),
+}
 # medfilt: odd int in [1, 199]
 _MEDFILT_FIELDS = {
     "triangulation": set(),
@@ -59,7 +66,8 @@ def _num_fields(section: str) -> set:
     return (set(_SCHEMA[section])
             - _BOOL_FIELDS[section]
             - _STR_FIELDS[section]
-            - _MEDFILT_FIELDS[section])
+            - _MEDFILT_FIELDS[section]
+            - _LIST_FIELDS[section])
 
 
 # ── TOML reader (resilient: toml in container, tomli on host) ────────────────
@@ -94,6 +102,12 @@ def read_params(config_path) -> dict:
                 out[section][key] = bool(val)
             elif key in _STR_FIELDS[section]:
                 out[section][key] = str(val)
+            elif key in _LIST_FIELDS[section]:
+                # normalise to a list of 2-string pairs; drop malformed entries
+                out[section][key] = [
+                    [str(p[0]), str(p[1])] for p in val
+                    if isinstance(p, (list, tuple)) and len(p) == 2
+                ] if isinstance(val, list) else []
             else:
                 out[section][key] = val  # native int/float from the parser
     return out
@@ -109,6 +123,9 @@ def _encode_toml_value(value) -> str:
         return str(value)
     if isinstance(value, float):
         return repr(value)
+    # list/tuple → TOML array (recursive; used for constraints = [["a","b"], …])
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_encode_toml_value(v) for v in value) + "]"
     # string → double-quoted TOML basic string
     s = str(value).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{s}"'
@@ -146,6 +163,27 @@ def _find_key_line(lines, key, lo, hi):
     return None
 
 
+def _value_span_end(lines, key_idx):
+    """Index just past a value that may open a multi-line array — e.g.
+    ``constraints = [`` … ``]`` spread over lines. Balances [] / {} from
+    ``key_idx``; a single-line value returns ``key_idx + 1``. (Bodypart names
+    carry no brackets, so plain bracket counting is safe here.)"""
+    depth = 0
+    started = False
+    i = key_idx
+    while i < len(lines):
+        for ch in lines[i]:
+            if ch in "[{":
+                depth += 1
+                started = True
+            elif ch in "]}":
+                depth -= 1
+        i += 1
+        if started and depth <= 0:
+            break
+    return i if started else key_idx + 1
+
+
 def write_params(config_path, params) -> None:
     """Targeted, formatting-preserving write of ``params`` into ``config.toml``.
 
@@ -169,7 +207,11 @@ def write_params(config_path, params) -> None:
             key_idx = _find_key_line(lines, key, header_idx + 1, end_idx)
             if key_idx is not None:
                 indent = re.match(r"^(\s*)", lines[key_idx]).group(1)
-                lines[key_idx] = f"{indent}{key} = {encoded}\n"
+                # List values may span multiple source lines — collapse the whole
+                # value span to one line so no dangling array rows are left behind.
+                span_end = (_value_span_end(lines, key_idx)
+                            if isinstance(value, (list, tuple)) else key_idx + 1)
+                lines[key_idx:span_end] = [f"{indent}{key} = {encoded}\n"]
             else:
                 lines.insert(header_idx + 1, f"{key} = {encoded}\n")
 
@@ -220,6 +262,17 @@ def validate_params(params) -> list:
             elif key in _STR_FIELDS[section]:
                 if not isinstance(value, str):
                     errors.append(f"[{section}] {key} must be a string")
+            elif key in _LIST_FIELDS[section]:
+                if not isinstance(value, list):
+                    errors.append(f"[{section}] {key} must be a list of [a, b] pairs")
+                elif any(
+                    not isinstance(p, (list, tuple)) or len(p) != 2
+                    or not all(isinstance(x, str) and x.strip() for x in p)
+                    for p in value
+                ):
+                    errors.append(
+                        f"[{section}] {key}: each entry must be a pair of two "
+                        f"non-empty bodypart names")
             else:  # numeric >= 0
                 if not _is_number(value):
                     errors.append(f"[{section}] {key} must be a number")

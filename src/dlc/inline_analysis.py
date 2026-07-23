@@ -706,10 +706,42 @@ def triangulate_poses_3d():
     return jsonify(_canonical_3d.read_poses_3d(session_dir, pair_name, source))
 
 
+def _skeleton_constraints_suggestion(cam0_video) -> list:
+    """Best-effort skeleton pairs (Wrist→MCP-k→PIP-k→DIP-k finger chains) derived
+    from the analyzed CSV's bodypart names — powers the params editor's 'Fill from
+    skeleton' button. Empty on any problem (missing CSV, odd header, etc.)."""
+    try:
+        import csv as _csv
+        from itertools import islice
+        from dlc.canonical_3d import derive_skeleton
+        p = Path(cam0_video)
+        # Prefer the fresh source next to the video; fall back to the pose-2d copy.
+        for cand in (p.with_name(p.stem + "_analyzed.csv"),
+                     p.parent / "pose-2d" / f"{p.stem}_analyzed.csv"):
+            if not cand.is_file():
+                continue
+            with open(cand, newline="") as fh:
+                rows = list(islice(_csv.reader(fh), 3))   # DLC header rows only
+            bp_row = rows[1][1:] if len(rows) >= 2 else []   # row1 = bodyparts
+            bodyparts = []
+            for name in bp_row:
+                name = (name or "").strip()
+                if name and name not in bodyparts:
+                    bodyparts.append(name)
+            skel = derive_skeleton(bodyparts)
+            if skel:
+                return skel
+        return []
+    except Exception:
+        return []
+
+
 @bp.route("/dlc/project/triangulate/config", methods=["GET"])
 def triangulate_config_get():
     """Return the editable anipose params for the config.toml governing the
-    session of ``cam0_video``. config path = parent(session)/config.toml."""
+    session of ``cam0_video``. config path = parent(session)/config.toml.
+    Also includes ``constraints_suggestion`` (skeleton pairs from the bodypart
+    names) for the params editor's 'Fill from skeleton' button."""
     cam0_video = (request.args.get("cam0_video") or "").strip()
     if not cam0_video:
         return jsonify({"error": "cam0_video required"}), 400
@@ -719,7 +751,9 @@ def triangulate_config_get():
     config_path = p.parent.parent / "config.toml"
     if not config_path.is_file():
         return jsonify({"error": f"config.toml not found at {config_path}"}), 400
-    return jsonify(_anipose_config.read_params(config_path)), 200
+    out = _anipose_config.read_params(config_path)
+    out["constraints_suggestion"] = _skeleton_constraints_suggestion(cam0_video)
+    return jsonify(out), 200
 
 
 @bp.route("/dlc/project/triangulate/config", methods=["POST"])

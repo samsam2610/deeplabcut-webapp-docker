@@ -183,3 +183,58 @@ class TestValidateParams:
         assert ac.validate_params({"filter": {"enabled": "yes"}})
         assert ac.validate_params({"triangulation": {"ransac": 1}})
         assert ac.validate_params({"filter": {"type": "kalman"}})
+
+
+# ── constraints (the anipose skeleton) — list-of-pairs field ────────────────
+
+_CONFIG_WITH_CONSTRAINTS = """\
+[triangulation]
+optim = false
+scale_length = 2
+constraints = [
+   ["Wrist", "MCP-1"],
+   ["MCP-1", "PIP-1"],
+]
+constraints_weak = []
+score_threshold = 0.8
+
+[filter]
+enabled = false
+"""
+
+
+class TestConstraints:
+    def _cfg(self, tmp_path, text="", name="config.toml"):
+        p = tmp_path / name
+        p.write_text(text or _CONFIG_WITH_CONSTRAINTS)
+        return p
+
+    def test_reads_constraints_as_pairs(self, tmp_path):
+        params = ac.read_params(self._cfg(tmp_path))
+        assert params["triangulation"]["constraints"] == [
+            ["Wrist", "MCP-1"], ["MCP-1", "PIP-1"]]
+        assert params["triangulation"]["constraints_weak"] == []
+
+    def test_write_collapses_multiline_constraints(self, tmp_path):
+        p = self._cfg(tmp_path)
+        ac.write_params(p, {"triangulation": {
+            "optim": True,
+            "constraints": [["Wrist", "MCP-1"], ["MCP-1", "PIP-1"], ["PIP-1", "DIP-1"]],
+        }})
+        text = p.read_text()
+        assert ('constraints = [["Wrist", "MCP-1"], ["MCP-1", "PIP-1"], '
+                '["PIP-1", "DIP-1"]]') in text
+        assert "optim = true" in text
+        # the old multi-line array rows are gone (no orphan pair left behind)
+        assert text.count('["MCP-1", "PIP-1"]') == 1
+        # other keys survive the collapse
+        params = ac.read_params(p)
+        assert params["triangulation"]["score_threshold"] == 0.8
+        assert len(params["triangulation"]["constraints"]) == 3
+
+    def test_validate_constraints(self):
+        assert ac.validate_params(
+            {"triangulation": {"constraints": [["a", "b"], ["c", "d"]]}}) == []
+        assert ac.validate_params({"triangulation": {"constraints": "nope"}})
+        assert ac.validate_params({"triangulation": {"constraints": [["a"]]}})
+        assert ac.validate_params({"triangulation": {"constraints": [["a", ""]]}})
