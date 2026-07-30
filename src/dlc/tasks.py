@@ -3225,3 +3225,50 @@ def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
         redis_, user_id, config_path, snap_key, snapshot_path,
         shuffle, trainingsetindex, batch_size, ttl,
     )
+
+
+# --------------------------------------------------------------------------
+# Candidate-peak emission. A SECOND, additive GPU pass fired by the "3D Inline
+# Analysis - Reprojection" card after analysis completes. Deliberately separate
+# from _run_range so the production inline-analysis path stays untouched.
+# See deeplabcut-webapp-docker-supports/dlc-3D/docs/superpowers/specs/
+#     2026-07-30-heatmap-peak-screen-design.md
+# --------------------------------------------------------------------------
+
+def _emit_peaks_inner(redis_, req_id, video_paths, h5_paths, frames,
+                      model_dir, snapshot_name, k, min_distance):
+    """Pure-function body, testable without Celery.
+
+    Reuses `_publish_result`'s `n_analyzed` field to carry the peak-frame
+    count — `_publish_result` has no `n_frames` field and must not gain one
+    (existing readers of inline:result:<req_id> are untouched). The
+    inline-analysis peaks/status route maps n_analyzed -> n_frames in its
+    JSON response.
+    """
+    from .peaks_emit import emit_peaks_for_video
+
+    _publish_result(redis_, req_id, status="running")
+    total = 0
+    for video, h5 in zip(video_paths, h5_paths):
+        res = emit_peaks_for_video(
+            video_path=video, h5_path=h5, model_dir=model_dir,
+            snapshot_name=snapshot_name, frames=frames,
+            k=k, min_distance=min_distance)
+        total += int(res["n_frames"])
+    _publish_result(redis_, req_id, status="done", n_analyzed=total)
+    return total
+
+
+@celery.task(bind=True, name="tasks.dlc_emit_peaks", acks_late=False)
+def dlc_emit_peaks(self, req_id, video_paths, h5_paths, frames,
+                   model_dir, snapshot_name, k=5, min_distance=3):
+    """Additive: never rolls back or touches the pose h5. A failure here only
+    marks this request's own result hash as errored — analysis results
+    written earlier by _run_range are already on disk and untouched."""
+    redis_ = _redis_client_from_celery_app(self)
+    try:
+        _emit_peaks_inner(redis_, req_id, video_paths, h5_paths, frames,
+                          model_dir, snapshot_name, k, min_distance)
+    except Exception as exc:                       # noqa: BLE001
+        _publish_result(redis_, req_id, status="error", error=str(exc))
+        raise

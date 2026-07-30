@@ -819,3 +819,122 @@ def triangulate_refilter():
         {"filter3d": {"medfilt": medfilt, "offset_threshold": offset_threshold}})
     return jsonify({"ok": True, "start": start, "n": n,
                     "medfilt": medfilt, "offset_threshold": offset_threshold}), 200
+
+
+# ── Candidate-peak emission (additive second GPU pass) ──────────────────────
+#
+# Fired by the "3D Inline Analysis - Reprojection" card after analysis
+# completes, to save top-K heatmap peaks alongside the pose h5. Deliberately
+# separate from /range — a failure here must never roll back or touch
+# analysis results, which is why it takes explicit h5_paths rather than
+# deriving them (the scorer string is only known inside the worker, from the
+# loaded model; see tasks.dlc_emit_peaks). See
+# deeplabcut-webapp-docker-supports/dlc-3D/docs/superpowers/specs/
+#     2026-07-30-heatmap-peak-screen-design.md
+
+_PEAKS_FRAME_CAP = 50_000
+
+
+def _frames_from_ranges(ranges):
+    """Flatten [{start, n}, ...] into a sorted, deduped frame list."""
+    out = set()
+    for r in ranges:
+        start, n = int(r["start"]), int(r["n"])
+        if n <= 0:
+            raise ValueError("each range needs n >= 1")
+        out.update(range(start, start + n))
+    return sorted(out)
+
+
+def _dispatch_emit_peaks(**kw):
+    """Seam for tests; production sends the task to the worker's GPU queue.
+
+    Dispatched by name via send_task, same as _enqueue_triangulate_range
+    above — the Flask container cannot import the worker task object."""
+    return _celery_send_task("tasks.dlc_emit_peaks", kwargs=kw, queue="pytorch")
+
+
+@bp.route("/dlc/project/inline-analysis/peaks", methods=["POST"])
+def peaks_submit():
+    """Queue a candidate-peak pass over frames already analysed.
+
+    Additive: this never runs as part of an analysis and never touches the
+    pose h5. A failure here leaves the analysis results exactly as they were.
+
+    h5_paths is REQUIRED, parallel to video_paths (same length, same order):
+    the scorer string can't be derived in this request context, so the
+    caller supplies the pose h5 path directly — it already has `scorer` from
+    /range/status and can build video_stem + scorer + ".h5" itself.
+    """
+    body = request.get_json(silent=True) or {}
+    video_paths = body.get("video_paths") or []
+    ranges = body.get("ranges") or []
+    snapshot_path = (body.get("snapshot_path") or "").strip()
+    if not video_paths or not snapshot_path:
+        return jsonify({"error": "video_paths and snapshot_path required"}), 400
+    if not ranges:
+        return jsonify({"error": "at least one range required"}), 400
+
+    resolved_videos = []
+    for raw in video_paths:
+        p = Path(str(raw))
+        if not p.is_file():
+            return jsonify({"error": f"video not found: {raw}"}), 400
+        if not _sec_check(p):
+            return jsonify({"error": "video path is outside the data root"}), 403
+        resolved_videos.append(p)
+
+    try:
+        frames = _frames_from_ranges(ranges)
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"error": f"bad ranges: {exc}"}), 400
+    if len(frames) > _PEAKS_FRAME_CAP:
+        return jsonify({
+            "error": f"{len(frames)} frames exceeds the cap of {_PEAKS_FRAME_CAP}"
+        }), 400
+
+    h5_paths = body.get("h5_paths") or []
+    if not h5_paths or len(h5_paths) != len(video_paths):
+        return jsonify({
+            "error": "h5_paths required, parallel to video_paths"
+        }), 400
+    resolved_h5s = []
+    for raw in h5_paths:
+        p = Path(str(raw))
+        if not _sec_check(p):
+            return jsonify({"error": "h5 path is outside the data root"}), 403
+        resolved_h5s.append(p)
+
+    snap = Path(snapshot_path)
+    model_dir = str(snap.parent.parent)
+
+    req_id = uuid.uuid4().hex
+    _dispatch_emit_peaks(
+        req_id=req_id,
+        video_paths=[str(p) for p in resolved_videos],
+        h5_paths=[str(p) for p in resolved_h5s],
+        frames=frames,
+        model_dir=model_dir,
+        snapshot_name=snap.name,
+        k=int(body.get("k", 5)),
+        min_distance=int(body.get("min_distance", 3)),
+    )
+    return jsonify({"req_id": req_id}), 202
+
+
+@bp.route("/dlc/project/inline-analysis/peaks/status", methods=["GET"])
+def peaks_status():
+    req_id = (request.args.get("req_id") or "").strip()
+    if not req_id:
+        return jsonify({"error": "req_id required"}), 400
+    h = _hgetall(_ctx.redis_client(), f"inline:result:{req_id}")
+    if not h:
+        return jsonify({"status": "pending", "n_frames": 0, "error": ""})
+    return jsonify({
+        "status":   h.get("status", "pending"),
+        # n_analyzed is _publish_result's generic counter field, reused here
+        # to carry the peak-frame count (tasks.py has no n_frames field —
+        # see _emit_peaks_inner).
+        "n_frames": int(h.get("n_analyzed") or 0),
+        "error":    h.get("error", ""),
+    })
