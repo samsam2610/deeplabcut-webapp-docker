@@ -866,6 +866,10 @@ def peaks_submit():
     caller supplies the pose h5 path directly — it already has `scorer` from
     /range/status and can build video_stem + scorer + ".h5" itself.
     """
+    project = _active_project()
+    if not project:
+        return jsonify({"error": "No active DLC project."}), 400
+
     body = request.get_json(silent=True) or {}
     video_paths = body.get("video_paths") or []
     ranges = body.get("ranges") or []
@@ -905,8 +909,19 @@ def peaks_submit():
             return jsonify({"error": "h5 path is outside the data root"}), 403
         resolved_h5s.append(p)
 
-    snap = Path(snapshot_path)
-    model_dir = str(snap.parent.parent)
+    # /dlc/project/snapshots returns project-relative paths (rel_path).
+    # Resolve against the active project root before validating — see the
+    # identical comment in session_start above.
+    project_root = Path(project["config_path"]).parent
+    snap_abs = (project_root / snapshot_path).resolve()
+    if not snap_abs.is_file():
+        return jsonify({
+            "error": f"snapshot not found: {snapshot_path}"
+        }), 404
+    if not _sec_check(snap_abs):
+        return jsonify({"error": "snapshot path is outside the data root"}), 403
+    model_dir = str(snap_abs.parent.parent)
+    snapshot_name = snap_abs.name
 
     req_id = uuid.uuid4().hex
     _dispatch_emit_peaks(
@@ -915,7 +930,7 @@ def peaks_submit():
         h5_paths=[str(p) for p in resolved_h5s],
         frames=frames,
         model_dir=model_dir,
-        snapshot_name=snap.name,
+        snapshot_name=snapshot_name,
         k=int(body.get("k", 5)),
         min_distance=int(body.get("min_distance", 3)),
     )
