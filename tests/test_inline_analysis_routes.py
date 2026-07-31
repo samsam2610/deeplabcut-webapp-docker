@@ -132,8 +132,14 @@ class TestSessionStatus:
 class TestSessionStop:
     def test_sets_control_key_to_stop(self, ia_client):
         client, _app, redis, _ = ia_client
+        # NOTE: pre-existing test, touched for the only_if_idle guard fix
+        # (2026-07-31). The route used to return ("", 204); it now returns
+        # JSON reporting the stop outcome (see
+        # docs/superpowers/session-stop-guard-report.md in dlc-3D's repo).
+        # The original assertion (control key gets set to "stop") is kept
+        # unweakened; only the status-code expectation changed from 204.
         resp = client.post("/dlc/project/inline-analysis/session/stop", json={"snap_key": "k1"})
-        assert resp.status_code == 204
+        assert resp.status_code == 200
         assert redis.get("inline:control:u1:k1") == "stop"
 
 

@@ -275,13 +275,41 @@ def session_status():
 
 @bp.route("/dlc/project/inline-analysis/session/stop", methods=["POST"])
 def session_stop():
+    """Stop a warm inline-analysis session.
+
+    Two distinct intents share this route, disambiguated by `only_if_idle`
+    in the JSON body:
+
+    - `only_if_idle: true` (tab-close / card-close): the caller doesn't know
+      whether OTHER tabs/cards are still feeding this (deterministic,
+      cross-tab-shared) session's queue. Only stop if the queue is empty —
+      otherwise leave the session running and report how many ranges are
+      still pending so the caller can no-op instead of stranding them.
+    - `only_if_idle` absent/false (explicit, deliberate cancel): stop
+      unconditionally AND delete the queue, so a deliberate cancel doesn't
+      orphan whatever was still queued either.
+    """
     body = request.get_json(silent=True) or {}
     snap_key = (body.get("snap_key") or "").strip()
     if not snap_key:
         return jsonify({"error": "snap_key required"}), 400
+    only_if_idle = bool(body.get("only_if_idle", False))
     redis = _ctx.redis_client()
-    redis.set(f"inline:control:{_user_id()}:{snap_key}", "stop", ex=60)
-    return ("", 204)
+    user_id = _user_id()
+    control_key = f"inline:control:{user_id}:{snap_key}"
+    queue_key = f"inline:queue:{user_id}:{snap_key}"
+
+    if only_if_idle:
+        pending = redis.llen(queue_key)
+        if pending > 0:
+            return jsonify({"stopped": False, "pending": pending})
+        redis.set(control_key, "stop", ex=60)
+        return jsonify({"stopped": True, "pending": 0})
+
+    cleared = redis.llen(queue_key)
+    redis.set(control_key, "stop", ex=60)
+    redis.delete(queue_key)
+    return jsonify({"stopped": True, "cleared": cleared})
 
 
 @bp.route("/dlc/project/inline-analysis/range", methods=["POST"])
