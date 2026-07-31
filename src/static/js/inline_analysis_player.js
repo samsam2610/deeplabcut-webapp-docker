@@ -2460,6 +2460,10 @@ import { makeFileBrowser } from './components/file_browser.js';
       }
 
       // Best-effort cleanup on card close + page unload.
+      // only_if_idle: closing a card/tab must NEVER discard queued analysis work.
+      // The route treats an ABSENT flag as an explicit cancel, which sets the stop
+      // key AND DELETES the queue -- so omitting it here would destroy a running
+      // Analyze-for-tag batch every time the tab is closed.
       iaCloseBtn?.addEventListener("click", () => {
         _iaStopRangePoll(); _iaStopStatusPoll();
         if (_iaSnapKey) {
@@ -2467,7 +2471,7 @@ import { makeFileBrowser } from './components/file_browser.js';
             fetch("/dlc/project/inline-analysis/session/stop", {
               method:  "POST",
               headers: { "Content-Type": "application/json" },
-              body:    JSON.stringify({ snap_key: _iaSnapKey }),
+              body:    JSON.stringify({ snap_key: _iaSnapKey, only_if_idle: true }),
             });
           } catch (e) { /* ignore */ }
           _iaSnapKey = null;
@@ -2477,7 +2481,7 @@ import { makeFileBrowser } from './components/file_browser.js';
         if (_iaSnapKey) {
           navigator.sendBeacon?.(
             "/dlc/project/inline-analysis/session/stop",
-            new Blob([JSON.stringify({ snap_key: _iaSnapKey })],
+            new Blob([JSON.stringify({ snap_key: _iaSnapKey, only_if_idle: true })],
                      { type: "application/json" }),
           );
         }
