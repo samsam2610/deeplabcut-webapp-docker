@@ -2855,6 +2855,37 @@ def _atomic_write_csv(path, df):
     _ia_os.replace(str(tmp), str(path))
 
 
+def _scorer_with_iteration(scorer: str, snapshot_path: str) -> str:
+    """Insert `_iter<N>_` before the `snapshot` token in a DLC scorer name.
+
+    Without this, iteration-22's snapshot-200.pt and iteration-23's
+    snapshot-200.pt both produce `..._snapshot_200.h5` and silently
+    overwrite each other — the scorer DLC hands back has no notion of
+    which training iteration it came from.
+
+    Placement is load-bearing: the iteration must land BEFORE the
+    `snapshot` token (never after), because `re.search(r'snapshot[_-](.+)$', ...)`
+    elsewhere recovers the snapshot index from the tail of the scorer name.
+    Appending after would corrupt that capture (e.g. "200_iter23" instead
+    of "200").
+
+    Leaves `scorer` completely unchanged if the iteration can't be
+    determined from `snapshot_path`, or if `scorer` has no `snapshot`
+    token to anchor the insertion on. Idempotent: does nothing if the
+    scorer already contains `_iter<N>_`.
+    """
+    if re.search(r'_iter\d+_', scorer):
+        return scorer
+    m_iter = re.search(r'iteration-(\d+)', str(snapshot_path))
+    if not m_iter:
+        return scorer
+    m_snap = re.search(r'snapshot[_-]', scorer, re.IGNORECASE)
+    if not m_snap:
+        return scorer
+    insert_at = m_snap.start()
+    return f"{scorer[:insert_at]}iter{m_iter.group(1)}_{scorer[insert_at:]}"
+
+
 def _resolve_h5_path(video_path, scorer_name):
     """Compute the canonical companion .h5 path for (video, scorer)."""
     p = _IAPath(video_path)
@@ -3130,7 +3161,7 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
             trainset_index=trainingsetindex,
             shuffle=shuffle,
         )
-        scorer       = loader.scorer(snapshot_path)
+        scorer       = _scorer_with_iteration(loader.scorer(snapshot_path), snapshot_path)
         model_cfg    = loader.model_cfg
         multi_animal = bool(loader.project_cfg.get("multianimalproject", False))
         runner = _apis_utils.get_pose_inference_runner(
