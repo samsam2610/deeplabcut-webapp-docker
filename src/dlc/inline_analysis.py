@@ -835,6 +835,23 @@ def triangulate_refilter():
 _PEAKS_FRAME_CAP = 50_000
 
 
+def _peaks_int(body, name, default, lo, hi):
+    """Parse a bounded int argument, raising ValueError (-> 400) rather than
+    letting a string or dict reach int() and surface as a 500."""
+    v = body.get(name, default)
+    if v is None:
+        return int(default)
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+        raise ValueError("{} must be an integer, got {!r}".format(name, v))
+    try:
+        iv = int(v)
+    except (TypeError, ValueError):
+        raise ValueError("{} must be an integer, got {!r}".format(name, v))
+    if not (lo <= iv <= hi):
+        raise ValueError("{} must be in {}..{}, got {}".format(name, lo, hi, iv))
+    return iv
+
+
 def _frames_from_ranges(ranges):
     """Flatten [{start, n}, ...] into a sorted, deduped frame list."""
     out = set()
@@ -923,6 +940,15 @@ def peaks_submit():
     model_dir = str(snap_abs.parent.parent)
     snapshot_name = snap_abs.name
 
+    # Parse the bounded ints BEFORE minting a req_id, so a bad value is a 400
+    # with nothing dispatched rather than a 500 from int() blowing up.
+    try:
+        k = _peaks_int(body, "k", 5, 1, 50)
+        min_distance = _peaks_int(body, "min_distance", 3, 1, 64)
+        batch_size = _peaks_int(body, "batch_size", 1, 1, 64)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
     req_id = uuid.uuid4().hex
     _dispatch_emit_peaks(
         req_id=req_id,
@@ -931,8 +957,9 @@ def peaks_submit():
         frames=frames,
         model_dir=model_dir,
         snapshot_name=snapshot_name,
-        k=int(body.get("k", 5)),
-        min_distance=int(body.get("min_distance", 3)),
+        k=k,
+        min_distance=min_distance,
+        batch_size=batch_size,
     )
     return jsonify({"req_id": req_id}), 202
 

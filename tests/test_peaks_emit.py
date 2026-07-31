@@ -169,3 +169,73 @@ def test_merge_raises_on_k_mismatch():
     new = _mk_sidecar([3], k=5)
     with pytest.raises(ValueError):
         _merge(old, new)
+
+
+# --- read-planning and batching (the perf fix) -----------------------------
+# An earlier version seeked on EVERY frame, which for a contiguous range meant a
+# keyframe re-decode per frame and cost ~3x. These guard the replacement.
+
+from dlc.peaks_emit import _should_seek, _chunks, _SEEK_THRESHOLD
+
+
+def test_unknown_decoder_position_always_seeks():
+    assert _should_seek(None, 0) is True
+    assert _should_seek(None, 500) is True
+
+
+def test_the_next_sequential_frame_never_seeks():
+    """The contiguous case — this is the whole point of the fix."""
+    assert _should_seek(100, 100) is False
+
+
+def test_a_small_forward_gap_reads_rather_than_seeks():
+    assert _should_seek(100, 100 + _SEEK_THRESHOLD) is False
+
+
+def test_a_large_forward_gap_seeks():
+    assert _should_seek(100, 100 + _SEEK_THRESHOLD + 1) is True
+
+
+def test_a_backward_move_always_seeks():
+    """A decoder cannot read backwards."""
+    assert _should_seek(100, 99) is True
+
+
+def test_a_contiguous_range_needs_exactly_one_seek():
+    pos, seeks = None, 0
+    for f in range(200, 400):
+        if _should_seek(pos, f):
+            seeks += 1
+        pos = f + 1
+    assert seeks == 1, "a contiguous range must not re-seek per frame"
+
+
+def test_a_sparse_set_seeks_when_the_stride_is_wide():
+    pos, seeks = None, 0
+    for f in range(0, 2000, _SEEK_THRESHOLD + 10):
+        if _should_seek(pos, f):
+            seeks += 1
+        pos = f + 1
+    assert seeks == len(range(0, 2000, _SEEK_THRESHOLD + 10))
+
+
+def test_chunks_splits_an_exact_multiple():
+    assert list(_chunks([1, 2, 3, 4], 2)) == [[1, 2], [3, 4]]
+
+
+def test_chunks_keeps_the_remainder():
+    assert list(_chunks([1, 2, 3, 4, 5], 2)) == [[1, 2], [3, 4], [5]]
+
+
+def test_chunks_on_empty_input_yields_nothing():
+    assert list(_chunks([], 4)) == []
+
+
+def test_chunks_with_n_larger_than_the_sequence_yields_one_chunk():
+    assert list(_chunks([1, 2], 10)) == [[1, 2]]
+
+
+def test_chunks_never_drops_or_duplicates_an_element():
+    src = list(range(37))
+    flat = [x for c in _chunks(src, 8) for x in c]
+    assert flat == src

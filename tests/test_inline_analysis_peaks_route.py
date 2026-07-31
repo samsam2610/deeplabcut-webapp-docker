@@ -282,3 +282,62 @@ def test_status_reports_a_published_result(client, fake_redis):
 def test_status_of_an_unknown_req_is_pending(client):
     d = client.get("/dlc/project/inline-analysis/peaks/status?req_id=nope").get_json()
     assert d["status"] == "pending"
+
+
+# --- batch_size and the bounded-int guards (perf fix) ----------------------
+# k/min_distance were previously unguarded: int("abc") escaped as a 500.
+
+def _peaks_body(tmp_video, tmp_h5, snapshot_rel, **extra):
+    body = {
+        "video_paths": [str(tmp_video)],
+        "h5_paths": [str(tmp_h5)],
+        "ranges": [{"start": 0, "n": 2}],
+        "snapshot_path": snapshot_rel,
+    }
+    body.update(extra)
+    return body
+
+
+def test_batch_size_defaults_to_one(
+        client, monkeypatch, active_project, tmp_video, tmp_h5,
+        tmp_snapshot, snapshot_rel):
+    sent = {}
+    monkeypatch.setattr("dlc.inline_analysis._dispatch_emit_peaks",
+                        lambda **kw: sent.update(kw))
+    resp = client.post("/dlc/project/inline-analysis/peaks",
+                       json=_peaks_body(tmp_video, tmp_h5, snapshot_rel))
+    assert resp.status_code == 202
+    assert sent["batch_size"] == 1   # bit-identical to the verified pipeline
+
+
+def test_batch_size_is_forwarded_when_given(
+        client, monkeypatch, active_project, tmp_video, tmp_h5,
+        tmp_snapshot, snapshot_rel):
+    sent = {}
+    monkeypatch.setattr("dlc.inline_analysis._dispatch_emit_peaks",
+                        lambda **kw: sent.update(kw))
+    resp = client.post("/dlc/project/inline-analysis/peaks",
+                       json=_peaks_body(tmp_video, tmp_h5, snapshot_rel,
+                                        batch_size=16))
+    assert resp.status_code == 202
+    assert sent["batch_size"] == 16
+
+
+@pytest.mark.parametrize("field,bad", [
+    ("batch_size", "abc"), ("batch_size", 0), ("batch_size", 999),
+    ("k", "abc"), ("k", 0), ("k", 51),
+    ("min_distance", {"a": 1}), ("min_distance", 0),
+])
+def test_bad_bounded_ints_are_400_not_500(
+        client, monkeypatch, active_project, tmp_video, tmp_h5,
+        tmp_snapshot, snapshot_rel, field, bad):
+    """int('abc') reaching the route unguarded surfaced as a 500."""
+    dispatched = []
+    monkeypatch.setattr("dlc.inline_analysis._dispatch_emit_peaks",
+                        lambda **kw: dispatched.append(kw))
+    resp = client.post("/dlc/project/inline-analysis/peaks",
+                       json=_peaks_body(tmp_video, tmp_h5, snapshot_rel,
+                                        **{field: bad}))
+    assert resp.status_code == 400, f"{field}={bad!r} gave {resp.status_code}"
+    assert field in resp.get_json()["error"]
+    assert not dispatched, "nothing may be dispatched on a rejected request"

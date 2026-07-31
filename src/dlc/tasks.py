@@ -3236,7 +3236,7 @@ def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
 # --------------------------------------------------------------------------
 
 def _emit_peaks_inner(redis_, req_id, video_paths, h5_paths, frames,
-                      model_dir, snapshot_name, k, min_distance):
+                      model_dir, snapshot_name, k, min_distance, batch_size=1):
     """Pure-function body, testable without Celery.
 
     Reuses `_publish_result`'s `n_analyzed` field to carry the peak-frame
@@ -3253,7 +3253,7 @@ def _emit_peaks_inner(redis_, req_id, video_paths, h5_paths, frames,
         res = emit_peaks_for_video(
             video_path=video, h5_path=h5, model_dir=model_dir,
             snapshot_name=snapshot_name, frames=frames,
-            k=k, min_distance=min_distance)
+            k=k, min_distance=min_distance, batch_size=batch_size)
         total += int(res["n_frames"])
     _publish_result(redis_, req_id, status="done", n_analyzed=total)
     return total
@@ -3261,14 +3261,15 @@ def _emit_peaks_inner(redis_, req_id, video_paths, h5_paths, frames,
 
 @celery.task(bind=True, name="tasks.dlc_emit_peaks", acks_late=False)
 def dlc_emit_peaks(self, req_id, video_paths, h5_paths, frames,
-                   model_dir, snapshot_name, k=5, min_distance=3):
+                   model_dir, snapshot_name, k=5, min_distance=3, batch_size=1):
     """Additive: never rolls back or touches the pose h5. A failure here only
     marks this request's own result hash as errored — analysis results
     written earlier by _run_range are already on disk and untouched."""
     redis_ = _redis_client_from_celery_app(self)
     try:
         _emit_peaks_inner(redis_, req_id, video_paths, h5_paths, frames,
-                          model_dir, snapshot_name, k, min_distance)
+                          model_dir, snapshot_name, k, min_distance,
+                          batch_size)
     except Exception as exc:                       # noqa: BLE001
         _publish_result(redis_, req_id, status="error", error=str(exc))
         raise

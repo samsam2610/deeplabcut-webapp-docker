@@ -95,6 +95,39 @@ _MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 _STD = np.array([0.229, 0.224, 0.225], np.float32)
 _STRIDE = 2.0
 
+# Reading forward costs one decode per skipped frame; seeking costs a jump back
+# to the nearest keyframe plus a re-decode forward to the target. Typical
+# keyframe intervals in these recordings are a few tens of frames, so skipping
+# wins for small gaps and seeking wins for large ones. 32 sits near that
+# crossover and, crucially, makes a CONTIGUOUS range (gap 0) pure sequential
+# reads -- the case "Start analysis for range" always produces.
+_SEEK_THRESHOLD = 32
+
+
+def _should_seek(decoder_pos, target: int, threshold: int = _SEEK_THRESHOLD) -> bool:
+    """Whether to seek rather than read forward to reach `target`.
+
+    `decoder_pos` is the frame index the next `read()` would return, or None
+    when the position is unknown (start of file, or after a failed read).
+    Backward moves always seek: a decoder cannot read backwards.
+    """
+    if decoder_pos is None or target < decoder_pos:
+        return True
+    return (target - decoder_pos) > int(threshold)
+
+
+def _chunks(seq, n: int):
+    """Yield successive n-sized lists from `seq`, never dropping an element."""
+    n = max(1, int(n))
+    buf = []
+    for item in seq:
+        buf.append(item)
+        if len(buf) == n:
+            yield buf
+            buf = []
+    if buf:
+        yield buf
+
 
 def _peaks_sidecar_path(pose_h5_path) -> Path:
     """Must match dlc_3d_bp.peaks_io.peaks_sidecar_path exactly."""
@@ -102,8 +135,41 @@ def _peaks_sidecar_path(pose_h5_path) -> Path:
     return p.with_name(p.stem + "_peaks.npz")
 
 
+def _read_wanted_frames(cap, frames, cv2):
+    """Yield (index_into_frames, BGR frame) for each frame that reads cleanly.
+
+    Seeks only when the gap justifies it (see `_should_seek`); otherwise reads
+    and discards forward. An earlier version seeked on EVERY frame, which for a
+    contiguous range meant a keyframe re-decode per frame and cost roughly 3x.
+
+    A frame that fails to read is skipped, matching the previous behaviour, and
+    the decoder position is marked unknown so the next frame re-seeks rather
+    than trusting a position the failure may have invalidated.
+    """
+    pos = None                      # frame index the next read() would return
+    for i, fno in enumerate(frames):
+        if _should_seek(pos, fno):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, fno)
+            pos = fno
+        while pos < fno:            # close a small gap by discarding
+            ok, _ = cap.read()
+            if not ok:
+                pos = None
+                break
+            pos += 1
+        if pos is None:
+            continue
+        ok, frame = cap.read()
+        if not ok:
+            pos = None
+            continue
+        pos = fno + 1
+        yield i, frame
+
+
 def emit_peaks_for_video(video_path, h5_path, model_dir, snapshot_name,
-                         frames, k=5, min_distance=3, device=None) -> dict:
+                         frames, k=5, min_distance=3, device=None,
+                         batch_size=1) -> dict:
     """Run the model over `frames` and write/merge the peak sidecar.
 
     `frames` is a sorted list of absolute video frame numbers. Returns
@@ -112,6 +178,17 @@ def emit_peaks_for_video(video_path, h5_path, model_dir, snapshot_name,
     The write is atomic-by-replace: the merged array is written to a temporary
     file in the same directory and renamed, so a crash leaves the previous
     sidecar intact rather than a truncated one.
+
+    `batch_size` defaults to 1, which is BIT-IDENTICAL to the pipeline verified
+    at 0.344 px against the pose h5 (measured: 0.000e+00 difference in both xy
+    and score). Batching perturbs the convolution by ~1.6e-3 because cuDNN
+    selects a different algorithm per batch shape. That is harmless on a sharp
+    heatmap but reshuffles which local maxima win on a FLAT one -- i.e. exactly
+    the low-confidence markers this feature exists to judge. Measured on 200
+    contiguous frames: batch 1 = 14.1 fps, batch 4 = 16.5, batch 8 = 15.6,
+    against 10.1 for the pre-fix code. Video decoding, not the GPU, is the
+    bottleneck, so batching buys ~15% at the cost of fidelity where it matters
+    most. Raise it only if you accept that trade.
     """
     import cv2
     import torch
@@ -145,23 +222,34 @@ def emit_peaks_for_video(video_path, h5_path, model_dir, snapshot_name,
     SC = np.zeros((n, b, k), np.float32)
     got = []
 
-    try:
-        for i, fno in enumerate(frames):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, fno)
-            ok, frame = cap.read()
-            if not ok:
-                continue
-            h, w = frame.shape[:2]
-            H, W = ((h + 31) // 32) * 32, ((w + 31) // 32) * 32
-            im = cv2.copyMakeBorder(frame, 0, H - h, 0, W - w,
-                                    cv2.BORDER_CONSTANT, value=0)
-            rgb = (cv2.cvtColor(im, cv2.COLOR_BGR2RGB).astype(np.float32)
-                   / 255.0 - _MEAN) / _STD
-            t_in = torch.from_numpy(rgb).permute(2, 0, 1)[None].to(device)
-            with torch.no_grad():
-                out = model(t_in)
-            hm = torch.sigmoid(out["bodypart"]["heatmap"])[0].cpu().numpy()
-            lr = out["bodypart"]["locref"][0].cpu().numpy()
+    def _preprocess(frame):
+        """BGR frame -> normalised HWC float32. UNCHANGED from the verified
+        pipeline: native resolution padded to a multiple of 32 (never resized),
+        then ImageNet mean/std after /255."""
+        h, w = frame.shape[:2]
+        H, W = ((h + 31) // 32) * 32, ((w + 31) // 32) * 32
+        im = cv2.copyMakeBorder(frame, 0, H - h, 0, W - w,
+                                cv2.BORDER_CONSTANT, value=0)
+        return (cv2.cvtColor(im, cv2.COLOR_BGR2RGB).astype(np.float32)
+                / 255.0 - _MEAN) / _STD
+
+    def _run_batch(items):
+        """items: list of (index_into_frames, preprocessed HWC array)."""
+        if not items:
+            return
+        # Build a CONTIGUOUS NCHW tensor. Handing cuDNN a permuted (non-
+        # contiguous) view lets it pick a different convolution algorithm, which
+        # perturbs the output at ~1e-3 -- harmless on a sharp heatmap, but on a
+        # flat one it reshuffles which local maxima win.
+        arr = np.ascontiguousarray(
+            np.stack([a for _, a in items], axis=0).transpose(0, 3, 1, 2))
+        t_in = torch.from_numpy(arr).to(device)
+        with torch.no_grad():
+            out = model(t_in)
+        hm_b = torch.sigmoid(out["bodypart"]["heatmap"]).cpu().numpy()
+        lr_b = out["bodypart"]["locref"].cpu().numpy()
+        for slot, (i, _) in enumerate(items):
+            hm, lr = hm_b[slot], lr_b[slot]
             for j in range(b):
                 cells, sc = extract_peaks(hm[j], k=k, min_distance=min_distance)
                 # Padding is bottom/right only, so the origin does not shift,
@@ -176,8 +264,25 @@ def emit_peaks_for_video(video_path, h5_path, model_dir, snapshot_name,
                 XY[i, j] = xy
                 SC[i, j] = sc
             got.append(i)
+
+    try:
+        pending = []
+        for i, frame in _read_wanted_frames(cap, frames, cv2):
+            rgb = _preprocess(frame)
+            # A padded-size change cannot happen within one video, but stacking
+            # would fail silently late if it ever did. Flush instead.
+            if pending and pending[0][1].shape != rgb.shape:
+                _run_batch(pending)
+                pending = []
+            pending.append((i, rgb))
+            if len(pending) >= max(1, int(batch_size)):
+                _run_batch(pending)
+                pending = []
+        _run_batch(pending)
     finally:
         cap.release()
+
+    got.sort()
 
     rows = np.asarray(got, dtype=int)
     new = {
