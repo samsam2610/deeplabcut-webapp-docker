@@ -420,7 +420,7 @@ def analysis_file_initialize():
 
 _UI_SETTING_KEYS = {
     "finalize_window", "clip_window", "postfix_tags", "status_tags", "note_tags",
-    "pose3d_bg_color", "pose3d_view_prefs", "pinned_snapshot",
+    "pose3d_bg_color", "pose3d_view_prefs", "pinned_snapshot", "note_tag_colors",
     "reproj_params", "clip_window_reproj", "finalize_window_reproj",
     "note_tags_reproj", "postfix_tags_reproj", "status_tags_reproj",
     "pose3d_bg_color_reproj", "pose3d_view_prefs_reproj",
