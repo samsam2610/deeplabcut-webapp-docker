@@ -8,6 +8,9 @@ Routes:
   POST /dlc/project/machine-label-reapply
   GET /dlc/training/jobs
   POST /dlc/training/jobs/clear
+  GET /dlc/jobs/all           — unified Jobs-page listing (train/analyze zset +
+                                 Celery inspector + inline-analysis sessions)
+  POST /dlc/jobs/cancel       — kill switch for any row from /dlc/jobs/all
   GET /dlc/gpu/status
 """
 from __future__ import annotations
@@ -20,6 +23,7 @@ from flask import Blueprint, request, jsonify, session as flask_session
 from celery.result import AsyncResult
 from werkzeug.utils import secure_filename
 from . import ctx as _ctx
+from . import inline_analysis as _inline_analysis
 from dlc.utils import _get_engine_queue, _dlc_project_security_check
 
 bp = Blueprint("dlc_monitoring", __name__)
@@ -240,6 +244,54 @@ def _celery_task_status(jid: str) -> str:
     return _ctx.celery().backend.get_task_meta(jid).get("status")
 
 
+_LIVE_CELERY_STATES = {"PENDING", "RECEIVED", "STARTED", "RETRY", "PROGRESS"}
+
+
+def _reconcile_job(redis_key: str, jid: str) -> dict | None:
+    """Read one train/analyze job hash and cross-check it against Celery.
+
+    Moved out of `dlc_training_jobs` (unchanged below, still calls this) so
+    `/dlc/jobs/all` can reuse the exact same reconciliation instead of
+    duplicating it — same body, same behavior, just module-scoped so a
+    second route can call it too.
+    """
+    job = _ctx.redis_client().hgetall(redis_key)
+    if not job:
+        # Orphan: zset still indexes this jid but the backing hash is
+        # gone (partial hard-reset, manual cleanup, TTL surprise…).
+        # Surface a stub so the UI can show + clear it instead of
+        # silently hiding running-but-untracked work.
+        return {"task_id": jid, "status": "orphaned"}
+    # A `triangulate` batch is a FRONTEND-driven aggregate — its id is not a
+    # Celery task, so the Celery reconcile below never applies (a synthetic id
+    # reads as PENDING = "live" forever, which would pin it "running" even after
+    # the browser tab that drove it closed/reloaded mid-batch). Instead, treat a
+    # stale heartbeat (no progress update in _BATCH_STALE_SECS) as abandoned.
+    if job.get("operation") == "triangulate":
+        if job.get("status") == "running":
+            try:
+                last = float(job.get("updated_at") or job.get("started_at") or 0)
+            except (TypeError, ValueError):
+                last = 0.0
+            if last and (time.time() - last) > _BATCH_STALE_SECS:
+                _ctx.redis_client().hset(redis_key, "status", "dead")
+                job["status"] = "dead"
+        return job
+    celery_state = _celery_task_status(jid)
+    if job.get("status") == "running" and celery_state not in _LIVE_CELERY_STATES:
+        _ctx.redis_client().hset(redis_key, "status", "dead")
+        job["status"] = "dead"
+    elif (
+        job.get("status") in ("dead", "stopped")
+        and celery_state in _LIVE_CELERY_STATES
+    ):
+        # Reaper false-positive: Celery still considers the task running.
+        # Trust the live Celery state and flip the Redis flag back.
+        _ctx.redis_client().hset(redis_key, "status", "running")
+        job["status"] = "running"
+    return job
+
+
 @bp.route("/dlc/training/jobs")
 def dlc_training_jobs():
     """Return all training and analyze jobs (running + recent) stored in Redis.
@@ -248,59 +300,282 @@ def dlc_training_jobs():
     is no longer active (e.g. after a container restart), the Redis record is
     updated to 'dead' so the UI unblocks automatically.
     """
-    _LIVE_CELERY_STATES = {"PENDING", "RECEIVED", "STARTED", "RETRY", "PROGRESS"}
-
-    def _reconcile(redis_key: str, jid: str) -> dict | None:
-        job = _ctx.redis_client().hgetall(redis_key)
-        if not job:
-            # Orphan: zset still indexes this jid but the backing hash is
-            # gone (partial hard-reset, manual cleanup, TTL surprise…).
-            # Surface a stub so the UI can show + clear it instead of
-            # silently hiding running-but-untracked work.
-            return {"task_id": jid, "status": "orphaned"}
-        # A `triangulate` batch is a FRONTEND-driven aggregate — its id is not a
-        # Celery task, so the Celery reconcile below never applies (a synthetic id
-        # reads as PENDING = "live" forever, which would pin it "running" even after
-        # the browser tab that drove it closed/reloaded mid-batch). Instead, treat a
-        # stale heartbeat (no progress update in _BATCH_STALE_SECS) as abandoned.
-        if job.get("operation") == "triangulate":
-            if job.get("status") == "running":
-                try:
-                    last = float(job.get("updated_at") or job.get("started_at") or 0)
-                except (TypeError, ValueError):
-                    last = 0.0
-                if last and (time.time() - last) > _BATCH_STALE_SECS:
-                    _ctx.redis_client().hset(redis_key, "status", "dead")
-                    job["status"] = "dead"
-            return job
-        celery_state = _celery_task_status(jid)
-        if job.get("status") == "running" and celery_state not in _LIVE_CELERY_STATES:
-            _ctx.redis_client().hset(redis_key, "status", "dead")
-            job["status"] = "dead"
-        elif (
-            job.get("status") in ("dead", "stopped")
-            and celery_state in _LIVE_CELERY_STATES
-        ):
-            # Reaper false-positive: Celery still considers the task running.
-            # Trust the live Celery state and flip the Redis flag back.
-            _ctx.redis_client().hset(redis_key, "status", "running")
-            job["status"] = "running"
-        return job
-
     jobs = []
     for jid in _ctx.redis_client().zrevrange("dlc_train_jobs", 0, 49):
-        job = _reconcile("dlc_train_job:" + jid, jid)
+        job = _reconcile_job("dlc_train_job:" + jid, jid)
         if job:
             job.setdefault("operation", "train")
             jobs.append(job)
     for jid in _ctx.redis_client().zrevrange("dlc_analyze_jobs", 0, 49):
-        job = _reconcile("dlc_analyze_job:" + jid, jid)
+        job = _reconcile_job("dlc_analyze_job:" + jid, jid)
         if job:
             jobs.append(job)
 
     # Sort combined list by started_at descending
     jobs.sort(key=lambda j: float(j.get("started_at", 0)), reverse=True)
     return jsonify({"jobs": jobs[:50]})
+
+
+# ── Unified Jobs page (/dlc/jobs/all + /dlc/jobs/cancel) ──────────────────
+#
+# Every row on the wire has the same shape, regardless of which of the three
+# sources it came from:
+#
+#   id           str   — task_id for a Celery-backed row; "<user_id>:<snap_key>"
+#                         for an inline-analysis session row (there is no task_id
+#                         for a warm session — see module docstring / f0f71be).
+#                         This is exactly what the client echoes back to
+#                         POST /dlc/jobs/cancel.
+#   type         str   — "celery" | "inline" — selects the cancel dispatch.
+#   kind         str   — finer operation label: "train", "analyze",
+#                         "triangulate", a bare Celery task name (e.g.
+#                         "tasks.dlc_emit_peaks") for inspector-only rows, or
+#                         "inline_session".
+#   label        str   — human-readable one-line summary for the row.
+#   state        str   — "running" | "reserved" | "paused" | "complete" |
+#                         "failed" | "dead" | "stopped" | "orphaned" |
+#                         "warming" | "ready" | "expired" | "error" | ...
+#   started_at   float | None — epoch seconds, for sorting/runtime display.
+#   detail       dict  — free-form extra fields (project, worker, pending, …).
+#   cancellable  bool  — whether POST /dlc/jobs/cancel accepts this row.
+#
+# De-duplication: a train/analyze task dispatched via send_task can show up
+# in BOTH the `dlc_train_jobs`/`dlc_analyze_jobs` zsets (written by the task
+# itself) and the Celery inspector's `active`/`reserved` output (read straight
+# from the worker). They're keyed on the same task_id, so the zset record
+# (richer: project, stage, engine, gpu_id, …) wins over the bare inspector
+# record when both are present.
+
+_CELERY_INSPECT_TIMEOUT = 1.5  # seconds — page must never block on a sick worker
+
+
+def _to_float(v) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_from_zset_job(job: dict) -> dict:
+    """Turn one reconciled `dlc_train_job:*`/`dlc_analyze_job:*` hash into a
+    unified-jobs row. `job` is the dict `_reconcile_job` returns."""
+    op = job.get("operation") or "train"
+    status = job.get("status", "unknown")
+    task_id = job.get("task_id", "")
+    project = job.get("project") or job.get("target_path") or task_id
+    detail = {k: v for k, v in job.items()
+              if k not in ("task_id", "status", "operation", "started_at")}
+    return {
+        "id":          task_id,
+        "type":        "celery",
+        "kind":        op,
+        "label":       f"{op} — {project}" if project else op,
+        "state":       status,
+        "started_at":  _to_float(job.get("started_at")),
+        "detail":      detail,
+        "cancellable": status in ("running", "paused"),
+    }
+
+
+def _zset_rows() -> list[dict]:
+    """Rows sourced from `dlc_train_jobs` + `dlc_analyze_jobs`, reusing the
+    exact reconciliation `/dlc/training/jobs` already performs (see
+    `_reconcile_job`) — item (a) of the unified-jobs merge."""
+    rows = []
+    for jid in _ctx.redis_client().zrevrange("dlc_train_jobs", 0, 49):
+        job = _reconcile_job("dlc_train_job:" + jid, jid)
+        if job:
+            job.setdefault("operation", "train")
+            rows.append(_row_from_zset_job(job))
+    for jid in _ctx.redis_client().zrevrange("dlc_analyze_jobs", 0, 49):
+        job = _reconcile_job("dlc_analyze_job:" + jid, jid)
+        if job:
+            rows.append(_row_from_zset_job(job))
+    return rows
+
+
+def _row_from_inspect_task(task: dict, worker: str, state: str) -> dict:
+    name = task.get("name") or ""
+    tid = task.get("id") or ""
+    return {
+        "id":          tid,
+        "type":        "celery",
+        "kind":        name or "celery_task",
+        "label":       f"{name or 'celery task'} ({worker})",
+        "state":       state,
+        "started_at":  _to_float(task.get("time_start")),
+        "detail":      {"worker": worker, "args": task.get("args"),
+                         "kwargs": task.get("kwargs")},
+        "cancellable": bool(tid),
+    }
+
+
+def _celery_inspect_rows() -> tuple[list[dict], bool]:
+    """Rows from Celery's live `inspect().active()` + `.reserved()` — item (b)
+    of the unified-jobs merge. Catches `tasks.dlc_emit_peaks`, the LP tasks on
+    the `lp_3d` queue, `tasks.process_triangulate_range`, and analyze-video
+    with NO producer-side changes, because we read the worker's live state
+    directly instead of relying on a Redis record any of those tasks would
+    have had to opt into writing.
+
+    Bounded to a short timeout (`_CELERY_INSPECT_TIMEOUT`) and never raises —
+    on any error, OR if the inspector got no reply at all (both `active()`
+    and `reserved()` come back `None`, which is what a timed-out/unreachable
+    inspect looks like), returns `([], False)` so the caller can degrade
+    gracefully instead of hanging the whole /jobs page on a sick worker.
+    """
+    try:
+        insp = _ctx.celery().control.inspect(timeout=_CELERY_INSPECT_TIMEOUT)
+        active = insp.active()
+        reserved = insp.reserved()
+    except Exception:
+        return [], False
+    if active is None and reserved is None:
+        return [], False
+    rows = []
+    for worker, tasks in (active or {}).items():
+        for t in tasks:
+            rows.append(_row_from_inspect_task(t, worker, "running"))
+    for worker, tasks in (reserved or {}).items():
+        for t in tasks:
+            rows.append(_row_from_inspect_task(t, worker, "reserved"))
+    return rows, True
+
+
+def _inline_session_rows() -> list[dict]:
+    """Rows from warm inline-analysis sessions — item (c) of the unified-jobs
+    merge. One row per `inline:session:<user_id>:<snap_key>` hash, carrying
+    the pending count from `LLEN inline:queue:<user_id>:<snap_key>` so a
+    stranded queue (the session's Celery task died / lost its race with a
+    stop signal — see f0f71be) is discoverable and clearable even after the
+    session itself is no longer "running". That's why these rows are always
+    cancellable: cancelling just sets the stop key and drops the queue, which
+    is safe (and the whole point) whether or not a consumer is still alive.
+    """
+    r = _ctx.redis_client()
+    rows = []
+    for key in r.scan_iter("inline:session:*"):
+        parts = key.split(":", 3)  # ["inline", "session", user_id, snap_key]
+        if len(parts) != 4:
+            continue
+        _, _, user_id, snap_key = parts
+        h = r.hgetall(key) or {}
+        if not h:
+            continue
+        queue_key = f"inline:queue:{user_id}:{snap_key}"
+        pending = r.llen(queue_key)
+        status = h.get("status", "unknown")
+        project = h.get("project", "")
+        snapshot = Path(h.get("snapshot_path", "") or "").name
+        plural = "" if pending == 1 else "s"
+        rows.append({
+            "id":          f"{user_id}:{snap_key}",
+            "type":        "inline",
+            "kind":        "inline_session",
+            "label":       f"inline analysis — {project or 'unknown project'} "
+                           f"— {pending} pending range{plural}",
+            "state":       status,
+            "started_at":  _to_float(h.get("started_at")),
+            "detail": {
+                "project":     project,
+                "snapshot":    snapshot,
+                "snap_key":    snap_key,
+                "user_id":     user_id,
+                "pending":     pending,
+            },
+            "cancellable": True,
+        })
+    return rows
+
+
+@bp.route("/dlc/jobs/all")
+def dlc_jobs_all():
+    """Unified Jobs-page listing: merge (a) the train/analyze zset jobs,
+    (b) Celery's live active+reserved inspector output, and (c) warm
+    inline-analysis sessions into one flat, de-duplicated list. See the
+    row-shape docstring above `_CELERY_INSPECT_TIMEOUT`.
+
+    Never blocks on a sick/slow worker: the Celery inspector is bounded to
+    `_CELERY_INSPECT_TIMEOUT` seconds and degrades to `celery_reachable:
+    false` (with the other two sources still returned) instead of hanging
+    or erroring the whole response.
+    """
+    by_id: dict[str, dict] = {}
+    inspect_rows, celery_reachable = _celery_inspect_rows()
+    for row in inspect_rows:
+        if row["id"]:
+            by_id[row["id"]] = row
+    for row in _zset_rows():
+        # Same task_id may already be present from the inspector — the zset
+        # record is richer (project, stage, engine, gpu_id, …), so it wins.
+        if row["id"]:
+            by_id[row["id"]] = row
+
+    jobs = list(by_id.values()) + _inline_session_rows()
+    jobs.sort(key=lambda j: j.get("started_at") or 0, reverse=True)
+    return jsonify({"jobs": jobs, "celery_reachable": celery_reachable})
+
+
+@bp.route("/dlc/jobs/cancel", methods=["POST"])
+def dlc_jobs_cancel():
+    """Kill switch for any row returned by GET /dlc/jobs/all. Body: {id, type}.
+
+    type == "celery":
+        `_ctx.celery().control.revoke(task_id, terminate=True)`. terminate=True
+        is REQUIRED and deliberate — this is a kill switch that stops running
+        work, not merely a "don't start this later" (that softer semantics is
+        exactly what /dlc/training/queue/cancel — terminate=False — already
+        provides for queued-but-not-started tasks; that endpoint is untouched
+        and has different semantics on purpose).
+
+        Safety notes — read before "helpfully" changing terminate=False:
+          - h5 writes go through `_atomic_write_h5` (temp-then-rename), so a
+            terminate mid-write cannot corrupt an existing file: only the
+            in-flight range is lost, never the file.
+          - terminate=True kills the prefork CHILD PROCESS. For the warm
+            inline-analysis session task (`tasks.dlc_inline_session`) that
+            also drops the loaded model and any sibling range mid-flight in
+            that same worker process — not just the targeted task. That's an
+            accepted, understood tradeoff for a kill switch, not a bug.
+
+    type == "inline":
+        `id` is "<user_id>:<snap_key>" (see `_inline_session_rows`). Same
+        effect as an explicit (non-only_if_idle) POST .../session/stop: sets
+        `inline:control:<user_id>:<snap_key>` = "stop" AND deletes
+        `inline:queue:<user_id>:<snap_key>` via the shared
+        `_inline_analysis._explicit_session_stop` helper (reused from
+        f0f71be) — a cancel from the Jobs page must not orphan the queue
+        either, that's the original 522-stranded-ranges bug.
+
+    Never dispatches with an empty id (an empty revoke id can broadcast far
+    more broadly than intended). Unknown/absent type or id -> 400.
+    """
+    body = request.get_json(silent=True) or {}
+    job_id = (body.get("id") or "").strip()
+    job_type = (body.get("type") or "").strip()
+
+    if job_type not in ("celery", "inline"):
+        return jsonify({"error": "type must be 'celery' or 'inline'"}), 400
+    if not job_id:
+        return jsonify({"error": "id is required"}), 400
+
+    if job_type == "celery":
+        _ctx.celery().control.revoke(job_id, terminate=True)
+        return jsonify({"cancelled": True, "type": "celery", "cleared": None})
+
+    # type == "inline"
+    if ":" not in job_id:
+        return jsonify({
+            "error": "invalid inline id, expected '<user_id>:<snap_key>'"
+        }), 400
+    user_id, snap_key = job_id.split(":", 1)
+    if not user_id or not snap_key:
+        return jsonify({
+            "error": "invalid inline id, expected '<user_id>:<snap_key>'"
+        }), 400
+    cleared = _inline_analysis._explicit_session_stop(
+        _ctx.redis_client(), user_id, snap_key)
+    return jsonify({"cancelled": True, "type": "inline", "cleared": cleared})
 
 
 @bp.route("/dlc/training/jobs/clear", methods=["POST"])

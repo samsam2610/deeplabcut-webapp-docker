@@ -273,6 +273,25 @@ def session_status():
     return jsonify(out)
 
 
+def _explicit_session_stop(redis_, user_id: str, snap_key: str) -> int:
+    """Unconditionally stop a warm inline-analysis session and drop its
+    pending queue. Returns the number of queued-but-undrained ranges that
+    were discarded.
+
+    Shared by two "deliberate cancel" call sites — POST .../session/stop
+    (only_if_idle absent/false) and dlc.monitoring's `/dlc/jobs/cancel`
+    (type="inline") — so both stop the session AND clear the queue rather
+    than leaving it to be drained later, which is what stranded 522 ranges
+    across four users before f0f71be.
+    """
+    control_key = f"inline:control:{user_id}:{snap_key}"
+    queue_key = f"inline:queue:{user_id}:{snap_key}"
+    cleared = redis_.llen(queue_key)
+    redis_.set(control_key, "stop", ex=60)
+    redis_.delete(queue_key)
+    return cleared
+
+
 @bp.route("/dlc/project/inline-analysis/session/stop", methods=["POST"])
 def session_stop():
     """Stop a warm inline-analysis session.
@@ -306,9 +325,7 @@ def session_stop():
         redis.set(control_key, "stop", ex=60)
         return jsonify({"stopped": True, "pending": 0})
 
-    cleared = redis.llen(queue_key)
-    redis.set(control_key, "stop", ex=60)
-    redis.delete(queue_key)
+    cleared = _explicit_session_stop(redis, user_id, snap_key)
     return jsonify({"stopped": True, "cleared": cleared})
 
 

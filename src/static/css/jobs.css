@@ -35,6 +35,15 @@
 .jobs-status-pill.closed { color: var(--text-dim); }
 .jobs-status-pill.error  { color: #f85149; border-color: #f85149; }
 
+.jobs-celery-warn {
+  font-size: .72rem;
+  color: #d29922;
+  padding: .15rem .55rem;
+  border-radius: 999px;
+  background: rgba(210, 153, 34, .12);
+  border: 1px solid #d29922;
+}
+
 .jobs-layout {
   display: flex;
   gap: 1rem;
@@ -81,6 +90,22 @@
   gap: .55rem;
   flex-wrap: wrap;
 }
+
+.jobs-row-cancel-wrap {
+  margin-top: .3rem;
+  display: flex;
+}
+.jobs-row-cancel-btn {
+  padding: .18rem .6rem;
+  font-size: .68rem;
+  background: transparent;
+  color: #f85149;
+  border: 1px solid #f85149;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.jobs-row-cancel-btn:hover    { background: rgba(248, 81, 73, .12); }
+.jobs-row-cancel-btn:disabled { opacity: .5; cursor: not-allowed; }
 
 .jobs-empty {
   padding: 1rem .9rem;
