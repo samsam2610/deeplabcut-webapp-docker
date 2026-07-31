@@ -75,3 +75,17 @@ def test_pose3d_view_prefs_round_trip(tag_client):
     got = tag_client.get("/dlc/project/ui-setting?key=pose3d_view_prefs")
     assert got.status_code == 200
     assert got.get_json()["value"] == value
+
+
+def test_pinned_snapshot_key_allowed():
+    from dlc import inline_analysis
+    assert "pinned_snapshot" in inline_analysis._UI_SETTING_KEYS
+
+
+def test_pinned_snapshot_round_trip(tag_client):
+    value = "dlc-models-pytorch/iteration-23/foo/train/snapshot-200.pt"
+    post = tag_client.post("/dlc/project/ui-setting", json={"key": "pinned_snapshot", "value": value})
+    assert post.status_code == 200, post.get_json()
+    got = tag_client.get("/dlc/project/ui-setting?key=pinned_snapshot")
+    assert got.status_code == 200
+    assert got.get_json()["value"] == value
