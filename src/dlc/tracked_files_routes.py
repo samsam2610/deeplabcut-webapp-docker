@@ -22,6 +22,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request
 
 from . import ctx as _ctx
+from . import progress_bar as _progress
 from . import tracked_files as _store
 from .labeling import _dlc_key, _sec_check
 
@@ -72,6 +73,11 @@ def list_tracked_files():
         rows = _store.list_tracked(pp)
     except sqlite3.Error as exc:
         return jsonify({"error": f"tracked-files DB error: {exc}"}), 500
+    paths = [r["path"] for r in rows]
+    try:
+        values = _progress.get_values(pp, paths)
+    except sqlite3.Error:
+        values = {}          # progress is decorative here; never fail the listing
     files = [
         {
             "path": r["path"],
@@ -79,6 +85,7 @@ def list_tracked_files():
             "dir": str(Path(r["path"]).parent),
             "tracked_at": r["tracked_at"],
             "last_opened_at": r["last_opened_at"],
+            "progress": values.get(r["path"], {}),
         }
         for r in rows
     ]

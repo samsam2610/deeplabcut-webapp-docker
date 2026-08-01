@@ -188,6 +188,7 @@ from dlc.task_control import bp as _dlc_task_control_bp
 from dlc.vlm_routes import bp as _dlc_vlm_bp
 from dlc.posture_routes import bp as _dlc_posture_bp
 from dlc.tracked_files_routes import bp as _dlc_tracked_files_bp
+from dlc.progress_bar_routes import bp as _dlc_progress_bar_bp
 from dlc.postprocess import bp as _dlc_postprocess_bp
 
 app.register_blueprint(_dlc_project_bp)
@@ -205,6 +206,7 @@ app.register_blueprint(_dlc_task_control_bp)
 app.register_blueprint(_dlc_vlm_bp)
 app.register_blueprint(_dlc_posture_bp)
 app.register_blueprint(_dlc_tracked_files_bp)
+app.register_blueprint(_dlc_progress_bar_bp)
 app.register_blueprint(_dlc_postprocess_bp)
 
 # ── Register Anipose Blueprints ───────────────────────────────────
