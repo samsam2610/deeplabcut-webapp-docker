@@ -1,133 +1,124 @@
 """
-Tracked video files, persisted in <project>/tracked_files.sqlite.
+Tracked video files, keyed by the surrogate video_id from tracked_db.
 
-The user marks a video as "tracked" so it can be reopened later without
-re-navigating to its folder. Identity is the absolute video path, stored
-verbatim — no realpath/symlink resolution, so the stored path always matches
-what the UI shows in its breadcrumb.
+Tracking marks a video for quick reopening. Identity is the video_id, never the
+path, so renaming or moving a file (an UPDATE of video.path) leaves the tracked
+flag and its timestamps untouched.
 
-This module imports no Flask, no DLC, no Redis, and never touches the
-filesystem beyond its own DB file — it can be unit-tested against tmp_path.
-Existence of a tracked path is deliberately NOT checked here; a missing file
-is discovered when the user tries to open it.
+Untracking deletes the tracked row but NEVER the video row: the identity — and
+therefore the file's progress values and history — survives, so re-tracking the
+same path returns the same id.
 
-Schema (v1):
-    tracked(video_path TEXT PRIMARY KEY, tracked_at TEXT NOT NULL,
-            last_opened_at TEXT)
-    meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)
-        meta keys: schema_version="1"
+Imports no Flask, no DLC, no Redis, and never touches the filesystem.
 """
 from __future__ import annotations
 
-import sqlite3
-import time
-from contextlib import contextmanager
-from pathlib import Path
-
-DB_FILENAME = "tracked_files.sqlite"
-SCHEMA_VERSION = "1"
-
-
-def _db_path(project_path) -> Path:
-    return Path(project_path) / DB_FILENAME
-
-
-@contextmanager
-def _connect(project_path):
-    """Open the SQLite DB, applying schema on first use. Per-call connection."""
-    conn = sqlite3.connect(str(_db_path(project_path)), isolation_level=None)
-    conn.execute("PRAGMA journal_mode=WAL")
-    try:
-        _ensure_schema(conn)
-        yield conn
-    finally:
-        conn.close()
-
-
-def _ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS tracked (
-            video_path     TEXT PRIMARY KEY,
-            tracked_at     TEXT NOT NULL,
-            last_opened_at TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS meta (
-            key   TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-    """)
-    cur = conn.execute("SELECT value FROM meta WHERE key='schema_version'")
-    if cur.fetchone() is None:
-        conn.execute("INSERT INTO meta(key, value) VALUES (?, ?)",
-                     ("schema_version", SCHEMA_VERSION))
-
-
-def _now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+from .tracked_db import (  # noqa: F401  (DB_FILENAME re-exported for callers)
+    DB_FILENAME, audit, connect, db_path, ensure_video, now, video_id_for_path,
+)
 
 
 def list_tracked(project_path) -> list:
-    """Every tracked video, most recently opened first, never-opened last.
+    """Tracked videos, most recently opened first, never-opened last.
 
-    SQLite has no NULLS LAST, hence the explicit `(last_opened_at IS NULL)`
-    leading sort key.
+    SQLite has no NULLS LAST, hence the explicit leading sort key.
     """
-    if not _db_path(project_path).is_file():
+    if not db_path(project_path).is_file():
         return []
-    with _connect(project_path) as conn:
-        rows = conn.execute(
-            "SELECT video_path, tracked_at, last_opened_at FROM tracked "
-            "ORDER BY (last_opened_at IS NULL), last_opened_at DESC, tracked_at DESC"
-        ).fetchall()
-    return [{"path": p, "tracked_at": t, "last_opened_at": o} for (p, t, o) in rows]
+    with connect(project_path) as conn:
+        rows = conn.execute("""
+            SELECT t.video_id, v.path, t.tracked_at, t.last_opened_at
+            FROM tracked t JOIN video v ON v.video_id = t.video_id
+            ORDER BY (t.last_opened_at IS NULL), t.last_opened_at DESC, t.tracked_at DESC
+        """).fetchall()
+    return [{"video_id": r[0], "path": r[1], "tracked_at": r[2], "last_opened_at": r[3]}
+            for r in rows]
 
 
-def track(project_path, video_path: str) -> None:
-    """Start tracking `video_path`. Idempotent: re-tracking preserves the
-    existing tracked_at and last_opened_at."""
-    with _connect(project_path) as conn:
+def track(project_path, path: str, actor=None, size_bytes=None, frame_count=None) -> str:
+    """Start tracking `path`; returns its video_id. Idempotent: re-tracking
+    preserves tracked_at, last_opened_at and the id."""
+    with connect(project_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute(
-                "INSERT OR IGNORE INTO tracked(video_path, tracked_at, last_opened_at) "
-                "VALUES (?, ?, NULL)",
-                (video_path, _now()),
-            )
+            vid = ensure_video(conn, path, actor=actor,
+                               size_bytes=size_bytes, frame_count=frame_count)
+            existing = conn.execute(
+                "SELECT 1 FROM tracked WHERE video_id=?", (vid,)).fetchone()
+            if not existing:
+                stamp = now()
+                conn.execute(
+                    "INSERT INTO tracked(video_id, tracked_at, last_opened_at) "
+                    "VALUES (?,?,NULL)", (vid, stamp))
+                audit(conn, actor, "tracked", vid, "track", None,
+                      {"path": path, "tracked_at": stamp})
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
+    return vid
 
 
-def untrack(project_path, video_path: str) -> None:
-    """Stop tracking `video_path`. No-op when it was never tracked."""
-    if not _db_path(project_path).is_file():
+def untrack(project_path, video_id: str, actor=None) -> None:
+    """Stop tracking. The video row (identity, fingerprint, progress values)
+    is deliberately left in place."""
+    if not db_path(project_path).is_file():
         return
-    with _connect(project_path) as conn:
+    with connect(project_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute("DELETE FROM tracked WHERE video_path=?", (video_path,))
+            row = conn.execute(
+                "SELECT tracked_at, last_opened_at FROM tracked WHERE video_id=?",
+                (video_id,)).fetchone()
+            if row:
+                conn.execute("DELETE FROM tracked WHERE video_id=?", (video_id,))
+                audit(conn, actor, "tracked", video_id, "untrack",
+                      {"tracked_at": row[0], "last_opened_at": row[1]}, None)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
 
 
-def touch_opened(project_path, video_path: str) -> None:
-    """Stamp last_opened_at=now, but ONLY if the row already exists — opening
-    an untracked video must never create a tracked row."""
-    if not _db_path(project_path).is_file():
+def touch_opened(project_path, video_id: str, actor=None,
+                 size_bytes=None, frame_count=None) -> None:
+    """Stamp last_opened_at, and backfill the video's metrics if supplied.
+
+    Only stamps an EXISTING tracked row — opening an untracked video must never
+    start tracking it.
+    """
+    if not db_path(project_path).is_file():
         return
-    with _connect(project_path) as conn:
+    with connect(project_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute(
-                "UPDATE tracked SET last_opened_at=? WHERE video_path=?",
-                (_now(), video_path),
-            )
+            row = conn.execute(
+                "SELECT last_opened_at, (SELECT path FROM video WHERE video_id=?) "
+                "FROM tracked WHERE video_id=?", (video_id, video_id)).fetchone()
+            if row:
+                stamp = now()
+                conn.execute("UPDATE tracked SET last_opened_at=? WHERE video_id=?",
+                             (stamp, video_id))
+                audit(conn, actor, "tracked", video_id, "mark_opened",
+                      {"last_opened_at": row[0]}, {"last_opened_at": stamp})
+                if size_bytes is not None and frame_count is not None:
+                    ensure_video(conn, row[1], actor=actor,
+                                 size_bytes=size_bytes, frame_count=frame_count)
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
+
+
+def resolve(project_path, video_id=None, path=None):
+    """Return an existing video_id from either key, or None. Never creates."""
+    if not db_path(project_path).is_file():
+        return None
+    with connect(project_path) as conn:
+        if video_id:
+            row = conn.execute(
+                "SELECT video_id FROM video WHERE video_id=?", (video_id,)).fetchone()
+            return row[0] if row else None
+        if path:
+            return video_id_for_path(conn, path)
+    return None
