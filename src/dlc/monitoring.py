@@ -334,7 +334,9 @@ def dlc_training_jobs():
 #   label        str   — human-readable one-line summary for the row.
 #   state        str   — "running" | "reserved" | "paused" | "complete" |
 #                         "failed" | "dead" | "stopped" | "orphaned" |
-#                         "warming" | "ready" | "expired" | "error" | ...
+#                         "warming" | "ready" | "expired" | "error" |
+#                         "stranded" (inline queue with no session — see
+#                         `_inline_session_rows`) | ...
 #   started_at   float | None — epoch seconds, for sorting/runtime display.
 #   detail       dict  — free-form extra fields (project, worker, pending, …).
 #   cancellable  bool  — whether POST /dlc/jobs/cancel accepts this row.
@@ -442,39 +444,95 @@ def _celery_inspect_rows() -> tuple[list[dict], bool]:
     return rows, True
 
 
+def _parse_inline_suffix(key: str, prefix: str) -> tuple[str, str] | None:
+    """Split `inline:<prefix>:<user_id>:<snap_key>` into (user_id, snap_key).
+
+    Splits on the KNOWN prefix (not a naive `split(":")` count) so this holds
+    up even if `snap_key` or `user_id` ever contained a colon. Returns None
+    for anything that doesn't match cleanly — a malformed key must be
+    skipped, never raise and take the whole `/dlc/jobs/all` endpoint down.
+    """
+    full_prefix = f"inline:{prefix}:"
+    if not key.startswith(full_prefix):
+        return None
+    rest = key[len(full_prefix):]
+    if ":" not in rest:
+        return None
+    user_id, snap_key = rest.split(":", 1)
+    if not user_id or not snap_key:
+        return None
+    return user_id, snap_key
+
+
 def _inline_session_rows() -> list[dict]:
-    """Rows from warm inline-analysis sessions — item (c) of the unified-jobs
-    merge. One row per `inline:session:<user_id>:<snap_key>` hash, carrying
-    the pending count from `LLEN inline:queue:<user_id>:<snap_key>` so a
-    stranded queue (the session's Celery task died / lost its race with a
-    stop signal — see f0f71be) is discoverable and clearable even after the
-    session itself is no longer "running". That's why these rows are always
-    cancellable: cancelling just sets the stop key and drops the queue, which
-    is safe (and the whole point) whether or not a consumer is still alive.
+    """Rows from inline-analysis sessions/queues — item (c) of the unified-
+    jobs merge. One row per `<user_id>:<snap_key>` suffix seen across the
+    UNION of `inline:session:*` and `inline:queue:*` keys (not just
+    `inline:session:*` — a queue can outlive its session, see below).
+
+    Each suffix lands in one of three states:
+      - session + non-empty (or absent) queue: normal row, `state` is the
+        session's own status, pending count from LLEN.
+      - session, empty/absent queue: idle warm session, nothing pending.
+      - queue, NO session: **STRANDED** — the session's Celery task died or
+        lost its race with a stop signal (see f0f71be) and nothing is left
+        to drain this queue. `inline:session:*`-only scanning made this case
+        invisible, which is exactly the stranded-work state the Jobs page
+        exists to surface (261 ranges stranded once, 522 across four users
+        before that). Reported prominently: `state` is the literal
+        "stranded", distinct from any real session status.
+
+    No project/snapshot metadata exists for a stranded row (that lived only
+    in the session hash, which is gone) — it is left empty rather than
+    fabricated.
+
+    All rows are cancellable: cancelling just sets the stop key and drops
+    the queue (see `_inline_analysis._explicit_session_stop`), which works
+    whether or not a session hash exists.
     """
     r = _ctx.redis_client()
-    rows = []
+
+    suffixes: set[tuple[str, str]] = set()
     for key in r.scan_iter("inline:session:*"):
-        parts = key.split(":", 3)  # ["inline", "session", user_id, snap_key]
-        if len(parts) != 4:
-            continue
-        _, _, user_id, snap_key = parts
-        h = r.hgetall(key) or {}
-        if not h:
-            continue
+        parsed = _parse_inline_suffix(key, "session")
+        if parsed:
+            suffixes.add(parsed)
+    for key in r.scan_iter("inline:queue:*"):
+        parsed = _parse_inline_suffix(key, "queue")
+        if parsed:
+            suffixes.add(parsed)
+
+    rows = []
+    for user_id, snap_key in sorted(suffixes):
+        session_key = f"inline:session:{user_id}:{snap_key}"
         queue_key = f"inline:queue:{user_id}:{snap_key}"
+        h = r.hgetall(session_key) or {}
         pending = r.llen(queue_key)
-        status = h.get("status", "unknown")
+        stranded = not h
+        if stranded and pending == 0:
+            # Session hash and queue both gone/empty by the time we got
+            # here (e.g. drained between the scan and this read) — nothing
+            # left to show for this suffix.
+            continue
+
         project = h.get("project", "")
         snapshot = Path(h.get("snapshot_path", "") or "").name
         plural = "" if pending == 1 else "s"
+        if stranded:
+            state = "stranded"
+            label = (f"inline analysis — STRANDED (no active session) — "
+                      f"{pending} pending range{plural}")
+        else:
+            state = h.get("status", "unknown")
+            label = (f"inline analysis — {project or 'unknown project'} "
+                      f"— {pending} pending range{plural}")
+
         rows.append({
             "id":          f"{user_id}:{snap_key}",
             "type":        "inline",
             "kind":        "inline_session",
-            "label":       f"inline analysis — {project or 'unknown project'} "
-                           f"— {pending} pending range{plural}",
-            "state":       status,
+            "label":       label,
+            "state":       state,
             "started_at":  _to_float(h.get("started_at")),
             "detail": {
                 "project":     project,
@@ -482,6 +540,7 @@ def _inline_session_rows() -> list[dict]:
                 "snap_key":    snap_key,
                 "user_id":     user_id,
                 "pending":     pending,
+                "stranded":    stranded,
             },
             "cancellable": True,
         })

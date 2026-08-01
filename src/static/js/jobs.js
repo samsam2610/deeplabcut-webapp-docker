@@ -59,6 +59,10 @@ function _cancelConfirmText(job) {
   if (job.type === "inline") {
     const pending = (job.detail && job.detail.pending) || 0;
     const noun = pending === 1 ? "range" : "ranges";
+    if (_isStranded(job)) {
+      return `Discard stranded inline-analysis queue?\n\nNo worker is ` +
+        `draining this queue — ${pending} pending ${noun} will be discarded.`;
+    }
     return `Cancel inline analysis?\n\n${pending} pending ${noun} will be discarded.`;
   }
   const label = job.label || job.kind || "this task";
@@ -68,6 +72,15 @@ function _cancelConfirmText(job) {
 
 function _isCancellable(job) {
   return !!(job && job.cancellable);
+}
+
+// A "stranded" inline row is a queue with pending ranges and NO session
+// left to drain it (see dlc.monitoring._inline_session_rows) — the exact
+// state the Jobs page exists to surface, so it must read as visibly
+// distinct from a normal running/idle job, not blend in.
+function _isStranded(job) {
+  return !!(job && (job.state === "stranded" ||
+    (job.detail && job.detail.stranded)));
 }
 
 // ─── Rail rendering ──────────────────────────────────────────────────────
@@ -86,6 +99,7 @@ function _statusGlyph(state) {
     expired:  "■",   // ■
     stopped:  "■",
     stopping: "■",
+    stranded: "⛔",   // ⛔ — queue with no worker draining it, not "running"
   })[state] || "·";
 }
 
@@ -104,6 +118,7 @@ function _statusColor(state) {
     stopped:  "var(--text-dim)",
     stopping: "var(--text-dim)",
     expired:  "var(--text-dim)",
+    stranded: "#f85149",
   })[state] || "var(--text-dim)";
 }
 
@@ -136,10 +151,11 @@ function _renderRail(jobs) {
     const kind = j.kind || j.type || "job";
     const state = j.state || "";
     const isSel = id === State.selectedId ? "selected" : "";
+    const stranded = _isStranded(j) ? "jobs-row-stranded" : "";
     const project = (j.detail && (j.detail.project || j.detail.target_path)) || "";
     const gpuId = (j.detail && j.detail.gpu_id) || "";
     return `
-      <div class="jobs-row ${isSel}" data-id="${_escapeHtml(id)}" data-state="${_escapeHtml(state)}">
+      <div class="jobs-row ${isSel} ${stranded}" data-id="${_escapeHtml(id)}" data-state="${_escapeHtml(state)}">
         <div class="jobs-row-top">
           <span class="jobs-row-op">${_escapeHtml(kind)}</span>
           <span class="jobs-row-id">${_escapeHtml(id.slice(0, 8))}</span>
@@ -275,19 +291,29 @@ function _renderInlineDetail(job) {
     ? new Date(parseFloat(job.started_at) * 1000).toLocaleTimeString()
     : "?";
   const d = job.detail || {};
+  const stranded = _isStranded(job);
+  const pendingTxt = _escapeHtml(String(d.pending != null ? d.pending : "?"));
+  const title = stranded
+    ? "STRANDED inline-analysis queue"
+    : `inline analysis ${_escapeHtml(d.project || "")}`;
+  const help = stranded
+    ? `<p class="jobs-empty" style="color:#f85149">No worker is draining this
+       queue — the session that owned it is gone. The ${pendingTxt}
+       pending range(s) below will sit here forever unless cancelled.</p>`
+    : `<p class="jobs-empty">Inline-analysis sessions don't have a log stream. Use the
+       pending-ranges count above to confirm whether it's safe to cancel.</p>`;
   return `
     <div class="jobs-detail-header">
-      <h3>inline analysis ${_escapeHtml(d.project || "")}</h3>
+      <h3>${title}</h3>
       <div class="jobs-detail-meta">
         <span>snapshot: ${_escapeHtml(d.snapshot || "?")}</span>
-        <span>pending: ${_escapeHtml(String(d.pending != null ? d.pending : "?"))}</span>
+        <span>pending: ${pendingTxt}</span>
         <span>started: ${_escapeHtml(startedTxt)}</span>
         <span>status: ${_escapeHtml(job.state || "")}</span>
       </div>
-      ${_isCancellable(job) ? `<button class="jobs-stop-btn" data-action="cancel-inline">Cancel</button>` : ""}
+      ${_isCancellable(job) ? `<button class="jobs-stop-btn" data-action="cancel-inline">${stranded ? "Discard" : "Cancel"}</button>` : ""}
     </div>
-    <p class="jobs-empty">Inline-analysis sessions don't have a log stream. Use the
-    pending-ranges count above to confirm whether it's safe to cancel.</p>
+    ${help}
   `;
 }
 

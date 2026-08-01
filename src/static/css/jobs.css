@@ -72,6 +72,16 @@
 .jobs-row:hover    { background: var(--surface-2); }
 .jobs-row.selected { background: var(--surface-2); border-left: 2px solid var(--accent); padding-left: calc(.75rem - 2px); }
 
+/* Stranded inline queue: no worker is draining it — must not read like a
+   normal running job (see dlc.monitoring._inline_session_rows). */
+.jobs-row-stranded {
+  background: rgba(248, 81, 73, .07);
+  border-left: 2px solid #f85149;
+  padding-left: calc(.75rem - 2px);
+}
+.jobs-row-stranded:hover    { background: rgba(248, 81, 73, .13); }
+.jobs-row-stranded.selected { background: rgba(248, 81, 73, .13); }
+
 .jobs-row-top {
   display: flex;
   align-items: center;

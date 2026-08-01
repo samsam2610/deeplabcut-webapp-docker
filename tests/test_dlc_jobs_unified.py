@@ -250,6 +250,77 @@ class TestJobsAll:
         assert row["detail"]["pending"] == 261
         assert row["cancellable"] is True
 
+    # ── Stranded queue: `inline:queue:*` with no matching `inline:session:*` ──
+    # (the gap this task fixes — see module docstring on `_inline_session_rows`)
+
+    def test_queue_with_no_session_produces_a_stranded_row(self, client, fake_redis):
+        """A queue whose session hash is gone entirely (worker died / lost
+        the race with a stop signal) MUST still surface a row — this is
+        exactly the stranded-work state the Jobs page exists to expose."""
+        fake_redis.rpush(
+            "inline:queue:u5:sk5",
+            *[f"range-{i}" for i in range(261)],
+        )
+        resp = client.get("/dlc/jobs/all")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        row = next(j for j in body["jobs"] if j["id"] == "u5:sk5")
+        assert row["type"] == "inline"
+        assert row["state"] == "stranded"
+        assert row["detail"]["stranded"] is True
+        assert row["detail"]["pending"] == 261
+        assert row["cancellable"] is True
+        # No session hash existed, so project/snapshot metadata must not be
+        # fabricated — left empty rather than guessed at.
+        assert row["detail"]["project"] == ""
+        assert row["detail"]["snapshot"] == ""
+
+    def test_session_with_no_queue_is_not_stranded(self, client, fake_redis):
+        """An idle warm session with nothing pending is a normal row, not
+        the stranded-queue state."""
+        _seed_inline_session(fake_redis, user_id="u6", snap_key="sk6",
+                              pending=0, status="ready", project="IdleProj")
+        resp = client.get("/dlc/jobs/all")
+        body = resp.get_json()
+        row = next(j for j in body["jobs"] if j["id"] == "u6:sk6")
+        assert row["state"] == "ready"
+        assert row["state"] != "stranded"
+        assert row["detail"]["stranded"] is False
+        assert row["detail"]["pending"] == 0
+
+    def test_session_plus_nonempty_queue_is_one_row_not_two(self, client, fake_redis):
+        """The suffix (user_id, snap_key) is the unit of dedup — a session
+        key AND a queue key for the same suffix must merge into one row."""
+        _seed_inline_session(fake_redis, user_id="u7", snap_key="sk7",
+                              pending=4, status="ready", project="ActiveProj")
+        resp = client.get("/dlc/jobs/all")
+        body = resp.get_json()
+        rows = [j for j in body["jobs"] if j["id"] == "u7:sk7"]
+        assert len(rows) == 1, rows
+        assert rows[0]["state"] == "ready"
+        assert rows[0]["detail"]["stranded"] is False
+        assert rows[0]["detail"]["pending"] == 4
+
+    def test_malformed_inline_queue_key_is_skipped_without_raising(
+            self, client, fake_redis):
+        """A key that doesn't split cleanly into `inline:queue:<user_id>:
+        <snap_key>` must be skipped, not crash the whole /dlc/jobs/all
+        response — and other, well-formed rows must still come back."""
+        # No colon after the prefix at all.
+        fake_redis.rpush("inline:queue:malformed-no-colon", "x")
+        # Prefix present but user_id (or snap_key) empty.
+        fake_redis.rpush("inline:queue::sk-empty-user", "x")
+        _seed_inline_session(fake_redis, user_id="u8", snap_key="sk8",
+                              pending=2, status="ready", project="GoodProj")
+
+        resp = client.get("/dlc/jobs/all")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        ids = {j["id"] for j in body["jobs"]}
+        assert "u8:sk8" in ids
+        assert "malformed-no-colon" not in ids
+        assert not any("sk-empty-user" in i for i in ids)
+
 
 # ── POST /dlc/jobs/cancel ─────────────────────────────────────────────────
 
@@ -294,3 +365,30 @@ class TestJobsCancel:
         """id without a ':' can't be split into (user_id, snap_key)."""
         resp = client.post("/dlc/jobs/cancel", json={"id": "no-colon-here", "type": "inline"})
         assert resp.status_code == 400
+
+    def test_cancel_stranded_row_with_no_session_hash_still_succeeds(
+            self, client, fake_redis):
+        """A stranded row (from GET /dlc/jobs/all) has NO backing
+        `inline:session:*` hash at all. Cancelling it must still delete the
+        queue and report success — `_explicit_session_stop` must not error
+        on (or require) a missing session hash."""
+        fake_redis.rpush(
+            "inline:queue:u9:sk9",
+            *[f"range-{i}" for i in range(42)],
+        )
+        assert fake_redis.hgetall("inline:session:u9:sk9") == {}
+
+        resp = client.post("/dlc/jobs/cancel", json={"id": "u9:sk9", "type": "inline"})
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["cancelled"] is True
+        assert body["type"] == "inline"
+        assert body["cleared"] == 42
+        assert fake_redis.get("inline:control:u9:sk9") == "stop"
+        assert fake_redis.llen("inline:queue:u9:sk9") == 0
+
+        # The row must be gone from /dlc/jobs/all now (queue emptied, no
+        # session exists to keep the suffix alive).
+        resp2 = client.get("/dlc/jobs/all")
+        ids = {j["id"] for j in resp2.get_json()["jobs"]}
+        assert "u9:sk9" not in ids
