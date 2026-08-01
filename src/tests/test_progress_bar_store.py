@@ -52,44 +52,7 @@ def test_rename_and_recolour_keep_ids(project):
     assert after["options"][0]["color"] == "#111111"
 
 
-def test_values_round_trip_and_clear(project):
-    pb.save_definition(project, [_seg("Label", [{"label": "Done", "color": "#2ea043"}])])
-    seg = pb.get_definition(project)["segments"][0]
-    sid, oid = seg["segment_id"], seg["options"][0]["option_id"]
 
-    pb.set_value(project, "/data/a.avi", sid, oid)
-    assert pb.get_values(project, ["/data/a.avi"]) == {"/data/a.avi": {sid: oid}}
-
-    pb.set_value(project, "/data/a.avi", sid, None)
-    assert pb.get_values(project, ["/data/a.avi"]) == {}
-
-
-def test_get_values_batches_and_omits_files_without_values(project):
-    pb.save_definition(project, [_seg("Label", [{"label": "Done", "color": "#2ea043"}])])
-    seg = pb.get_definition(project)["segments"][0]
-    sid, oid = seg["segment_id"], seg["options"][0]["option_id"]
-    pb.set_value(project, "/data/a.avi", sid, oid)
-
-    out = pb.get_values(project, ["/data/a.avi", "/data/b.avi"])
-    assert set(out) == {"/data/a.avi"}
-
-
-def test_deleting_a_segment_leaves_its_values_in_the_db(project):
-    """No cascade: the value survives so re-adding the ID restores it."""
-    pb.save_definition(project, [_seg("Label", [{"label": "Done", "color": "#2ea043"}])])
-    seg = pb.get_definition(project)["segments"][0]
-    sid, oid = seg["segment_id"], seg["options"][0]["option_id"]
-    pb.set_value(project, "/data/a.avi", sid, oid)
-
-    pb.save_definition(project, [])                       # drop every segment
-    assert pb.get_definition(project) == {"segments": []}
-    assert pb.get_values(project, ["/data/a.avi"]) == {"/data/a.avi": {sid: oid}}
-
-    pb.save_definition(project, [{                        # re-add under the SAME id
-        "segment_id": sid, "name": "Label",
-        "options": [{"option_id": oid, "label": "Done", "color": "#2ea043"}],
-    }])
-    assert pb.get_values(project, ["/data/a.avi"]) == {"/data/a.avi": {sid: oid}}
 
 
 def test_rejects_more_than_ten_segments(project):
@@ -122,10 +85,89 @@ def test_duplicate_colours_are_allowed(project):
     assert len(pb.get_definition(project)["segments"][0]["options"]) == 2
 
 
-def test_upgrades_a_v1_db_in_place_without_losing_tracked_rows(project):
-    """tracked_files.py created this DB at schema v1; adding the progress
-    tables must not disturb it."""
+def test_tracking_and_the_definition_share_one_database(project):
+    """Both stores open the same file via tracked_db; neither may disturb the
+    other's tables."""
     tf.track(project, "/data/a.avi")
     pb.save_definition(project, [_seg("Label", [])])
     assert [r["path"] for r in tf.list_tracked(project)] == ["/data/a.avi"]
     assert len(pb.get_definition(project)["segments"]) == 1
+
+def _video(project, path):
+    """Mint a video_id the way the routes will."""
+    from dlc import tracked_db as db
+    with db.connect(project) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        vid = db.ensure_video(conn, path)
+        conn.execute("COMMIT")
+    return vid
+
+
+def test_values_round_trip_and_clear(project):
+    pb.save_definition(project, [_seg("Label", [{"label": "Done", "color": "#2ea043"}])])
+    seg = pb.get_definition(project)["segments"][0]
+    sid, oid = seg["segment_id"], seg["options"][0]["option_id"]
+    vid = _video(project, "/data/a.avi")
+
+    pb.set_value(project, vid, sid, oid)
+    assert pb.get_values(project, [vid]) == {vid: {sid: oid}}
+
+    pb.set_value(project, vid, sid, None)
+    assert pb.get_values(project, [vid]) == {}
+
+
+def test_get_values_batches_and_omits_videos_without_values(project):
+    pb.save_definition(project, [_seg("Label", [{"label": "Done", "color": "#2ea043"}])])
+    seg = pb.get_definition(project)["segments"][0]
+    sid, oid = seg["segment_id"], seg["options"][0]["option_id"]
+    a, b = _video(project, "/data/a.avi"), _video(project, "/data/b.avi")
+    pb.set_value(project, a, sid, oid)
+    assert set(pb.get_values(project, [a, b])) == {a}
+
+
+def test_deleting_a_segment_leaves_its_values_in_the_db(project):
+    """No cascade: the value survives so re-adding the ID restores it."""
+    pb.save_definition(project, [_seg("Label", [{"label": "Done", "color": "#2ea043"}])])
+    seg = pb.get_definition(project)["segments"][0]
+    sid, oid = seg["segment_id"], seg["options"][0]["option_id"]
+    vid = _video(project, "/data/a.avi")
+    pb.set_value(project, vid, sid, oid)
+
+    pb.save_definition(project, [])
+    assert pb.get_definition(project) == {"segments": []}
+    assert pb.get_values(project, [vid]) == {vid: {sid: oid}}
+
+
+def test_values_survive_a_rename(project):
+    """The whole point of video_id: moving the file keeps its progress."""
+    from dlc import tracked_db as db
+    pb.save_definition(project, [_seg("Label", [{"label": "Done", "color": "#2ea043"}])])
+    seg = pb.get_definition(project)["segments"][0]
+    sid, oid = seg["segment_id"], seg["options"][0]["option_id"]
+    vid = _video(project, "/data/a.avi")
+    pb.set_value(project, vid, sid, oid)
+
+    with db.connect(project) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        db.relink_path(conn, vid, "/elsewhere/renamed.avi")
+        conn.execute("COMMIT")
+
+    assert pb.get_values(project, [vid]) == {vid: {sid: oid}}
+
+
+def test_definition_and_value_writes_are_audited(project):
+    from dlc import tracked_db as db
+    pb.save_definition(project, [_seg("L", [{"label": "D", "color": "#2ea043"}])],
+                       actor="uid-3")
+    seg = pb.get_definition(project)["segments"][0]
+    vid = _video(project, "/data/a.avi")
+    pb.set_value(project, vid, seg["segment_id"], seg["options"][0]["option_id"],
+                 actor="uid-3")
+    pb.set_value(project, vid, seg["segment_id"], None, actor="uid-3")
+
+    with db.connect(project) as conn:
+        actions = [r[0] for r in conn.execute(
+            "SELECT action FROM audit_log ORDER BY id")]
+    assert actions.count("save_definition") == 1
+    assert actions.count("set_value") == 1
+    assert actions.count("clear_value") == 1
