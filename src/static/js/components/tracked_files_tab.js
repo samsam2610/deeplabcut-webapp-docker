@@ -10,8 +10,10 @@
 "use strict";
 
 import { formatRelative } from "./relative_time.mjs";
+import { makeProgressBar } from "./progress_bar.js";
 
 const API = "/dlc/project/tracked-files";
+const BAR_API = "/dlc/project/progress-bar";
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 export function makeTrackedFiles({
@@ -20,6 +22,7 @@ export function makeTrackedFiles({
   let _rows = new Map();     // path -> {path, name, dir, tracked_at, last_opened_at}
   let _current = null;       // the path currently open in the player, or null
   let _loaded = false;       // has a list fetch ever succeeded?
+  let _definition = { segments: [] };   // project's bar definition, fetched with the list
   const _ac = new AbortController();
   const _sig = { signal: _ac.signal };
 
@@ -69,6 +72,12 @@ export function makeTrackedFiles({
     cb.addEventListener("click", (e) => e.stopPropagation(), _sig);
     cb.addEventListener("change", () => _untrack(f.path, cb), _sig);
 
+    const bar = makeProgressBar({
+      definition: _definition,
+      values: f.progress || {},
+      onChange: (segmentId, optionId) => _setSegment(f.path, segmentId, optionId),
+    });
+
     const col = document.createElement("div");
     col.style.cssText = "display:flex;flex-direction:column;min-width:0;flex:1";
     const nameEl = document.createElement("span");
@@ -85,6 +94,7 @@ export function makeTrackedFiles({
     when.style.cssText = "font-size:.68rem;color:var(--text-dim);margin-left:auto;flex-shrink:0;padding-left:.4rem";
 
     row.appendChild(cb);
+    row.appendChild(bar);
     row.appendChild(col);
     row.appendChild(when);
     row.addEventListener("click", () => onOpen?.(f.path, f.name), _sig);
@@ -127,6 +137,22 @@ export function makeTrackedFiles({
     }
   }
 
+  // Persist one segment of one file. Rejecting lets the component revert its
+  // optimistic paint, so the bar never shows a value the server does not have.
+  async function _setSegment(path, segmentId, optionId) {
+    await _fetchJson(BAR_API + "/value", {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ path, segment_id: segmentId, option_id: optionId }),
+    });
+    const row = _rows.get(path);
+    if (row) {
+      row.progress = row.progress || {};
+      if (optionId === null) delete row.progress[segmentId];
+      else row.progress[segmentId] = optionId;
+    }
+  }
+
   // Ordering is cosmetic, so a failure here never disturbs the open.
   function _noteOpened(path) {
     _fetchJson(API + "/opened", { method: "POST", ..._body(path) }).catch(() => {});
@@ -136,7 +162,12 @@ export function makeTrackedFiles({
 
   async function refresh() {
     try {
-      const data = await _fetchJson(API);
+      const [data, def] = await Promise.all([
+        _fetchJson(API),
+        // The bar is decorative next to the list: if it fails, still show files.
+        _fetchJson(BAR_API).catch(() => ({ segments: [] })),
+      ]);
+      _definition = def && Array.isArray(def.segments) ? def : { segments: [] };
       _rows = new Map((data.files || []).map((f) => [f.path, f]));
       _loaded = true;
       _render();

@@ -74,3 +74,23 @@ def test_listeners_are_abortable_for_destroy():
     s = _src()
     assert "AbortController" in s
     assert "signal" in s
+
+
+def test_rows_render_the_shared_progress_bar():
+    s = _src()
+    assert 'from "./progress_bar.js"' in s
+    assert "makeProgressBar(" in s
+
+
+def test_bar_is_built_from_the_listing_progress_and_the_fetched_definition():
+    s = _src()
+    assert "/dlc/project/progress-bar" in s
+    assert re.search(r"values\s*:\s*f\.progress", s), \
+        "each row's bar must be seeded from that file's progress object"
+
+
+def test_segment_edits_persist_through_the_value_route():
+    s = _src()
+    assert 'const BAR_API = "/dlc/project/progress-bar"' in s
+    assert re.search(r'BAR_API\s*\+\s*"/value"', s), "must PUT to the value route"
+    assert '"PUT"' in s
