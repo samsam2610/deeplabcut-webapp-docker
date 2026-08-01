@@ -17,3 +17,4 @@ import './log_stream.js';     // shared SSE/poll-tail; must load before gpu_moni
 import './gpu_monitor.js';
 import './admin.js';
 import './custom_script.js';
+import './tracked_files_panel.js';

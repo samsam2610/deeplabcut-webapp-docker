@@ -1,0 +1,36 @@
+    <section class="card dlc-theme hidden" id="tracked-files-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <h2>Tracked Files &amp; Progress</h2>
+        <button class="btn-sm" id="btn-close-tracked-files" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Close
+        </button>
+      </div>
+      <p class="subtitle">Define this project's progress bar, then set each tracked file's progress by clicking a segment.</p>
+
+      <!-- ── Bar definition ─────────────────────────────────────── -->
+      <div style="margin-bottom:.7rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:7px;background:var(--surface-2)">
+        <div style="font-size:.72rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem">Progress bar</div>
+        <button class="btn-sm btn-create" id="tf-add-bar-btn">＋ Add progress bar</button>
+        <div id="tf-bar-editor" class="hidden">
+          <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem">
+            <label style="font-size:.78rem;color:var(--text-dim)">Segments</label>
+            <input type="number" id="tf-segment-count" min="0" max="10" step="1" value="0"
+                   style="width:4.5rem;font-family:var(--mono);font-size:.78rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.2rem .35rem"/>
+            <span style="font-size:.7rem;color:var(--text-dim)">0–10</span>
+            <button class="btn-sm btn-create" id="tf-save-bar-btn" style="margin-left:auto">Save bar</button>
+          </div>
+          <div id="tf-segments"></div>
+        </div>
+      </div>
+
+      <!-- ── Tracked files ──────────────────────────────────────── -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+        <label style="font-size:.78rem;color:var(--text-dim)">Tracked files</label>
+        <button class="btn-sm" id="tf-refresh" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
+      </div>
+      <div id="tf-list" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
+        <p class="explorer-empty">Loading…</p>
+      </div>
+      <div id="tf-status" class="fe-extract-status" style="margin-top:.35rem"></div>
+    </section>

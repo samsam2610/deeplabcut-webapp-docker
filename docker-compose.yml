@@ -189,6 +189,11 @@ services:
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/viewer.py:/app/viewer.py
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/dlc_3d.html:/app/templates/dlc_3d.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/static:/app/static
+      # Main-webapp partials the 3D page includes. Without these mounts the
+      # container keeps serving the copies baked into the image at build time,
+      # so edits made in deeplabcut-webapp-docker never reach /dlc-3d/.
+      - ../deeplabcut-webapp-docker/src/templates/partials/card_dlc_project.html:/app/templates/partials/card_dlc_project.html
+      - ../deeplabcut-webapp-docker/src/templates/partials/card_tracked_files.html:/app/templates/partials/card_tracked_files.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_3d_extract.html:/app/templates/partials/card_3d_extract.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_inline_analysis_3d.html:/app/templates/partials/card_inline_analysis_3d.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_viewer_3d.html:/app/templates/partials/card_viewer_3d.html
