@@ -57,3 +57,13 @@ def test_segments_are_buttons_and_the_dropdown_closes_on_escape():
     s = _src()
     assert 'createElement("button")' in s
     assert "Escape" in s
+
+
+def test_document_listeners_are_removed_when_the_menu_closes():
+    """One bar per row: attaching document listeners for the bar's lifetime
+    would leak two per row and re-add them on every refresh."""
+    s = _src()
+    assert s.count("document.addEventListener") == s.count("document.removeEventListener"), \
+        "every document listener must have a matching removal"
+    assert re.search(r"_closeMenu[\s\S]{0,400}?document\.removeEventListener", s), \
+        "closing the menu must detach the document listeners"

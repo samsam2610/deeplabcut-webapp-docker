@@ -38,8 +38,19 @@ export function makeProgressBar({ definition, values, onChange, readOnly } = {})
     btn.textContent = seg.name;
   }
 
+  function _onKeydown(e) {
+    if (e.key === "Escape") _closeMenu();
+  }
+
+  // Document listeners live ONLY while a menu is open. Attaching them per bar
+  // at construction would leak two listeners per row, re-added on every list
+  // refresh — with a long tracked list that grows without bound.
   function _closeMenu() {
-    if (openMenu) { openMenu.remove(); openMenu = null; }
+    if (!openMenu) return;
+    openMenu.remove();
+    openMenu = null;
+    document.removeEventListener("click", _closeMenu);
+    document.removeEventListener("keydown", _onKeydown);
   }
 
   function _openMenu(btn, seg) {
@@ -95,6 +106,9 @@ export function makeProgressBar({ definition, values, onChange, readOnly } = {})
     btn.parentNode.style.position = "relative";
     btn.parentNode.appendChild(menu);
     openMenu = menu;
+    // The opening click called stopPropagation, so these cannot fire on it.
+    document.addEventListener("click", _closeMenu);
+    document.addEventListener("keydown", _onKeydown);
   }
 
   async function _choose(btn, seg, optionId) {
@@ -143,7 +157,5 @@ export function makeProgressBar({ definition, values, onChange, readOnly } = {})
     }
   });
 
-  document.addEventListener("click", _closeMenu);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") _closeMenu(); });
   return wrap;
 }
