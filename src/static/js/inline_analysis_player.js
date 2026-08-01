@@ -1,6 +1,7 @@
 "use strict";
 import { state } from './state.js';
 import { makeFileBrowser } from './components/file_browser.js';
+import { makeTrackedFiles } from "./components/tracked_files_tab.js";
 
     const iaCard         = document.getElementById("inline-analysis-card");
     const iaOpenBtn      = document.getElementById("btn-open-inline-analysis");
@@ -32,6 +33,18 @@ import { makeFileBrowser } from './components/file_browser.js';
     const iaTabBrowse       = document.getElementById("ia-tab-browse");
     const iaTabProjectPanel = document.getElementById("ia-tab-project-panel");
     const iaTabBrowsePanel  = document.getElementById("ia-tab-browse-panel");
+
+    // Tracked Files tab controller (shared component; composed further down).
+    let _trackedFiles = null;
+
+    // Launcher-level error line. Used when an open ABORTS — the player section
+    // is never revealed then, so a message inside it would be invisible.
+    function _iaLauncherError(msg) {
+      const el = document.getElementById("ia-launcher-error");
+      if (!el) return;
+      el.textContent = msg || "";
+      el.style.color = msg ? "var(--danger, #e66)" : "";
+    }
     const iaBrowseBreadcrumb = document.getElementById("ia-browse-breadcrumb");
     const iaBrowseUp         = document.getElementById("ia-browse-up");
     const iaBrowseList       = document.getElementById("ia-browse-list");
@@ -149,6 +162,7 @@ import { makeFileBrowser } from './components/file_browser.js';
     });
 
     function _iaReset() {
+      _trackedFiles?.setCurrent(null);   // hide the track checkbox until a browse video opens
       if (_iaPlayTimer) { _iaStopPlayback(); }
       _iaMode            = null;
       _iaCurrentFrame    = 0;
@@ -370,21 +384,32 @@ import { makeFileBrowser } from './components/file_browser.js';
     }
 
     async function _iaOpenBrowseVideo(absPath, name) {
+      // Resolve video info BEFORE mutating state: a missing or unreadable file
+      // must abort instead of silently loading an empty viewer. A tracked file
+      // whose video has moved takes exactly this path.
+      let info;
+      try {
+        const res = await fetch(`/annotate/video-info?path=${encodeURIComponent(absPath)}`);
+        info = await res.json().catch(() => ({}));
+        if (!res.ok || info.error) throw new Error(info.error || `status ${res.status}`);
+      } catch (err) {
+        _iaLauncherError(`Cannot open ${absPath} — ${err.message}. Fix the path or untrack this entry.`);
+        return;
+      }
+      _iaLauncherError("");
       _iaReset();
       _iaMode             = "browse-video";
       _iaBrowseVideoPath  = absPath;
       _iaCurrentVideoPath = absPath;
       iaSelectedName.textContent = name;
-      try {
-        const res  = await fetch(`/annotate/video-info?path=${encodeURIComponent(absPath)}`);
-        const info = await res.json();
-        _iaFps        = info.fps || 30;
-        _iaFrameCount = info.frame_count || 0;
-      } catch (_) { _iaFps = 30; _iaFrameCount = 0; }
+      _iaFps        = info.fps || 30;
+      _iaFrameCount = info.frame_count || 0;
       iaPlayerSec.classList.remove("hidden");
       _iaLoadFrame(0);
       // Discover companion h5 variants in the same directory
       _iaDiscoverVariants(absPath);
+      // Reveal the track checkbox for this path and stamp last-opened if tracked.
+      _trackedFiles?.setCurrent(absPath);
     }
 
     // ── Browse-tab folder navigator ────────────────────────────
@@ -463,23 +488,42 @@ import { makeFileBrowser } from './components/file_browser.js';
       });
     }
 
-    // ── Tab switching ──────────────────────────────────────────
-    iaTabProject?.addEventListener("click", () => {
-      iaTabProject.classList.add("active");
-      iaTabBrowse.classList.remove("active");
-      iaTabProjectPanel.classList.remove("hidden");
-      iaTabBrowsePanel.classList.add("hidden");
-    });
+    // ── Tab switching — one table, three tabs ──────────────────
+    const IA_TABS = [
+      { btn: "ia-tab-project", panel: "ia-tab-project-panel" },
+      { btn: "ia-tab-browse",  panel: "ia-tab-browse-panel"  },
+      { btn: "ia-tab-tracked", panel: "ia-tab-tracked-panel" },
+    ];
+    function _iaShowTab(id) {
+      IA_TABS.forEach((t) => {
+        const on = t.btn === id;
+        document.getElementById(t.btn)?.classList.toggle("active", on);
+        document.getElementById(t.panel)?.classList.toggle("hidden", !on);
+      });
+    }
+    IA_TABS.forEach((t) =>
+      document.getElementById(t.btn)?.addEventListener("click", () => _iaShowTab(t.btn)));
+
+    // Browse tab's first visit still seeds the folder navigator.
     iaTabBrowse?.addEventListener("click", () => {
-      iaTabBrowse.classList.add("active");
-      iaTabProject.classList.remove("active");
-      iaTabBrowsePanel.classList.remove("hidden");
-      iaTabProjectPanel.classList.add("hidden");
       if (!_iaBrowsePath) {
         // Start at user-data dir or /
         const startPath = state.userDataDir || state.dataDir || "/";
         _iaRefreshBrowse(startPath);
       }
+    });
+
+    // Tracked Files tab controller. Owns its list, its checkboxes, the
+    // player-header track checkbox and each row's progress bar.
+    _trackedFiles = makeTrackedFiles({
+      tabBtn: document.getElementById("ia-tab-tracked"),
+      refreshBtn: document.getElementById("ia-tracked-refresh"),
+      panelEl: document.getElementById("ia-tab-tracked-panel"),
+      listEl: document.getElementById("ia-tracked-list"),
+      headerCheckbox: document.getElementById("ia-track-checkbox"),
+      headerLabel: document.getElementById("ia-track-label"),
+      onOpen: (path, name) => _iaOpenBrowseVideo(path, name),
+      onError: (msg) => _iaLauncherError(msg),
     });
 
     iaBrowseUp?.addEventListener("click", () => {

@@ -12,7 +12,11 @@
       <div style="display:flex;gap:.4rem;margin-bottom:.6rem">
         <button id="ia-tab-project" class="btn-sm active" style="padding:.2rem .65rem;font-size:.75rem">Project Content</button>
         <button id="ia-tab-browse" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Browse Folders</button>
+        <button id="ia-tab-tracked" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Tracked Files</button>
       </div>
+
+      <!-- Launcher-level error line: an aborted open never reveals the player. -->
+      <div id="ia-launcher-error" class="fe-extract-status" style="margin-bottom:.4rem"></div>
 
       <!-- Tab: Project Content -->
       <div id="ia-tab-project-panel">
@@ -39,6 +43,17 @@
           <button class="btn-sm" id="ia-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
         </div>
         <div id="ia-browse-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
+          <p class="explorer-empty">Loading…</p>
+        </div>
+      </div>
+
+      <!-- Tab: Tracked Files -->
+      <div id="ia-tab-tracked-panel" class="hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+          <label style="font-size:.78rem;color:var(--text-dim)">Tracked videos</label>
+          <button class="btn-sm" id="ia-tracked-refresh" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
+        </div>
+        <div id="ia-tracked-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
           <p class="explorer-empty">Loading…</p>
         </div>
       </div>
@@ -87,6 +102,10 @@
       <!-- Player section (shown after a selection is made) -->
       <div id="ia-player-section" class="hidden">
         <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap">
+          <label id="ia-track-label" class="hidden" title="Track this file — it will appear in the Tracked Files tab"
+                 style="display:flex;align-items:center;gap:.35rem;flex-shrink:0;cursor:pointer">
+            <input type="checkbox" id="ia-track-checkbox" style="accent-color:var(--accent);width:14px;height:14px">
+          </label>
           <span id="ia-selected-name" style="font-family:var(--mono);font-size:.78rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
           <button class="btn-sm" id="ia-btn-back" style="padding:.2rem .6rem;font-size:.75rem;flex-shrink:0">&#8592; Back</button>
         </div>
