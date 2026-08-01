@@ -1179,3 +1179,13 @@ button[type="submit"]:hover .btn-arrow {
   background: rgba(110,231,183,.04);
 }
 
+
+/* ── Tracked Files & Progress card ────────────────────────────────────────
+   Full-column width, matching the inline-analysis cards
+   (dlc-3D's inline_analysis_3d.css does the same for #inline-analysis-3d-card).
+   Each row carries a filename plus a multi-segment progress bar, which wraps
+   badly at the default .card cap of 560px. */
+#tracked-files-card {
+  max-width: none;
+  width: 100%;
+}

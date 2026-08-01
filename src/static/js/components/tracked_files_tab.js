@@ -91,11 +91,14 @@ export function makeTrackedFiles({
 
     const when = document.createElement("span");
     when.textContent = formatRelative(f.last_opened_at, now);
-    when.style.cssText = "font-size:.68rem;color:var(--text-dim);margin-left:auto;flex-shrink:0;padding-left:.4rem";
+    when.style.cssText = "font-size:.68rem;color:var(--text-dim);flex-shrink:0;padding-left:.6rem";
 
+    // Order: checkbox · filename · progress bar · last-opened.
+    // `col` is flex:1 so every row's bar starts at the same x — a ragged bar
+    // column is much harder to scan down than a right-aligned one.
     row.appendChild(cb);
-    row.appendChild(bar);
     row.appendChild(col);
+    row.appendChild(bar);
     row.appendChild(when);
     row.addEventListener("click", () => onOpen?.(f.path, f.name), _sig);
     return row;

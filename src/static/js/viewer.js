@@ -2,6 +2,11 @@
 import { state } from './state.js';
 import { makeFileBrowser } from './components/file_browser.js';
 
+// Do not wire anything when this card is not on the page. Absent on pages that don't ship the View-Analyzed card (e.g. /dlc-3d/).
+// One presence check replaces ~50 individual null guards; main.js would
+// otherwise log this module as failed and leave the card half-wired.
+if (document.getElementById("view-analyzed-card")) {
+
     const vaCard         = document.getElementById("view-analyzed-card");
     const vaOpenBtn      = document.getElementById("btn-open-view-analyzed");
     const vaCloseBtn     = document.getElementById("btn-close-view-analyzed");
@@ -2165,3 +2170,4 @@ import { makeFileBrowser } from './components/file_browser.js';
       }
     })(); // end Video Metadata Panel
 
+}

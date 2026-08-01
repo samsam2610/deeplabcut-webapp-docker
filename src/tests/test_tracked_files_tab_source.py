@@ -94,3 +94,11 @@ def test_segment_edits_persist_through_the_value_route():
     assert 'const BAR_API = "/dlc/project/progress-bar"' in s
     assert re.search(r'BAR_API\s*\+\s*"/value"', s), "must PUT to the value route"
     assert '"PUT"' in s
+
+
+def test_row_order_is_checkbox_filename_then_progress_bar():
+    """Requested layout: check box - file name - progress bar."""
+    s = _src()
+    appends = re.findall(r"row\.appendChild\((\w+)\)", s)
+    assert appends[:3] == ["cb", "col", "bar"], \
+        f"row order must be checkbox, filename column, bar — got {appends}"

@@ -1,6 +1,13 @@
 "use strict";
 import { _populateGpuSelect } from './training.js';
 
+// Do not wire anything when this card is not on the page. The 3D page ships dlc-3D's own frame-labeler card that REUSES
+// #frame-labeler-card but has none of the 2D inner elements, so key on the
+// canvas: absent => this module's card is not on the page.
+// One presence check replaces ~50 individual null guards; main.js would
+// otherwise log this module as failed and leave the card half-wired.
+if (document.getElementById("fl-canvas")) {
+
     const flCard         = document.getElementById("frame-labeler-card");
     const flOpenBtn      = document.getElementById("btn-open-frame-labeler");
     const flCloseBtn     = document.getElementById("btn-close-frame-labeler");
@@ -1345,3 +1352,4 @@ import { _populateGpuSelect } from './training.js';
         _flDraw();
       }
     });
+}

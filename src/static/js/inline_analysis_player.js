@@ -3,6 +3,11 @@ import { state } from './state.js';
 import { makeFileBrowser } from './components/file_browser.js';
 import { makeTrackedFiles } from "./components/tracked_files_tab.js";
 
+// Do not wire anything when this card is not on the page. Absent on pages that don't ship the 2D Inline Analysis card (e.g. /dlc-3d/).
+// One presence check replaces ~50 individual null guards; main.js would
+// otherwise log this module as failed and leave the card half-wired.
+if (document.getElementById("inline-analysis-card")) {
+
     const iaCard         = document.getElementById("inline-analysis-card");
     const iaOpenBtn      = document.getElementById("btn-open-inline-analysis");
     const iaCloseBtn     = document.getElementById("btn-close-inline-analysis");
@@ -2560,3 +2565,4 @@ import { makeTrackedFiles } from "./components/tracked_files_tab.js";
       if (iaFrameCounter) new MutationObserver(_iaRefreshInitFileBtn)
         .observe(iaFrameCounter, { childList: true, characterData: true, subtree: true });
     })(); // end ANALYSIS DISPATCH
+}
