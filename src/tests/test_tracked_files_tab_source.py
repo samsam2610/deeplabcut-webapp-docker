@@ -102,3 +102,12 @@ def test_row_order_is_checkbox_filename_then_progress_bar():
     appends = re.findall(r"row\.appendChild\((\w+)\)", s)
     assert appends[:3] == ["cb", "col", "bar"], \
         f"row order must be checkbox, filename column, bar — got {appends}"
+
+
+def test_writes_are_keyed_by_video_id_not_path():
+    """A rename mid-session must not misdirect an untrack or a segment write."""
+    s = _src()
+    assert re.search(r"video_id:\s*f\.video_id", s), \
+        "untrack must send the row's video_id"
+    assert re.search(r"video_id:\s*videoId", s), \
+        "segment writes must send the video_id"

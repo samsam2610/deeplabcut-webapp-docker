@@ -35,7 +35,7 @@ export function makeTrackedFiles({
     return data;
   }
 
-  const _body = (path) => ({ headers: JSON_HEADERS, body: JSON.stringify({ path }) });
+  const _body = (payload) => ({ headers: JSON_HEADERS, body: JSON.stringify(payload) });
 
   // ── Rendering ─────────────────────────────────────────────────────────────
 
@@ -70,12 +70,13 @@ export function makeTrackedFiles({
     cb.style.cssText = "accent-color:var(--accent);width:13px;height:13px;flex-shrink:0";
     // The row opens the video; the checkbox must not.
     cb.addEventListener("click", (e) => e.stopPropagation(), _sig);
-    cb.addEventListener("change", () => _untrack(f.path, cb), _sig);
+    cb.addEventListener("change", () => _untrack(f, cb), _sig);
 
     const bar = makeProgressBar({
       definition: _definition,
       values: f.progress || {},
-      onChange: (segmentId, optionId) => _setSegment(f.path, segmentId, optionId),
+      onChange: (segmentId, optionId) =>
+        _setSegment(f.path, f.video_id, segmentId, optionId),
     });
 
     const col = document.createElement("div");
@@ -118,9 +119,11 @@ export function makeTrackedFiles({
 
   // ── Mutations ─────────────────────────────────────────────────────────────
 
+  // Tracking is by path — you track a location, and the server mints or
+  // reuses the video identity for it.
   async function _track(path) {
     try {
-      await _fetchJson(API, { method: "POST", ..._body(path) });
+      await _fetchJson(API, { method: "POST", ..._body({ path }) });
       await refresh();
     } catch (err) {
       if (headerCheckbox) headerCheckbox.checked = false;   // revert
@@ -128,25 +131,28 @@ export function makeTrackedFiles({
     }
   }
 
-  async function _untrack(path, cb) {
+  // Untracking is by video_id: the row already knows it, and a path that
+  // changed underneath us would otherwise untrack the wrong thing.
+  async function _untrack(f, cb) {
     try {
-      await _fetchJson(API, { method: "DELETE", ..._body(path) });
-      _rows.delete(path);
+      await _fetchJson(API, { method: "DELETE", ..._body({ video_id: f.video_id }) });
+      _rows.delete(f.path);
       _render();
       _syncHeader();
     } catch (err) {
       if (cb) cb.checked = true;                            // revert
-      onError?.(`Could not untrack ${path} — ${err.message}`);
+      onError?.(`Could not untrack ${f.path} — ${err.message}`);
     }
   }
 
   // Persist one segment of one file. Rejecting lets the component revert its
   // optimistic paint, so the bar never shows a value the server does not have.
-  async function _setSegment(path, segmentId, optionId) {
+  // Keyed by video_id, not path: a rename mid-session must not misdirect this.
+  async function _setSegment(path, videoId, segmentId, optionId) {
     await _fetchJson(BAR_API + "/value", {
       method: "PUT",
       headers: JSON_HEADERS,
-      body: JSON.stringify({ path, segment_id: segmentId, option_id: optionId }),
+      body: JSON.stringify({ video_id: videoId, segment_id: segmentId, option_id: optionId }),
     });
     const row = _rows.get(path);
     if (row) {
@@ -158,7 +164,9 @@ export function makeTrackedFiles({
 
   // Ordering is cosmetic, so a failure here never disturbs the open.
   function _noteOpened(path) {
-    _fetchJson(API + "/opened", { method: "POST", ..._body(path) }).catch(() => {});
+    const row = _rows.get(path);
+    const payload = row && row.video_id ? { video_id: row.video_id } : { path };
+    _fetchJson(API + "/opened", { method: "POST", ..._body(payload) }).catch(() => {});
   }
 
   // ── Public surface ────────────────────────────────────────────────────────
@@ -206,7 +214,10 @@ export function makeTrackedFiles({
   headerCheckbox?.addEventListener("change", () => {
     if (!_current) return;
     if (headerCheckbox.checked) _track(_current);
-    else _untrack(_current, headerCheckbox);
+    else {
+      const row = _rows.get(_current);
+      if (row) _untrack(row, headerCheckbox);
+    }
   }, _sig);
 
   return { refresh, setCurrent, destroy };
