@@ -13,7 +13,11 @@ import { _populateGpuSelect } from './training.js';
     const flFrameInfo    = document.getElementById("fl-frame-info");
     const flFrameName    = document.getElementById("fl-frame-name");
     const flCanvas       = document.getElementById("fl-canvas");
-    const flCtx          = flCanvas.getContext("2d");
+    // Guarded: #fl-canvas is absent on pages that don't ship the 2D frame-labeler
+    // card (e.g. /dlc-3d/, which has its own). An unguarded .getContext() here
+    // threw at module scope and killed main.js's whole import chain, silently
+    // skipping every module imported after this one.
+    const flCtx          = flCanvas ? flCanvas.getContext("2d") : null;
     const flCanvasLoading = document.getElementById("fl-canvas-loading");
     const flBodypartList = document.getElementById("fl-bodypart-list");
     const flBpHint       = document.getElementById("fl-bp-hint");
