@@ -112,3 +112,48 @@ def test_opened_stamps_only_an_existing_row(tracked_project):
     client.post("/dlc/project/tracked-files/opened", json={"path": "/data/other.avi"})
     paths = [f["path"] for f in client.get("/dlc/project/tracked-files").get_json()["files"]]
     assert paths == ["/data/a.avi"]
+
+
+def test_listing_carries_a_video_id(tracked_project):
+    client, _ = tracked_project
+    client.post("/dlc/project/tracked-files", json={"path": "/data/a.avi"})
+    files = client.get("/dlc/project/tracked-files").get_json()["files"]
+    assert files[0]["video_id"].startswith("vid_")
+
+
+def test_delete_accepts_a_video_id(tracked_project):
+    client, _ = tracked_project
+    client.post("/dlc/project/tracked-files", json={"path": "/data/a.avi"})
+    vid = client.get("/dlc/project/tracked-files").get_json()["files"][0]["video_id"]
+    rv = client.delete("/dlc/project/tracked-files", json={"video_id": vid})
+    assert rv.status_code == 200
+    assert client.get("/dlc/project/tracked-files").get_json()["files"] == []
+
+
+def test_unknown_video_id_is_rejected(tracked_project):
+    client, _ = tracked_project
+    rv = client.delete("/dlc/project/tracked-files", json={"video_id": "vid_nope"})
+    assert rv.status_code == 400
+
+
+def test_tracking_an_unopenable_path_still_succeeds_with_null_metrics(tracked_project):
+    """Probing is best effort — a path we cannot open must still be trackable."""
+    from dlc import tracked_db as db
+    client, proj = tracked_project
+    assert client.post("/dlc/project/tracked-files",
+                       json={"path": "/nowhere/gone.avi"}).status_code == 200
+    with db.connect(proj) as conn:
+        row = conn.execute(
+            "SELECT size_bytes, frame_count, fingerprint FROM video "
+            "WHERE path='/nowhere/gone.avi'").fetchone()
+    assert row == (None, None, None)
+
+
+def test_writes_are_attributed_to_the_session_uid(tracked_project):
+    from dlc import tracked_db as db
+    client, proj = tracked_project
+    client.post("/dlc/project/tracked-files", json={"path": "/data/a.avi"})
+    with db.connect(proj) as conn:
+        actors = {r[0] for r in conn.execute(
+            "SELECT actor FROM audit_log WHERE action='track'")}
+    assert actors == {"test-uid"}

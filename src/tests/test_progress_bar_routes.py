@@ -106,3 +106,26 @@ def test_value_write_requires_a_path_and_segment(bar_project):
                       json={"segment_id": "seg_x", "option_id": None}).status_code == 400
     assert client.put("/dlc/project/progress-bar/value",
                       json={"path": "/data/a.avi", "option_id": None}).status_code == 400
+
+
+def test_value_route_accepts_a_video_id(bar_project):
+    client, _ = bar_project
+    seg = _save(client, [{"name": "Label", "options": [
+        {"label": "Done", "color": "#2ea043"}]}]).get_json()["segments"][0]
+    sid, oid = seg["segment_id"], seg["options"][0]["option_id"]
+    client.post("/dlc/project/tracked-files", json={"path": "/data/a.avi"})
+    vid = client.get("/dlc/project/tracked-files").get_json()["files"][0]["video_id"]
+
+    rv = client.put("/dlc/project/progress-bar/value",
+                    json={"video_id": vid, "segment_id": sid, "option_id": oid})
+    assert rv.status_code == 200
+    files = client.get("/dlc/project/tracked-files").get_json()["files"]
+    assert files[0]["progress"] == {sid: oid}
+
+
+def test_value_route_rejects_an_unknown_video_id(bar_project):
+    client, _ = bar_project
+    rv = client.put("/dlc/project/progress-bar/value",
+                    json={"video_id": "vid_nope", "segment_id": "seg_1",
+                          "option_id": None})
+    assert rv.status_code == 400

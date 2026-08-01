@@ -17,10 +17,17 @@ import sqlite3
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request
+from flask import session as flask_session
 
 from . import ctx as _ctx
 from . import progress_bar as _store
+from . import tracked_files as _tracked
 from .labeling import _dlc_key, _sec_check
+
+
+def _actor():
+    """The Flask session uid. Identifies a browser session, not a person."""
+    return flask_session.get("uid")
 
 bp = Blueprint("dlc_progress_bar", __name__)
 
@@ -64,7 +71,7 @@ def put_progress_bar():
     if not isinstance(segments, list):
         return jsonify({"error": "segments must be a list"}), 400
     try:
-        definition = _store.save_definition(pp, segments)
+        definition = _store.save_definition(pp, segments, actor=_actor())
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except sqlite3.Error as exc:
@@ -78,17 +85,26 @@ def put_progress_value():
     if err:
         return jsonify({"error": err}), 400
     body = request.get_json(silent=True) or {}
-    path = body.get("path", "")
     segment_id = body.get("segment_id", "")
-    if not isinstance(path, str) or not path.strip():
-        return jsonify({"error": "path required"}), 400
     if not isinstance(segment_id, str) or not segment_id.strip():
         return jsonify({"error": "segment_id required"}), 400
     option_id = body.get("option_id")
     if option_id is not None and not isinstance(option_id, str):
         return jsonify({"error": "option_id must be a string or null"}), 400
+
+    # video_id wins; path is accepted so older clients keep working.
+    vid = body.get("video_id")
+    video_id = (_tracked.resolve(pp, video_id=vid.strip())
+                if isinstance(vid, str) and vid.strip() else None)
+    if not video_id:
+        path = body.get("path")
+        video_id = (_tracked.resolve(pp, path=path.strip())
+                    if isinstance(path, str) and path.strip() else None)
+    if not video_id:
+        return jsonify({"error": "unknown video"}), 400
+
     try:
-        _store.set_value(pp, path.strip(), segment_id.strip(), option_id)
+        _store.set_value(pp, video_id, segment_id.strip(), option_id, actor=_actor())
     except sqlite3.Error as exc:
         return jsonify({"error": f"progress-bar DB error: {exc}"}), 500
     return jsonify({"ok": True})
