@@ -67,3 +67,13 @@ def test_document_listeners_are_removed_when_the_menu_closes():
         "every document listener must have a matching removal"
     assert re.search(r"_closeMenu[\s\S]{0,400}?document\.removeEventListener", s), \
         "closing the menu must detach the document listeners"
+
+
+def test_segment_text_colour_is_computed_not_hardcoded():
+    """A user-chosen option colour can be light or dark, so text drawn on it
+    must be chosen for contrast rather than fixed at white."""
+    s = _src()
+    assert "readableTextColor(" in s
+    assert 'from "./hex_color.mjs"' in s
+    assert not re.search(r'style\.color\s*=\s*[^;]*["\']#fff', s), \
+        "hard-coded white text on a user-chosen background"

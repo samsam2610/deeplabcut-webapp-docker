@@ -7,7 +7,7 @@
 // tab all render the same component.
 "use strict";
 
-import { isValidHexColor } from "./hex_color.mjs";
+import { isValidHexColor, readableTextColor } from "./hex_color.mjs";
 
 const UNSET_OUTLINE = "transparent";
 
@@ -33,7 +33,9 @@ export function makeProgressBar({ definition, values, onChange, readOnly } = {})
     const color = opt && isValidHexColor(opt.color) ? opt.color : null;
     btn.style.background = color || UNSET_OUTLINE;
     btn.style.borderColor = color || "var(--border)";
-    btn.style.color = color ? "#fff" : "var(--text-dim)";
+    // Never a fixed text colour: the option colour is the user's choice, and
+    // white on a pale yellow is as unreadable as black on a dark navy.
+    btn.style.color = color ? readableTextColor(color) : "var(--text-dim)";
     btn.title = `${seg.name}: ${opt ? opt.label : "unset"}`;
     btn.textContent = seg.name;
   }
