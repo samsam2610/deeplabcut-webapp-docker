@@ -1189,3 +1189,19 @@ button[type="submit"]:hover .btn-arrow {
   max-width: none;
   width: 100%;
 }
+
+/* Progress-bar editor: segments flow into as many columns as the card can fit.
+   Stacked vertically they made a five-segment bar taller than the viewport
+   while each row wasted most of its width. minmax(min(100%, 20rem), 1fr) keeps
+   a single column on narrow cards and adds columns as space allows. */
+#tf-segments {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+  gap: .5rem;
+  align-items: start;
+}
+/* Segment names and option labels are short; past ~45 characters the extra
+   width buys nothing and costs a column. */
+#tf-segments input[type="text"] {
+  max-width: 45ch;
+}

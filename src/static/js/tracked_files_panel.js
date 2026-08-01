@@ -38,8 +38,9 @@ function _renderSegments() {
   host.innerHTML = "";
   _definition.segments.forEach((seg, idx) => {
     const box = document.createElement("div");
+    // No margin-bottom: #tf-segments is a grid and its `gap` owns the spacing.
     box.style.cssText =
-      "border:1px solid var(--border);border-radius:6px;padding:.4rem .5rem;margin-bottom:.4rem;background:var(--surface)";
+      "border:1px solid var(--border);border-radius:6px;padding:.4rem .5rem;background:var(--surface)";
 
     const head = document.createElement("div");
     head.style.cssText = "display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem";
