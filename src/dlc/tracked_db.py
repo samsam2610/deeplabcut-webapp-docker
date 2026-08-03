@@ -109,8 +109,15 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     """)
     conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     _ensure_id_keyed_tables(conn)
-    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-                 ("schema_version", SCHEMA_VERSION))
+    # Write the version ONLY when it is missing or stale. ensure_schema runs on
+    # every connect, including pure reads, and an unconditional write here makes
+    # each of them a durable WAL commit + fsync: measured 12 ms on local disk
+    # and 29 ms on the NAS, against 0.2 ms when the connect stays read-only.
+    # The CREATE ... IF NOT EXISTS statements above are free no-ops by contrast.
+    row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    if row is None or row[0] != SCHEMA_VERSION:
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                     ("schema_version", SCHEMA_VERSION))
 
 
 def _columns(conn, table) -> set:

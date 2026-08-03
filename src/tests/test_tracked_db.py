@@ -238,3 +238,35 @@ def test_relink_is_audited_with_before_and_after_paths(project):
             "SELECT before, after FROM audit_log WHERE action='relink_path'").fetchone()
     assert json.loads(row[0]) == {"path": "/old/a.avi"}
     assert json.loads(row[1]) == {"path": "/new/a.avi"}
+
+
+# ── Read-path cost ──────────────────────────────────────────────────────────
+
+def test_connecting_to_a_current_database_performs_no_write(project):
+    """Every read path (list_tracked, get_values, get_definition, resolve)
+    opens a connection, so ensure_schema must be read-only once the schema is
+    current. Writing the version unconditionally turns each read into a durable
+    WAL commit: measured 12 ms on local disk and 29 ms on the NAS, versus
+    0.2 ms for a read-only connect.
+    """
+    with db.connect(project):
+        pass                                    # create at v3
+    with db.connect(project) as conn:
+        assert conn.total_changes == 0, (
+            "ensure_schema wrote to an already-current database — every read "
+            "now pays for an fsync")
+
+
+def test_the_schema_version_is_still_written_when_absent(project):
+    """The no-write optimisation must not break first-time creation."""
+    with db.connect(project) as conn:
+        assert conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "3"
+
+
+def test_a_stale_version_is_corrected_on_connect(project):
+    with db.connect(project) as conn:
+        conn.execute("UPDATE meta SET value='2' WHERE key='schema_version'")
+    with db.connect(project) as conn:
+        assert conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "3"
