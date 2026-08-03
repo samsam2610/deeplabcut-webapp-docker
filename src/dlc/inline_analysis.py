@@ -469,6 +469,7 @@ _UI_SETTING_KEYS = {
     "reproj_params", "clip_window_reproj", "finalize_window_reproj",
     "note_tags_reproj", "postfix_tags_reproj", "status_tags_reproj",
     "pose3d_bg_color_reproj", "pose3d_view_prefs_reproj",
+    "tracked_sort",
 }
 
 

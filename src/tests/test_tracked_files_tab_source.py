@@ -111,3 +111,30 @@ def test_writes_are_keyed_by_video_id_not_path():
         "untrack must send the row's video_id"
     assert re.search(r"video_id:\s*videoId", s), \
         "segment writes must send the video_id"
+
+
+def test_renders_the_three_sort_buttons():
+    s = _src()
+    assert 'from "./tracked_sort.mjs"' in s
+    assert "sortTrackedFiles(" in s
+    for label in ("Name", "Recorded", "Opened"):
+        assert f'"{label}"' in s, f"missing the {label} sort button"
+
+
+def test_clicking_the_active_field_flips_direction():
+    s = _src()
+    assert re.search(r'asc["\']?\s*[:?]\s*["\']desc|desc["\']?\s*:\s*["\']asc', s), \
+        "toggling the active field must swap asc/desc"
+    assert "DEFAULT_DIRECTION" in s, \
+        "switching field must adopt that field's default direction"
+
+
+def test_sort_choice_is_persisted_per_project():
+    s = _src()
+    assert "/dlc/project/ui-setting" in s
+    assert "tracked_sort" in s
+
+
+def test_sort_is_applied_to_rows_before_rendering():
+    s = _src()
+    assert re.search(r"sortTrackedFiles\(", s), "rows must pass through the sorter"

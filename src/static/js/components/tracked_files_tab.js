@@ -11,18 +11,31 @@
 
 import { formatRelative } from "./relative_time.mjs";
 import { makeProgressBar } from "./progress_bar.js";
+import { sortTrackedFiles, DEFAULT_DIRECTION } from "./tracked_sort.mjs";
 
 const API = "/dlc/project/tracked-files";
 const BAR_API = "/dlc/project/progress-bar";
+const SETTING_API = "/dlc/project/ui-setting";
+const SORT_KEY = "tracked_sort";
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
+const SORT_FIELDS = [
+  { field: "name", label: "Name" },
+  { field: "recorded", label: "Recorded" },
+  { field: "opened", label: "Opened" },
+];
+
 export function makeTrackedFiles({
-  tabBtn, refreshBtn, panelEl, listEl, headerCheckbox, headerLabel, onOpen, onError,
+  tabBtn, refreshBtn, panelEl, listEl, headerCheckbox, headerLabel,
+  sortMount, headerBarMount, onOpen, onError,
 }) {
   let _rows = new Map();     // path -> {path, name, dir, tracked_at, last_opened_at}
   let _current = null;       // the path currently open in the player, or null
   let _loaded = false;       // has a list fetch ever succeeded?
   let _definition = { segments: [] };   // project's bar definition, fetched with the list
+  // null = keep the server's order (most recently opened first) until the user
+  // picks a field or a stored preference arrives.
+  let _sort = null;                     // { field, direction } | null
   const _ac = new AbortController();
   const _sig = { signal: _ac.signal };
 
@@ -47,6 +60,61 @@ export function makeTrackedFiles({
     listEl.appendChild(p);
   }
 
+  // ── Sorting ───────────────────────────────────────────────────────────────
+
+  function _applySort(rows) {
+    if (!_sort) return rows;
+    return sortTrackedFiles(rows, _sort.field, _sort.direction);
+  }
+
+  function _renderSortButtons() {
+    if (!sortMount) return;
+    sortMount.innerHTML = "";
+    sortMount.style.cssText = "display:inline-flex;gap:.25rem;flex-wrap:wrap";
+    SORT_FIELDS.forEach(({ field, label }) => {
+      const active = _sort && _sort.field === field;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn-sm";
+      btn.style.cssText =
+        "padding:.15rem .4rem;font-size:.7rem;line-height:1" +
+        (active ? ";border-color:var(--accent);color:var(--accent)" : "");
+      btn.title = `Sort by ${label.toLowerCase()}`;
+      btn.textContent = active
+        ? `${label} ${_sort.direction === "asc" ? "▲" : "▼"}`
+        : label;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Same field -> flip; different field -> adopt that field's default.
+        _sort = active
+          ? { field, direction: _sort.direction === "asc" ? "desc" : "asc" }
+          : { field, direction: DEFAULT_DIRECTION[field] };
+        _saveSort();
+        _renderSortButtons();
+        _render();
+      }, _sig);
+      sortMount.appendChild(btn);
+    });
+  }
+
+  // A lost sort preference is not worth interrupting the user, so failures here
+  // are swallowed — the on-screen order has already changed either way.
+  function _saveSort() {
+    if (!_sort) return;
+    _fetchJson(SETTING_API, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ key: SORT_KEY, value: `${_sort.field}:${_sort.direction}` }),
+    }).catch(() => {});
+  }
+
+  function _parseSort(value) {
+    const [field, direction] = String(value || "").split(":");
+    if (!SORT_FIELDS.some((f) => f.field === field)) return null;
+    if (direction !== "asc" && direction !== "desc") return null;
+    return { field, direction };
+  }
+
   function _render() {
     if (_rows.size === 0) {
       _empty("No tracked files. Open a video from Browse Folders and tick the box next to its name.");
@@ -54,7 +122,7 @@ export function makeTrackedFiles({
     }
     listEl.innerHTML = "";
     const now = Date.now();
-    for (const row of _rows.values()) listEl.appendChild(_makeRow(row, now));
+    for (const row of _applySort([..._rows.values()])) listEl.appendChild(_makeRow(row, now));
   }
 
   function _makeRow(f, now) {
@@ -173,14 +241,18 @@ export function makeTrackedFiles({
 
   async function refresh() {
     try {
-      const [data, def] = await Promise.all([
+      const [data, def, setting] = await Promise.all([
         _fetchJson(API),
         // The bar is decorative next to the list: if it fails, still show files.
         _fetchJson(BAR_API).catch(() => ({ segments: [] })),
+        // Likewise the sort preference — concurrent, so it adds no latency.
+        _fetchJson(`${SETTING_API}?key=${SORT_KEY}`).catch(() => ({})),
       ]);
       _definition = def && Array.isArray(def.segments) ? def : { segments: [] };
+      if (_sort === null) _sort = _parseSort(setting && setting.value);
       _rows = new Map((data.files || []).map((f) => [f.path, f]));
       _loaded = true;
+      _renderSortButtons();
       _render();
     } catch (err) {
       _rows = new Map();
@@ -208,6 +280,10 @@ export function makeTrackedFiles({
   }
 
   // ── Wiring ────────────────────────────────────────────────────────────────
+
+  // Render the buttons immediately so the header is complete before the first
+  // fetch resolves.
+  _renderSortButtons();
 
   tabBtn?.addEventListener("click", () => refresh(), _sig);
   refreshBtn?.addEventListener("click", (e) => { e.stopPropagation(); refresh(); }, _sig);
