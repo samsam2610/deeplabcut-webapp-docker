@@ -179,10 +179,28 @@ export function makeTrackedFiles({
     if (!_current) {
       wrap.classList.add("hidden");
       headerCheckbox.checked = false;
+      _syncHeaderBar();
       return;
     }
     wrap.classList.remove("hidden");
     headerCheckbox.checked = _rows.has(_current);
+    _syncHeaderBar();
+  }
+
+  // The bar shows only for a tracked video: progress values attach to a video's
+  // identity, so an untracked file has nothing to display. Same reasoning that
+  // hides the track checkbox.
+  function _syncHeaderBar() {
+    if (!headerBarMount) return;
+    headerBarMount.innerHTML = "";
+    const row = _current ? _rows.get(_current) : null;
+    if (!row) return;
+    headerBarMount.appendChild(makeProgressBar({
+      definition: _definition,
+      values: row.progress || {},
+      onChange: (segmentId, optionId) =>
+        _setSegment(row.path, row.video_id, segmentId, optionId),
+    }));
   }
 
   // ── Mutations ─────────────────────────────────────────────────────────────

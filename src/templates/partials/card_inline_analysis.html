@@ -51,6 +51,7 @@
       <div id="ia-tab-tracked-panel" class="hidden">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
           <label style="font-size:.78rem;color:var(--text-dim)">Tracked videos</label>
+          <span id="ia-sort"></span>
           <button class="btn-sm" id="ia-tracked-refresh" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
         </div>
         <div id="ia-tracked-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem">
@@ -107,6 +108,7 @@
             <input type="checkbox" id="ia-track-checkbox" style="accent-color:var(--accent);width:14px;height:14px">
           </label>
           <span id="ia-selected-name" style="font-family:var(--mono);font-size:.78rem;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"></span>
+          <span id="ia-track-bar" style="flex-shrink:0"></span>
           <button class="btn-sm" id="ia-btn-back" style="padding:.2rem .6rem;font-size:.75rem;flex-shrink:0">&#8592; Back</button>
         </div>
 

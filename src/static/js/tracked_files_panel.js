@@ -154,6 +154,7 @@ const card = $("tracked-files-card");
 if (card) {
   _tracked = makeTrackedFiles({
     refreshBtn: $("tf-refresh"),
+    sortMount: $("tf-sort"),
     panelEl: card,
     listEl: $("tf-list"),
     onOpen: () => {},          // this card manages files; it does not open videos

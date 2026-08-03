@@ -523,10 +523,12 @@ if (document.getElementById("inline-analysis-card")) {
     _trackedFiles = makeTrackedFiles({
       tabBtn: document.getElementById("ia-tab-tracked"),
       refreshBtn: document.getElementById("ia-tracked-refresh"),
+      sortMount: document.getElementById("ia-sort"),
       panelEl: document.getElementById("ia-tab-tracked-panel"),
       listEl: document.getElementById("ia-tracked-list"),
       headerCheckbox: document.getElementById("ia-track-checkbox"),
       headerLabel: document.getElementById("ia-track-label"),
+      headerBarMount: document.getElementById("ia-track-bar"),
       onOpen: (path, name) => _iaOpenBrowseVideo(path, name),
       onError: (msg) => _iaLauncherError(msg),
     });
