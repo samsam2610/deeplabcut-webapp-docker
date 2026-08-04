@@ -360,7 +360,8 @@ _CELERY_INSPECT_TIMEOUT = 1.0  # seconds — page must never block on a sick wor
 _CELERY_SNAPSHOT_KEY  = "jobs:celery_snapshot"       # fresh
 _CELERY_SNAPSHOT_LAST = "jobs:celery_snapshot:last"  # stale-but-serveable
 _CELERY_REFRESH_LOCK  = "jobs:celery_refreshing"
-_CELERY_SNAPSHOT_TTL  = 10   # seconds a snapshot counts as fresh
+_CELERY_SNAPSHOT_TTL  = 10   # seconds a SUCCESSFUL snapshot counts as fresh
+_CELERY_FAIL_TTL      = 2    # a failure is cached only briefly -- see below
 _CELERY_STALE_TTL     = 600  # how long a stale snapshot stays serveable
 
 
@@ -471,10 +472,14 @@ def _celery_inspect_rows() -> tuple[list[dict], bool]:
         reserved = insp.reserved()
     except Exception:
         _store_celery_snapshot(r, [], False)
-        return [], False
+        prev = _last_good_snapshot(r)
+        return (prev["rows"], prev["reachable"]) if prev else ([], False)
     if active is None and reserved is None:
+        # A timed-out broadcast looks identical to "no workers". Serve the last
+        # known-good rows rather than blanking the page on one slow reply.
         _store_celery_snapshot(r, [], False)
-        return [], False
+        prev = _last_good_snapshot(r)
+        return (prev["rows"], prev["reachable"]) if prev else ([], False)
     rows = []
     for worker, tasks in (active or {}).items():
         for t in tasks:
@@ -487,16 +492,41 @@ def _celery_inspect_rows() -> tuple[list[dict], bool]:
 
 
 def _store_celery_snapshot(r, rows, reachable) -> None:
-    """Persist a snapshot as both `fresh` and `last`. Never raises: caching is
-    an optimisation, and a redis hiccup must not take the jobs page down."""
+    """Persist a snapshot. Never raises: caching is an optimisation, and a redis
+    hiccup must not take the jobs page down.
+
+    A FAILED inspect is cached only for `_CELERY_FAIL_TTL` and never overwrites
+    `LAST`. Caching a failure for the full TTL made a single transient timeout
+    hide every running task for 10s -- including the session draining the user's
+    queue -- which is worse than showing slightly stale but real rows.
+    """
     if r is None:
         return
     try:
         blob = _json.dumps({"rows": rows, "reachable": reachable})
+        if not reachable:
+            # NEVER cache a failure. A short-TTL failure entry overwrote the
+            # fresh SUCCESS entry, collapsing the cache and sending every other
+            # request back through the 4s broadcast. The NX refresh lock alone
+            # is enough to stop a stampede; on failure we serve LAST instead.
+            return
         r.set(_CELERY_SNAPSHOT_KEY, blob, ex=_CELERY_SNAPSHOT_TTL)
         r.set(_CELERY_SNAPSHOT_LAST, blob, ex=_CELERY_STALE_TTL)
     except Exception:
         pass
+
+
+def _last_good_snapshot(r):
+    """The most recent SUCCESSFUL snapshot, or None."""
+    if r is None:
+        return None
+    try:
+        blob = r.get(_CELERY_SNAPSHOT_LAST)
+        if blob:
+            return _json.loads(blob)
+    except Exception:
+        pass
+    return None
 
 
 def _parse_inline_suffix(key: str, prefix: str) -> tuple[str, str] | None:
