@@ -348,7 +348,20 @@ def dlc_training_jobs():
 # (richer: project, stage, engine, gpu_id, …) wins over the bare inspector
 # record when both are present.
 
-_CELERY_INSPECT_TIMEOUT = 1.5  # seconds — page must never block on a sick worker
+_CELERY_INSPECT_TIMEOUT = 1.0  # seconds — page must never block on a sick worker
+
+# inspect() is TWO blocking broadcasts (active + reserved), each waiting the full
+# timeout for replies from every worker -- ~4 s while a training job keeps them
+# busy. gunicorn runs 4 SYNC workers, so a /jobs page polling this endpoint from
+# a couple of tabs saturates the whole pool and the entire site stops responding.
+# That happened in production. Cache the snapshot so polling reuses one result,
+# and cap concurrent inspects at one via an NX lock; everyone else gets the last
+# known snapshot rather than queueing behind a broadcast.
+_CELERY_SNAPSHOT_KEY  = "jobs:celery_snapshot"       # fresh
+_CELERY_SNAPSHOT_LAST = "jobs:celery_snapshot:last"  # stale-but-serveable
+_CELERY_REFRESH_LOCK  = "jobs:celery_refreshing"
+_CELERY_SNAPSHOT_TTL  = 10   # seconds a snapshot counts as fresh
+_CELERY_STALE_TTL     = 600  # how long a stale snapshot stays serveable
 
 
 def _to_float(v) -> float | None:
@@ -426,13 +439,41 @@ def _celery_inspect_rows() -> tuple[list[dict], bool]:
     inspect looks like), returns `([], False)` so the caller can degrade
     gracefully instead of hanging the whole /jobs page on a sick worker.
     """
+    # --- cache layer (see _CELERY_SNAPSHOT_KEY comment) ------------------
+    r = None
+    try:
+        r = _ctx.redis_client()
+        hit = r.get(_CELERY_SNAPSHOT_KEY)
+        if hit:
+            d = _json.loads(hit)
+            return d["rows"], d["reachable"]
+    except Exception:
+        r = None  # no redis -> fall through and inspect directly
+
+    if r is not None:
+        try:
+            # Only ONE request may run the broadcast; others serve the last
+            # snapshot immediately rather than piling up on the worker pool.
+            got_lock = r.set(_CELERY_REFRESH_LOCK, "1", nx=True,
+                             ex=int(_CELERY_INSPECT_TIMEOUT * 2) + 2)
+            if not got_lock:
+                stale = r.get(_CELERY_SNAPSHOT_LAST)
+                if stale:
+                    d = _json.loads(stale)
+                    return d["rows"], d["reachable"]
+                return [], False
+        except Exception:
+            pass
+
     try:
         insp = _ctx.celery().control.inspect(timeout=_CELERY_INSPECT_TIMEOUT)
         active = insp.active()
         reserved = insp.reserved()
     except Exception:
+        _store_celery_snapshot(r, [], False)
         return [], False
     if active is None and reserved is None:
+        _store_celery_snapshot(r, [], False)
         return [], False
     rows = []
     for worker, tasks in (active or {}).items():
@@ -441,7 +482,21 @@ def _celery_inspect_rows() -> tuple[list[dict], bool]:
     for worker, tasks in (reserved or {}).items():
         for t in tasks:
             rows.append(_row_from_inspect_task(t, worker, "reserved"))
+    _store_celery_snapshot(r, rows, True)
     return rows, True
+
+
+def _store_celery_snapshot(r, rows, reachable) -> None:
+    """Persist a snapshot as both `fresh` and `last`. Never raises: caching is
+    an optimisation, and a redis hiccup must not take the jobs page down."""
+    if r is None:
+        return
+    try:
+        blob = _json.dumps({"rows": rows, "reachable": reachable})
+        r.set(_CELERY_SNAPSHOT_KEY, blob, ex=_CELERY_SNAPSHOT_TTL)
+        r.set(_CELERY_SNAPSHOT_LAST, blob, ex=_CELERY_STALE_TTL)
+    except Exception:
+        pass
 
 
 def _parse_inline_suffix(key: str, prefix: str) -> tuple[str, str] | None:
