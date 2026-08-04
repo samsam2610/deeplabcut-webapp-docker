@@ -614,11 +614,20 @@ def static_files(filename):
 def proxy_dlc_3d(path):
     import requests as _req
     url = f"http://dlc-3d:5050/dlc-3d/{path}"
+    # dlc-3D has no session of its own — the browser's cookie belongs to this
+    # app. Name the user explicitly so dlc-3D can look up THEIR active project
+    # instead of keeping one global that users overwrite for each other.
+    # Same _user_id() that keys webapp:dlc_project:{uid}, so the two agree.
+    fwd_headers = {
+        k: v for k, v in request.headers
+        if k.lower() not in ("host", "content-length", "transfer-encoding")
+    }
+    fwd_headers["X-DLC-User"] = _user_id()
     try:
         resp = _req.request(
             method=request.method,
             url=url,
-            headers={k: v for k, v in request.headers if k.lower() not in ("host", "content-length", "transfer-encoding")},
+            headers=fwd_headers,
             data=request.get_data(),
             params=request.args,
             stream=True,
