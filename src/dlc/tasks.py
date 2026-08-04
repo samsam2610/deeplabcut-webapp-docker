@@ -2980,6 +2980,69 @@ def _bump_activity(redis_, user_id, snap_key):
     redis_.hset(key, "last_activity", str(_ia_time.time()))
 
 
+#: How often the session worker stamps `heartbeat` on its session hash, and
+#: the Redis TTL that stamp refreshes. The TTL must be comfortably larger
+#: than the interval so a slow beat never lets the hash lapse.
+_SESSION_HEARTBEAT_S = 30
+_SESSION_HASH_TTL_S = 3600
+
+
+def _touch_session(redis_, user_id, snap_key, ttl_seconds=_SESSION_HASH_TTL_S):
+    """Stamp `heartbeat` on an EXISTING session hash and refresh its Redis TTL.
+
+    _publish_status sets a 1 h expiry but only runs at session start and at
+    exit, and _bump_activity's HSET does not refresh a TTL. So the hash of a
+    session that has been draining ranges for over an hour simply vanished
+    mid-run, with two consequences: /session/status reported a live session as
+    absent, and /session/start saw no hash and dispatched a SECOND worker onto
+    the same queue.
+
+    `heartbeat` is also the liveness signal /session/start uses to tell a
+    running session from one whose worker died (hard time limit, OOM,
+    container restart) — a corpse stops beating and is re-dispatched, which
+    also drains whatever its queue still holds.
+
+    Only touches a hash that already exists: recreating it here would
+    resurrect a status-less key that /session/start cannot interpret.
+    """
+    key = _session_key(user_id, snap_key)
+    try:
+        if not redis_.exists(key):
+            return
+        redis_.hset(key, "heartbeat", str(_ia_time.time()))
+        redis_.expire(key, ttl_seconds)
+    except Exception:
+        pass  # a missed beat is recoverable; a raised beat kills the session
+
+
+def _start_session_heartbeat(redis_, user_id, snap_key,
+                             every=_SESSION_HEARTBEAT_S):
+    """Beat _touch_session on a daemon thread until the returned Event is set.
+
+    Runs for the whole session INCLUDING the model load, so `heartbeat` is
+    fresh from the moment /session/start writes status=warming. Returns
+    (stop_event, thread); the caller must set the event in a finally.
+
+    Deliberately a thread and not an in-loop stamp: the BLPOP that waits for
+    the next range blocks for minutes at a time, and slicing it up to beat
+    would change the loop's exit semantics for no gain.
+    """
+    import threading as _threading
+
+    stop = _threading.Event()
+
+    def _beat():
+        # Beat once immediately so a session that dies during the model load
+        # still has a heartbeat to be judged stale against.
+        _touch_session(redis_, user_id, snap_key)
+        while not stop.wait(every):
+            _touch_session(redis_, user_id, snap_key)
+
+    t = _threading.Thread(target=_beat, daemon=True, name="inline-session-hb")
+    t.start()
+    return stop, t
+
+
 def _control_says_stop(redis_, user_id, snap_key):
     """One-shot consume of inline:control:<…>. Returns True iff key was 'stop'."""
     key = _control_key(user_id, snap_key)
@@ -3148,6 +3211,23 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
         started_at=str(_ia_time.time()),
     )
 
+    # Keep the session hash alive (and provably alive) for as long as this
+    # worker is. See _touch_session for what breaks without it.
+    _hb_stop, _ = _start_session_heartbeat(redis_, user_id, snap_key)
+    try:
+        _dlc_inline_session_loop(
+            redis_, user_id, config_path, snap_key, snapshot_path,
+            shuffle, trainingsetindex, batch_size, ttl, queue_key,
+        )
+    finally:
+        _hb_stop.set()
+
+
+def _dlc_inline_session_loop(redis_, user_id, config_path, snap_key,
+                             snapshot_path, shuffle, trainingsetindex,
+                             batch_size, ttl, queue_key):
+    """Model load + drain loop. Split out of _dlc_inline_session_inner only so
+    the heartbeat thread there gets a `finally` that covers every exit path."""
     # Resolve DLC handles from module globals (tests patch).
     _LoaderCls = globals().get("_dlc_loader_cls")
     _apis_utils = globals().get("_dlc_apis_utils")
@@ -3197,6 +3277,17 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
         except Exception:
             continue
 
+        # Candidate-peak pass, RPUSHed onto the tail of this same queue by
+        # /inline-analysis/peaks so it runs AFTER every range already queued
+        # (the queue is LPUSH+BLPOP, i.e. head-driven — a tail item is popped
+        # last). Running it here rather than as its own Celery task is what
+        # makes it survive the browser closing: the card no longer has to stay
+        # open to fire it once the analysis finishes.
+        if req.get("kind") == "peaks":
+            _run_queued_peaks(redis_, req, scorer=scorer)
+            _bump_activity(redis_, user_id, snap_key)
+            continue
+
         if req.get("batch_size") and req["batch_size"] != cached_batch_size:
             try:
                 runner = _apis_utils.get_pose_inference_runner(
@@ -3241,7 +3332,21 @@ def _redis_client_from_celery_app(task):
     return _redis_mod.Redis.from_url(url, decode_responses=True)
 
 
-@celery.task(bind=True, name="tasks.dlc_inline_session", acks_late=False)
+@celery.task(
+    bind=True, name="tasks.dlc_inline_session", acks_late=False,
+    # This session is a DRAIN LOOP, not a single unit of work: one
+    # "Analyze for tag" run queues 200-300 ranges and the worker chews
+    # through them for hours. Inheriting celery_app's global
+    # task_time_limit=7200 SIGKILLed it at exactly 2 h with ranges still
+    # queued -- and because the kill skips the `finally`, nothing published
+    # a status and nothing ever drained the remainder (observed twice in
+    # the worker log: 2026-08-01 and 2026-08-04, 30 ranges stranded).
+    # The loop already self-terminates on the idle TTL, so the only job of
+    # these limits is to be an outer backstop. Same pattern as
+    # dlc_analyze_videos above.
+    time_limit=43200,        # 12 h hard kill
+    soft_time_limit=39600,   # 11 h soft warning
+)
 def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
                        shuffle, trainingsetindex, batch_size, ttl):
     """Long-lived warm-worker session for one (user, project, snapshot) triple.
@@ -3265,6 +3370,36 @@ def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
 # See deeplabcut-webapp-docker-supports/dlc-3D/docs/superpowers/specs/
 #     2026-07-30-heatmap-peak-screen-design.md
 # --------------------------------------------------------------------------
+
+def _run_queued_peaks(redis_, req, *, scorer):
+    """Run a `kind: "peaks"` queue item inside the warm session worker.
+
+    The session already knows `scorer`, so unlike the standalone
+    tasks.dlc_emit_peaks path the caller does NOT have to supply h5_paths —
+    they are derived with the same _resolve_h5_path the ranges were written
+    through. That is what lets the card queue the peak pass up front, before
+    any range has finished, instead of waiting for a scorer to come back from
+    /range/status while the tab stays open.
+
+    Additive and never fatal: a failure marks only this request's own result
+    hash, exactly as dlc_emit_peaks does. The session keeps draining.
+    """
+    req_id = req.get("req_id") or ""
+    try:
+        video_paths = [str(v) for v in (req.get("video_paths") or [])]
+        h5_paths = [str(_resolve_h5_path(v, scorer)) for v in video_paths]
+        _emit_peaks_inner(
+            redis_, req_id, video_paths, h5_paths,
+            req.get("frames") or [],
+            req.get("model_dir") or "",
+            req.get("snapshot_name") or "",
+            int(req.get("k") or 5),
+            int(req.get("min_distance") or 3),
+            int(req.get("batch_size") or 1),
+        )
+    except Exception as exc:                       # noqa: BLE001
+        _publish_result(redis_, req_id, status="error", error=str(exc))
+
 
 def _emit_peaks_inner(redis_, req_id, video_paths, h5_paths, frames,
                       model_dir, snapshot_name, k, min_distance, batch_size=1):

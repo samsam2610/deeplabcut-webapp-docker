@@ -8,10 +8,17 @@ Routes (all under /dlc/project/inline-analysis/):
   GET  /range/status
   GET  /video-info
 
-Activity (idle TTL) is bumped ONLY on /range submit. The worker
-times out after `ttl_seconds` of no range submission, regardless
-of whether the card is open. No client-side heartbeat — that's
-the Jobs-page pattern and isn't needed here.
+Activity (idle TTL) is bumped ONLY on /range submit and on each range
+the worker finishes. The worker times out after `ttl_seconds` of no
+range submission, regardless of whether the card is open. No
+client-side heartbeat — that's the Jobs-page pattern and isn't needed
+here, and a run must survive the browser closing.
+
+The WORKER does heartbeat, on `heartbeat` in the session hash (see
+tasks._touch_session). That is a liveness signal, not a keepalive: it
+is how /session/start tells a running session from one whose worker was
+killed, so a dead session is replaced instead of silently swallowing
+every subsequent submit.
 
 See docs/superpowers/specs/2026-05-20-inline-analysis-design.md.
 """
@@ -180,6 +187,44 @@ def _finalize_range_to_canonical(video_path, source_h5, start_frame, n_frames, c
 
 # ── Routes ────────────────────────────────────────────────────────────────
 
+#: A session worker stamps `heartbeat` every 30 s (tasks._SESSION_HEARTBEAT_S).
+#: Anything older than this is a corpse — its worker was SIGKILLed by a task
+#: time limit, OOM-killed, or lost to a container restart.
+_SESSION_STALE_AFTER_S = 120
+
+
+def _session_is_alive(existing: dict) -> bool:
+    """True iff this session still has a worker that will drain its queue.
+
+    A status of warming/ready is NOT sufficient on its own. A hard kill skips
+    the worker's exit path, so the hash keeps saying "ready" forever while
+    nothing drains the queue; /session/start used to believe it and return
+    early, so every subsequent submit piled onto a queue with no consumer and
+    the card sat there looking warm. Treating such a session as dead makes the
+    next click re-dispatch a worker, which also drains whatever the dead one
+    left behind.
+
+    `warming` with NO heartbeat is alive: /session/start writes that hash at
+    dispatch, and the task can sit in the broker queue for a long time before a
+    worker picks it up — the worker log has a 2 h wait behind another job.
+    Calling that dead would dispatch a duplicate session on every click.
+    Once a worker has beaten even once, a stale beat means it died.
+    """
+    status = existing.get("status")
+    if status not in {"warming", "ready"}:
+        return False
+    raw = existing.get("heartbeat")
+    if not raw:
+        # Never started. Queued sessions are alive; a "ready" hash without a
+        # beat is a corpse from before heartbeats existed.
+        return status == "warming"
+    try:
+        beat = float(raw)
+    except (TypeError, ValueError):
+        return False
+    return (time.time() - beat) < _SESSION_STALE_AFTER_S
+
+
 @bp.route("/dlc/project/inline-analysis/session/start", methods=["POST"])
 def session_start():
     project = _active_project()
@@ -216,7 +261,7 @@ def session_start():
     redis = _ctx.redis_client()
 
     existing = _hgetall(redis, session_key)
-    if existing.get("status") in {"warming", "ready"}:
+    if _session_is_alive(existing):
         return jsonify({
             "session_id": snap_key, "snap_key": snap_key,
             "status": existing.get("status", "warming"),
@@ -264,8 +309,14 @@ def session_status():
     last = float(h.get("last_activity") or 0)
     ttl = 300
     idle_remaining = max(0, int(ttl - (time.time() - last)))
+    status = h.get("status", "unknown")
+    # Don't report a hard-killed worker as warm just because its hash still
+    # says so — see _session_is_alive. "dead" is what the card's warm
+    # indicator shows, and it is the truth until the next start re-dispatches.
+    if status in {"warming", "ready"} and not _session_is_alive(h):
+        status = "dead"
     out = {
-        "status": h.get("status", "unknown"),
+        "status": status,
         "idle_remaining_s": idle_remaining,
     }
     if h.get("last_error"):
@@ -930,10 +981,16 @@ def peaks_submit():
     Additive: this never runs as part of an analysis and never touches the
     pose h5. A failure here leaves the analysis results exactly as they were.
 
-    h5_paths is REQUIRED, parallel to video_paths (same length, same order):
-    the scorer string can't be derived in this request context, so the
-    caller supplies the pose h5 path directly — it already has `scorer` from
-    /range/status and can build video_stem + scorer + ".h5" itself.
+    Two routes, chosen by whether the caller sends `snap_key`:
+
+    - with `snap_key`: appended to that warm session's queue and run by its
+      worker after every range already queued. The worker knows the scorer,
+      so h5_paths is neither needed nor accepted. Preferred — the caller can
+      queue this before any range has finished and then close the tab.
+    - without: dispatched as a standalone tasks.dlc_emit_peaks. The scorer
+      can't be derived in this request context, so h5_paths is REQUIRED,
+      parallel to video_paths (same length, same order) — the caller has
+      `scorer` from /range/status and builds video_stem + scorer + ".h5".
     """
     project = _active_project()
     if not project:
@@ -966,17 +1023,24 @@ def peaks_submit():
             "error": f"{len(frames)} frames exceeds the cap of {_PEAKS_FRAME_CAP}"
         }), 400
 
-    h5_paths = body.get("h5_paths") or []
-    if not h5_paths or len(h5_paths) != len(video_paths):
-        return jsonify({
-            "error": "h5_paths required, parallel to video_paths"
-        }), 400
+    # `snap_key` selects the in-session route: the pass is appended to that
+    # warm session's own queue and run by its worker, which already knows the
+    # scorer and so derives h5_paths itself. Without it we fall back to the
+    # standalone Celery task, which cannot, and therefore still needs
+    # h5_paths from the caller.
+    snap_key = (body.get("snap_key") or "").strip()
     resolved_h5s = []
-    for raw in h5_paths:
-        p = Path(str(raw))
-        if not _sec_check(p):
-            return jsonify({"error": "h5 path is outside the data root"}), 403
-        resolved_h5s.append(p)
+    if not snap_key:
+        h5_paths = body.get("h5_paths") or []
+        if not h5_paths or len(h5_paths) != len(video_paths):
+            return jsonify({
+                "error": "h5_paths required, parallel to video_paths"
+            }), 400
+        for raw in h5_paths:
+            p = Path(str(raw))
+            if not _sec_check(p):
+                return jsonify({"error": "h5 path is outside the data root"}), 403
+            resolved_h5s.append(p)
 
     # /dlc/project/snapshots returns project-relative paths (rel_path).
     # Resolve against the active project root before validating — see the
@@ -1002,10 +1066,9 @@ def peaks_submit():
         return jsonify({"error": str(exc)}), 400
 
     req_id = uuid.uuid4().hex
-    _dispatch_emit_peaks(
+    common = dict(
         req_id=req_id,
         video_paths=[str(p) for p in resolved_videos],
-        h5_paths=[str(p) for p in resolved_h5s],
         frames=frames,
         model_dir=model_dir,
         snapshot_name=snapshot_name,
@@ -1013,6 +1076,17 @@ def peaks_submit():
         min_distance=min_distance,
         batch_size=batch_size,
     )
+    if snap_key:
+        # RPUSH, not LPUSH: the session queue is drained from the head, so the
+        # tail is the one position guaranteed to come after every range the
+        # caller just submitted. This is what lets the card fire the peak pass
+        # up front and then stop caring whether the browser is still open.
+        redis = _ctx.redis_client()
+        queue_key = f"inline:queue:{_user_id()}:{snap_key}"
+        redis.rpush(queue_key, json.dumps({"kind": "peaks", **common}))
+        return jsonify({"req_id": req_id, "queued_in_session": True}), 202
+
+    _dispatch_emit_peaks(h5_paths=[str(p) for p in resolved_h5s], **common)
     return jsonify({"req_id": req_id}), 202
 
 
