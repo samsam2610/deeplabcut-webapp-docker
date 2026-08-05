@@ -1,5 +1,6 @@
 "use strict";
 import { state } from './state.js';
+import { pickPrimaryVariant } from './internal/pick_primary_variant.mjs';
 import { makeFileBrowser } from './components/file_browser.js';
 import { makeTrackedFiles } from "./components/tracked_files_tab.js";
 
@@ -1358,14 +1359,31 @@ if (document.getElementById("inline-analysis-card")) {
     // Cached on the page for re-populating after add/remove.
     let _iaLastVariants = [];
 
+    // Cached `pinned_snapshot` ui-setting, refreshed alongside the variant
+    // list. The pick has to stay synchronous, so it cannot await the setting.
+    let _iaPinnedSnapshot = "";
+
+    async function _iaRefreshPinnedSnapshot() {
+      try {
+        const d = await (await fetch(
+          "/dlc/project/ui-setting?key=pinned_snapshot")).json();
+        _iaPinnedSnapshot = (d && d.value) || "";
+      } catch (_) { /* unpinned behaviour is the safe default */ }
+    }
+
     function _iaPickBestPrimary(variants) {
-      // Newest variant by ts wins. Raw companion has ts=null and is the
-      // fallback when no dated variants exist.
-      const dated = (variants || []).filter(v => !v.disabled && v.ts);
-      if (dated.length) {
-        return dated.reduce((a, b) => (a.ts > b.ts ? a : b));
-      }
-      return (variants || []).find(v => !v.disabled) || null;
+      // The PINNED model wins when its h5 exists for this video. Pinning is
+      // how the user says "analyse with this model"; defaulting the overlay to
+      // a different one — usually whatever was analysed most recently — shows
+      // markers from a model they did not choose. `pinned_snapshot` is a
+      // project-level setting, so it is the same pin the 3D cards honour.
+      return pickPrimaryVariant(variants, _iaPinnedSnapshot, (vs) => {
+        // Unchanged prior rule: newest by ts, else the first enabled variant
+        // (the raw companion carries ts=null).
+        const dated = vs.filter(v => !v.disabled && v.ts);
+        if (dated.length) return dated.reduce((a, b) => (a.ts > b.ts ? a : b));
+        return vs.find(v => !v.disabled) || null;
+      });
     }
 
     function _iaPlayStep() {
@@ -1412,7 +1430,8 @@ if (document.getElementById("inline-analysis-card")) {
         select.appendChild(opt);
       });
 
-      // Default selection.
+      // Default selection. Refresh the pin first — it decides the answer.
+      await _iaRefreshPinnedSnapshot();
       const defaultEntry = _iaPickBestPrimary(data.variants);
       if (!defaultEntry) return;
       select.value = defaultEntry.path;
