@@ -6,293 +6,261 @@
           Close
         </button>
       </div>
-      <p class="subtitle">Run pose estimation on a video file, image file, or folder using the trained model.</p>
+      <p class="subtitle">Queue videos, pick a model, and run pose estimation against a warm in-memory model. A single run is just a queue of one.</p>
 
-      <!-- ── Batch Analyze ──────────────────────────────────────────────────
-           Runs the INLINE-analysis pipeline (warm session + range queue) over
-           many videos, rather than the one-shot analyze_videos path the rest
-           of this card drives. Collapsed it is a single checkbox line; the
-           single-run controls below are untouched and keep working. -->
-      <div style="margin-bottom:.7rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:7px;background:var(--surface-2)">
-        <label style="display:flex;align-items:center;gap:.45rem;font-size:.82rem;font-weight:600;cursor:pointer;user-select:none">
-          <input type="checkbox" id="ba-enable" style="accent-color:var(--accent);width:14px;height:14px" />
-          Batch Analyze
-          <span style="font-weight:400;font-size:.73rem;color:var(--text-dim)">— queue many videos through the warm inline model</span>
-        </label>
+      <!-- ── The card IS the batch panel ────────────────────────────────────
+           One source of files (the queue), one parameter set (the two halves
+           below), several actions. There is no separate single-run workflow:
+           "Analyze all" over a one-file queue is what that used to be.
+           See docs/superpowers/specs/2026-08-06-analyze-card-unified-design.md -->
+      <div id="ba-panel">
+        <!-- Source tabs — same three sources as the inline-analysis cards -->
+        <div style="display:flex;gap:.4rem;margin-bottom:.5rem">
+          <button id="ba-tab-project" class="btn-sm active" style="padding:.2rem .65rem;font-size:.75rem">Project Content</button>
+          <button id="ba-tab-browse" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Browse Folders</button>
+          <button id="ba-tab-tracked" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Tracked Files</button>
+        </div>
+        <div id="ba-launcher-error" class="fe-extract-status" style="margin-bottom:.35rem"></div>
 
-        <div id="ba-panel" class="hidden" style="margin-top:.6rem">
-          <!-- Source tabs — same three sources as the inline-analysis cards -->
-          <div style="display:flex;gap:.4rem;margin-bottom:.5rem">
-            <button id="ba-tab-project" class="btn-sm active" style="padding:.2rem .65rem;font-size:.75rem">Project Content</button>
-            <button id="ba-tab-browse" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Browse Folders</button>
-            <button id="ba-tab-tracked" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Tracked Files</button>
+        <div id="ba-tab-project-panel">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+            <label style="font-size:.78rem;color:var(--text-dim)">Project videos</label>
+            <button class="btn-sm" id="ba-project-refresh" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
           </div>
-          <div id="ba-launcher-error" class="fe-extract-status" style="margin-bottom:.35rem"></div>
-
-          <div id="ba-tab-project-panel">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
-              <label style="font-size:.78rem;color:var(--text-dim)">Labeled content</label>
-              <button class="btn-sm" id="ba-project-refresh" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
-            </div>
-            <div id="ba-project-list" class="ba-source-list" style="overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.4rem .5rem;font-size:.77rem">
-              <p class="explorer-empty">Loading…</p>
-            </div>
+          <div id="ba-project-list" class="ba-source-list" style="overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.4rem .5rem;font-size:.77rem">
+            <p class="explorer-empty">Loading…</p>
           </div>
+        </div>
 
-          <div id="ba-tab-browse-panel" class="hidden">
-            <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem">
-              <input id="ba-browse-path" type="text" spellcheck="false" autocomplete="off" placeholder="/paste/a/path/here"
-                style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:.25rem .45rem" />
-              <button class="btn-sm" id="ba-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
-            </div>
-            <div id="ba-browse-list" class="ba-source-list" style="overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.4rem .5rem;font-size:.77rem"></div>
+        <div id="ba-tab-browse-panel" class="hidden">
+          <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem">
+            <input id="ba-browse-path" type="text" spellcheck="false" autocomplete="off" placeholder="/paste/a/path/here"
+              style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:.25rem .45rem" />
+            <button class="btn-sm" id="ba-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
           </div>
+          <div id="ba-browse-list" class="ba-source-list" style="overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.4rem .5rem;font-size:.77rem"></div>
+        </div>
 
-          <div id="ba-tab-tracked-panel" class="hidden">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
-              <label style="font-size:.78rem;color:var(--text-dim)">Tracked videos</label>
-              <span id="ba-tracked-sort"></span>
-              <button class="btn-sm" id="ba-tracked-refresh" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
-            </div>
-            <div id="ba-tracked-list" class="ba-source-list" style="overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.4rem .5rem;font-size:.77rem">
-              <p class="explorer-empty">Loading…</p>
-            </div>
+        <div id="ba-tab-tracked-panel" class="hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+            <label style="font-size:.78rem;color:var(--text-dim)">Tracked videos</label>
+            <span id="ba-tracked-sort"></span>
+            <button class="btn-sm" id="ba-tracked-refresh" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
           </div>
+          <div id="ba-tracked-list" class="ba-source-list" style="overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.4rem .5rem;font-size:.77rem">
+            <p class="explorer-empty">Loading…</p>
+          </div>
+        </div>
 
-          <!-- Queue + Options side by side. The source list above spans the
-               full width because it is what benefits most from it — the
-               tracked-files rows carry a progress bar and a last-opened column
-               that were being crushed at 560px. -->
-          <div class="ba-split" style="margin-top:.6rem">
-            <div>
-              <div class="ba-col-head">
-                <span>Queue (<b id="ba-queue-count">0</b>)</span>
-                <button class="btn-sm" id="ba-queue-clear" style="padding:.15rem .45rem;font-size:.73rem;opacity:.75">✕ Clear</button>
-                <span style="font-size:.71rem">double-click a video above to add it</span>
+        <!-- Queue — the single source of files for every action on this card. -->
+        <div class="ba-col-head" style="margin-top:.6rem">
+          <span>Queue (<b id="ba-queue-count">0</b>)</span>
+          <button class="btn-sm" id="ba-queue-clear" style="padding:.15rem .45rem;font-size:.73rem;opacity:.75">✕ Clear</button>
+          <span style="font-size:.71rem">double-click a video above to add it</span>
+        </div>
+        <div id="ba-queue-list" style="display:none;border:1px solid var(--border);border-radius:5px;background:var(--surface);max-height:150px;overflow-y:auto;padding:.3rem .4rem;font-size:.74rem;font-family:var(--mono)"></div>
+
+        <!-- Model | Run options. Shuffle and training-set index sit with Model
+             because they select WHICH trained model, not how the run behaves. -->
+        <div class="ba-split" style="margin-top:.7rem">
+          <div>
+            <div class="ba-col-head"><span>Model</span></div>
+            <div class="ba-box">
+              <div class="scorer-row" style="margin-bottom:.4rem">
+                <label for="av-snapshot">Snapshot</label>
+                <select id="av-snapshot" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+                  <option value="-1">Latest (from config)</option>
+                </select>
+                <button class="btn-sm" id="av-refresh-snapshots" title="Refresh snapshot list" style="padding:.2rem .45rem;font-size:.75rem">↺</button>
               </div>
-              <div id="ba-queue-list" style="display:none;border:1px solid var(--border);border-radius:5px;background:var(--surface);max-height:170px;overflow-y:auto;padding:.3rem .4rem;font-size:.74rem;font-family:var(--mono)"></div>
-            </div>
+              <!-- Pin list: checking a row pins that snapshot for the project AND
+                   sets the dropdown, because the dropdown's value is what every
+                   run actually sends. Mirrors #ia3d-snapshot-pin-list. -->
+              <div id="av-snapshot-pin-list" style="max-height:7.5rem;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.3rem .5rem;margin-bottom:.45rem;font-size:.77rem"></div>
+              <div id="av-snapshot-pin-note" class="ba-hint" style="margin-bottom:.35rem"></div>
 
-            <div>
-              <div class="ba-col-head"><span>Options</span></div>
-              <div style="border:1px solid var(--border);border-radius:5px;background:var(--surface);padding:.45rem .55rem">
-                <div style="font-size:.74rem;color:var(--text-dim);margin-bottom:.25rem">Model</div>
-                <div style="display:flex;flex-direction:column;gap:.2rem;margin-bottom:.5rem">
-                  <label style="display:flex;align-items:center;gap:.4rem;font-size:.77rem;cursor:pointer">
-                    <input type="radio" name="ba-policy" value="pinned" checked style="accent-color:var(--accent)" />
-                    Selected / pinned model
-                  </label>
-                  <label style="display:flex;align-items:center;gap:.4rem;font-size:.77rem;cursor:pointer">
-                    <input type="radio" name="ba-policy" value="latest_iter_best" style="accent-color:var(--accent)" />
-                    Latest iteration's best model
-                  </label>
-                  <label style="display:flex;align-items:center;gap:.4rem;font-size:.77rem;cursor:pointer">
-                    <input type="radio" name="ba-policy" value="latest" style="accent-color:var(--accent)" />
-                    Latest model
-                  </label>
+              <div style="font-size:.74rem;color:var(--text-dim);margin-bottom:.25rem">Which model to run</div>
+              <div style="display:flex;flex-direction:column;gap:.2rem;margin-bottom:.5rem">
+                <label style="display:flex;align-items:center;gap:.4rem;font-size:.77rem;cursor:pointer">
+                  <input type="radio" name="ba-policy" value="pinned" checked style="accent-color:var(--accent)" />
+                  Selected / pinned model
+                </label>
+                <label style="display:flex;align-items:center;gap:.4rem;font-size:.77rem;cursor:pointer">
+                  <input type="radio" name="ba-policy" value="latest_iter_best" style="accent-color:var(--accent)" />
+                  Latest iteration's best model
+                </label>
+                <label style="display:flex;align-items:center;gap:.4rem;font-size:.77rem;cursor:pointer">
+                  <input type="radio" name="ba-policy" value="latest" style="accent-color:var(--accent)" />
+                  Latest model
+                </label>
+              </div>
+
+              <div class="av-param-grid">
+                <div class="scorer-row">
+                  <label for="av-shuffle">Shuffle</label>
+                  <input type="number" id="av-shuffle" value="1" min="1" max="20" style="width:5rem" />
                 </div>
-                <label style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;cursor:pointer;user-select:none;margin-bottom:.3rem"
-                       title="Also submit each queued video's sibling camera (resolved from the filename)">
-                  <input type="checkbox" id="ba-both-cams" style="accent-color:var(--accent);width:14px;height:14px" />
-                  Both cameras
-                  <span style="font-size:.72rem;color:var(--text-dim)">— also submit each video's sibling</span>
-                </label>
-                <label style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;cursor:pointer;user-select:none"
-                       title="Wait until a training job has been seen running and has then finished, then resolve the model and start">
-                  <input type="checkbox" id="ba-wait-training" style="accent-color:var(--accent);width:14px;height:14px" />
-                  Queue the run after training finishes
-                </label>
+                <div class="scorer-row">
+                  <label for="av-trainingsetindex">Training set index</label>
+                  <input type="number" id="av-trainingsetindex" value="0" min="0" style="width:5rem" />
+                </div>
               </div>
             </div>
           </div>
 
-          <!-- Tags. The chips ARE the selection — clicking one toggles whether
-               that tag is part of the next run. The field only mints new chips. -->
-          <div class="ba-tag-row" style="margin-top:.6rem">
-            <input type="text" id="ba-tag-input" placeholder="new tag (exact match)"
-              style="flex:1;min-width:150px;max-width:320px;font-size:.77rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.25rem .45rem" />
-            <button class="btn-sm" id="ba-tag-add" title="Save this tag for the project">+ Add</button>
-            <span style="flex:1"></span>
-            <label style="font-size:.74rem;color:var(--text-dim)">before</label>
-            <input type="number" id="ba-before" value="200" min="0" style="width:4.6rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem" />
-            <label style="font-size:.74rem;color:var(--text-dim)">after</label>
-            <input type="number" id="ba-after" value="599" min="0" style="width:4.6rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem" />
-            <span id="ba-window-total" class="ba-hint">800 frames</span>
+          <div>
+            <div class="ba-col-head"><span>Run options</span></div>
+            <div class="ba-box">
+              <div class="av-param-grid" style="margin-bottom:.45rem">
+                <div class="scorer-row">
+                  <label for="av-batch-size">Batch size</label>
+                  <input type="number" id="av-batch-size" value="" min="1" placeholder="default" style="width:6rem" />
+                </div>
+                <div class="scorer-row">
+                  <label for="av-gputouse">GPU to use</label>
+                  <select id="av-gputouse" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+                    <option value="">auto</option>
+                  </select>
+                </div>
+                <div class="scorer-row">
+                  <label for="av-save-csv">Save as CSV</label>
+                  <input type="checkbox" id="av-save-csv" style="width:auto" checked />
+                </div>
+              </div>
+
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;cursor:pointer;user-select:none;margin-bottom:.3rem"
+                     title="Also submit each queued video's sibling camera (resolved from the filename)">
+                <input type="checkbox" id="ba-both-cams" style="accent-color:var(--accent);width:14px;height:14px" />
+                Both cameras
+                <span style="font-size:.72rem;color:var(--text-dim)">— also submit each video's sibling</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;cursor:pointer;user-select:none;margin-bottom:.5rem"
+                     title="Wait until a training job has been seen running and has then finished, then resolve the model and start">
+                <input type="checkbox" id="ba-wait-training" style="accent-color:var(--accent);width:14px;height:14px" />
+                Queue the run after training finishes
+              </label>
+
+              <!-- Output folder. Applies to Create Labeled Video; inline analysis
+                   always writes <stem><scorer>.h5 beside the source video, which
+                   is where finalize and triangulate look for it. -->
+              <div style="font-size:.74rem;color:var(--text-dim);margin-bottom:.25rem">Output folder</div>
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.77rem;cursor:pointer;margin-bottom:.2rem">
+                <input type="radio" name="av-output-mode" id="av-output-default" value="default" checked style="accent-color:var(--accent)" />
+                Same as target <span style="font-size:.72rem;color:var(--text-dim)">(default)</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.77rem;cursor:pointer;margin-bottom:.3rem">
+                <input type="radio" name="av-output-mode" id="av-output-custom" value="custom" style="accent-color:var(--accent)" />
+                Custom folder
+              </label>
+              <div id="av-output-custom-row" class="hidden">
+                <div style="display:flex;gap:.4rem">
+                  <input type="text" id="clv-destfolder" placeholder="/path/to/output"
+                    style="flex:1;min-width:0;font-family:var(--mono);font-size:.76rem;padding:.28rem .45rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
+                  <button class="btn-sm" id="clv-dest-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
+                  <button class="btn-sm" id="clv-dest-browse-btn" title="Browse output folder" style="padding:.2rem .45rem;font-size:.75rem">Browse</button>
+                  <button class="btn-sm" id="clv-dest-clear-btn" title="Clear" style="opacity:.7;padding:.2rem .45rem;font-size:.75rem">✕</button>
+                </div>
+                <div id="clv-dest-browser" class="hidden" style="margin-top:.4rem;max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem"></div>
+              </div>
+
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;cursor:pointer;user-select:none;margin-top:.45rem">
+                <input type="checkbox" id="av-create-labeled" style="accent-color:var(--accent);width:14px;height:14px" />
+                Create labeled video / frame
+              </label>
+            </div>
           </div>
-          <div class="ba-hint" style="margin:.15rem 0 .25rem">
-            tags <span style="opacity:.8">(click to select · saved per project)</span>
+        </div>
+
+        <!-- Parameters for labeled videos — revealed by the checkbox above. -->
+        <div id="av-labeled-params-section" style="margin-top:.7rem;padding:.7rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);display:none">
+          <div style="font-size:.78rem;font-weight:600;color:var(--text-2);margin-bottom:.6rem;text-transform:uppercase;letter-spacing:.04em">Parameters for labeled videos</div>
+          <div class="av-param-grid">
+            <div class="scorer-row">
+              <label for="clv-pcutoff">P-cutoff</label>
+              <input type="number" id="clv-pcutoff" step="0.01" min="0" max="1" placeholder="from config" style="width:7rem" />
+            </div>
+            <div class="scorer-row">
+              <label for="clv-dotsize">Dot size</label>
+              <input type="number" id="clv-dotsize" value="8" min="1" max="50" style="width:5rem" />
+            </div>
+            <div class="scorer-row">
+              <label for="clv-colormap">Colormap</label>
+              <select id="clv-colormap" style="flex:1;background:var(--surface-3,#1e1e1e);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
+                <option value="rainbow">rainbow</option>
+                <option value="jet">jet</option>
+                <option value="viridis">viridis</option>
+                <option value="plasma">plasma</option>
+                <option value="inferno">inferno</option>
+                <option value="Blues">Blues</option>
+                <option value="Reds">Reds</option>
+                <option value="hsv">hsv</option>
+              </select>
+            </div>
+            <div class="scorer-row">
+              <label for="clv-modelprefix">Model prefix</label>
+              <input type="text" id="clv-modelprefix" placeholder="(default)" style="flex:1" />
+            </div>
+            <div class="scorer-row">
+              <label for="clv-filtered">Use filtered predictions</label>
+              <input type="checkbox" id="clv-filtered" style="width:auto" />
+            </div>
+            <div class="scorer-row">
+              <label for="clv-draw-skeleton">Draw skeleton</label>
+              <input type="checkbox" id="clv-draw-skeleton" style="width:auto" />
+            </div>
+            <div class="scorer-row">
+              <label for="clv-overwrite">Overwrite existing</label>
+              <input type="checkbox" id="clv-overwrite" style="width:auto" />
+            </div>
           </div>
-          <div id="ba-tags" class="fe-tag-filter"></div>
-
-          <!-- Run -->
-          <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.6rem">
-            <button id="ba-run-all" class="btn-sm btn-create" title="Analyse every frame of every queued video">
-              ▶ Analyze all
-            </button>
-            <button id="ba-run-tag" class="btn-sm btn-create" disabled
-                    title="Select at least one tag below">
-              ▶ Analyze for tag
-            </button>
-            <button id="ba-cancel" class="btn-sm btn-danger hidden" title="Stop a batch that has not submitted its ranges yet">
-              ■ Cancel batch
-            </button>
-            <span id="ba-tag-hint" class="ba-hint"></span>
-          </div>
-
-          <div id="ba-status" class="fe-extract-status" style="margin-top:.45rem"></div>
         </div>
-      </div>
 
-      <!-- Target path + batch selection -->
-      <div style="margin-bottom:.5rem">
-        <label style="display:block;font-size:.78rem;color:var(--text-dim);margin-bottom:.3rem">Target (file or folder path)</label>
-        <div style="display:flex;gap:.4rem">
-          <input type="text" id="av-target-path" placeholder="/path/to/video.mp4  or  /path/to/folder"
-            style="flex:1;font-family:var(--mono);font-size:.78rem;padding:.35rem .55rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
-          <button class="btn-sm" id="av-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
-          <button class="btn-sm" id="av-browse-btn" title="Browse project folders">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            Browse
+        <!-- Tags. The chips ARE the selection — clicking one toggles whether
+             that tag is part of the next run. The field only mints new chips. -->
+        <div class="ba-tag-row" style="margin-top:.7rem">
+          <input type="text" id="ba-tag-input" placeholder="new tag (exact match)"
+            style="flex:1;min-width:150px;max-width:320px;font-size:.77rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.25rem .45rem" />
+          <button class="btn-sm" id="ba-tag-add" title="Save this tag for the project">+ Add</button>
+          <span style="flex:1"></span>
+          <label style="font-size:.74rem;color:var(--text-dim)">before</label>
+          <input type="number" id="ba-before" value="200" min="0" style="width:4.6rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem" />
+          <label style="font-size:.74rem;color:var(--text-dim)">after</label>
+          <input type="number" id="ba-after" value="599" min="0" style="width:4.6rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem" />
+          <span id="ba-window-total" class="ba-hint">800 frames</span>
+        </div>
+        <div class="ba-hint" style="margin:.15rem 0 .25rem">
+          tags <span style="opacity:.8">(click to select · saved per project)</span>
+        </div>
+        <div id="ba-tags" class="fe-tag-filter"></div>
+
+        <!-- Actions. All of them read the queue. -->
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.7rem">
+          <button id="ba-run-all" class="btn-sm btn-create" title="Analyse every frame of every queued video">
+            ▶ Analyze all
           </button>
-        </div>
-        <!-- File browser (tree) -->
-        <div id="av-browser" class="hidden" style="margin-top:.5rem;max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem"></div>
-        <!-- Batch selection controls -->
-        <div style="display:flex;gap:.4rem;margin-top:.4rem;align-items:center;flex-wrap:wrap">
-          <button class="btn-sm" id="av-batch-add-btn" title="Add highlighted path to the analysis queue" style="opacity:.85">
-            + Add to queue
+          <button id="ba-run-tag" class="btn-sm btn-create" disabled
+                  title="Select at least one tag below">
+            ▶ Analyze for tag
           </button>
-          <button class="btn-sm" id="av-batch-clear-btn" title="Clear all queued paths" style="opacity:.7">
-            ✕ Clear queue
+          <button id="ba-cancel" class="btn-sm btn-danger hidden" title="Stop a batch that has not submitted its ranges yet">
+            ■ Cancel batch
           </button>
-          <span style="font-size:.72rem;color:var(--text-dim)">Single-click to highlight · double-click to add instantly</span>
-        </div>
-        <!-- Queued paths list -->
-        <div id="av-batch-list" style="margin-top:.4rem;display:none;border:1px solid var(--border);border-radius:5px;background:var(--surface-2);max-height:140px;overflow-y:auto;padding:.3rem .4rem;font-size:.74rem;font-family:var(--mono)"></div>
-      </div>
-
-      <!-- Output folder -->
-      <div style="margin-bottom:.7rem">
-        <label style="display:block;font-size:.78rem;color:var(--text-dim);margin-bottom:.3rem">Output folder <span style="opacity:.6">(analysis data + labeled video; default: same as target)</span></label>
-        <div style="display:flex;gap:.4rem">
-          <input type="text" id="clv-destfolder" placeholder="/path/to/output  (default: same as target)"
-            style="flex:1;font-family:var(--mono);font-size:.78rem;padding:.35rem .55rem;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text)" />
-          <button class="btn-sm" id="clv-dest-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
-          <button class="btn-sm" id="clv-dest-browse-btn" title="Browse output folder">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            Browse
+          <button id="btn-create-labeled-video" class="btn-sm" disabled
+                  title="Renders a labeled video for the first queued file — requires its analysis (.h5) to already exist">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 10l4.553-2.069A1 1 0 0121 8.882V15.118a1 1 0 01-1.447.89L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>
+            Create Labeled Video
           </button>
-          <button class="btn-sm" id="clv-dest-clear-btn" title="Clear" style="opacity:.7">✕</button>
+          <span id="ba-tag-hint" class="ba-hint"></span>
         </div>
-        <div id="clv-dest-browser" class="hidden" style="margin-top:.5rem;max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);padding:.4rem .5rem;font-size:.77rem"></div>
+
+        <div id="ba-status" class="fe-extract-status" style="margin-top:.45rem"></div>
+        <span id="av-clv-status" class="fe-extract-status"></span>
       </div>
 
-      <!-- Single-run parameters. Wrapped in a grid because the card is now
-           full width and these would otherwise stretch one per line. -->
-      <div class="av-param-grid" style="margin-bottom:.9rem">
-      <div class="scorer-row" style="margin-bottom:.7rem">
-        <label for="av-snapshot">Model snapshot</label>
-        <select id="av-snapshot" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
-          <option value="-1">Latest (from config)</option>
-        </select>
-        <button class="btn-sm" id="av-refresh-snapshots" title="Refresh snapshot list" style="padding:.2rem .45rem;font-size:.75rem">↺</button>
-      </div>
-
-      <div class="scorer-row" style="margin-bottom:.7rem">
-        <label for="av-shuffle">Shuffle</label>
-        <input type="number" id="av-shuffle" value="1" min="1" max="20" style="width:5rem" />
-      </div>
-      <div class="scorer-row" style="margin-bottom:.7rem">
-        <label for="av-trainingsetindex">Training set index</label>
-        <input type="number" id="av-trainingsetindex" value="0" min="0" style="width:5rem" />
-      </div>
-      <div class="scorer-row" style="margin-bottom:.7rem">
-        <label for="av-batch-size">Batch size</label>
-        <input type="number" id="av-batch-size" value="" min="1" placeholder="default" style="width:6rem" />
-      </div>
-      <div class="scorer-row" style="margin-bottom:.7rem">
-        <label for="av-gputouse">GPU to use</label>
-        <select id="av-gputouse" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;background:var(--surface-2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
-          <option value="">auto</option>
-        </select>
-      </div>
-      <div class="scorer-row" style="margin-bottom:.7rem">
-        <label for="av-save-csv">Save as CSV</label>
-        <input type="checkbox" id="av-save-csv" style="width:auto" checked />
-      </div>
-      <div class="scorer-row" style="margin-bottom:.9rem">
-        <label for="av-create-labeled">Create labeled video / frame</label>
-        <input type="checkbox" id="av-create-labeled" style="width:auto" />
-      </div>
-
-      </div>
-
-      <!-- Parameters for labeled videos (shared by checkbox and standalone button) -->
-      <div id="av-labeled-params-section" style="margin-bottom:.9rem;padding:.7rem;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);display:none">
-        <div style="font-size:.78rem;font-weight:600;color:var(--text-2);margin-bottom:.6rem;text-transform:uppercase;letter-spacing:.04em">Parameters for labeled videos</div>
-        <div class="av-param-grid">
-        <div class="scorer-row" style="margin-bottom:.5rem">
-          <label for="clv-pcutoff">P-cutoff</label>
-          <input type="number" id="clv-pcutoff" step="0.01" min="0" max="1" placeholder="from config" style="width:7rem" />
-        </div>
-        <div class="scorer-row" style="margin-bottom:.5rem">
-          <label for="clv-dotsize">Dot size</label>
-          <input type="number" id="clv-dotsize" value="8" min="1" max="50" style="width:5rem" />
-        </div>
-        <div class="scorer-row" style="margin-bottom:.5rem">
-          <label for="clv-colormap">Colormap</label>
-          <select id="clv-colormap" style="flex:1;background:var(--surface-3,#1e1e1e);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:.82rem;padding:.25rem .4rem">
-            <option value="rainbow">rainbow</option>
-            <option value="jet">jet</option>
-            <option value="viridis">viridis</option>
-            <option value="plasma">plasma</option>
-            <option value="inferno">inferno</option>
-            <option value="Blues">Blues</option>
-            <option value="Reds">Reds</option>
-            <option value="hsv">hsv</option>
-          </select>
-        </div>
-        <div class="scorer-row" style="margin-bottom:.5rem">
-          <label for="clv-modelprefix">Model prefix</label>
-          <input type="text" id="clv-modelprefix" placeholder="(default)" style="flex:1" />
-        </div>
-        <div class="scorer-row" style="margin-bottom:.5rem">
-          <label for="clv-filtered">Use filtered predictions</label>
-          <input type="checkbox" id="clv-filtered" style="width:auto" />
-        </div>
-        <div class="scorer-row" style="margin-bottom:.5rem">
-          <label for="clv-draw-skeleton">Draw skeleton</label>
-          <input type="checkbox" id="clv-draw-skeleton" style="width:auto" />
-        </div>
-        <div class="scorer-row" style="margin-bottom:0">
-          <label for="clv-overwrite">Overwrite existing</label>
-          <input type="checkbox" id="clv-overwrite" style="width:auto" />
-        </div>
-        </div>
-      </div>
-
-      <!-- Run / Stop / Create Labeled Video -->
-      <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:.3rem">
-        <button id="btn-run-analyze" class="btn-sm btn-create">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          Start Analysis
-        </button>
-        <button id="btn-stop-analyze" class="btn-sm btn-danger hidden">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
-          Stop
-        </button>
-        <button id="btn-create-labeled-video" class="btn-sm" title="Requires analysis (.h5) to already exist for the selected video">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 10l4.553-2.069A1 1 0 0121 8.882V15.118a1 1 0 01-1.447.89L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>
-          Create Labeled Video
-        </button>
-      </div>
-      <span id="av-run-status" class="fe-extract-status"></span>
-      <span id="av-clv-status" class="fe-extract-status"></span>
-
-      <!-- Progress -->
+      <!-- Progress — Create Labeled Video reports here via _avStartPolling. -->
       <div id="av-progress" class="hidden" style="margin-top:1.2rem">
         <div class="progress-header">
-          <span>Analysis</span>
+          <span>Labeled video</span>
           <span id="av-task-id" class="task-id-badge"></span>
         </div>
         <div class="progress-track">

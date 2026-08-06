@@ -196,3 +196,53 @@ class TestCancel:
         client, _redis, _project, _video = ba_client
         res = client.post("/dlc/project/batch-analyze/cancel", json={"batch_id": "nope"})
         assert res.status_code == 404
+
+
+class TestSnapshotAndGpu:
+    def test_an_explicit_snapshot_beats_the_persisted_pin(self, ba_client):
+        # The dropdown is what the user is looking at; the persisted pin is
+        # only a default. Running the pin while the dropdown shows something
+        # else is a silent wrong-model run.
+        client, redis, project, video = ba_client
+        train = project / "dlc-models-pytorch" / "iteration-9" / "x" / "train"
+        train.mkdir(parents=True)
+        (train / "snapshot-200.pt").write_bytes(b"x")
+        rel = "dlc-models-pytorch/iteration-9/x/train/snapshot-200.pt"
+
+        with patch("dlc.batch_analyze._project_settings.get_setting",
+                   return_value="some/other/snapshot-050.pt"):
+            with patch("dlc.batch_analyze._celery_send_task"):
+                res = _start(client, video=video, policy="pinned", snapshot_rel=rel)
+        assert res.status_code == 202
+        rec = redis.hgetall(f"dlc:batch:{res.get_json()['batch_id']}")
+        assert rec["pinned_snapshot"] == rel
+
+    def test_a_snapshot_outside_the_project_is_rejected(self, ba_client):
+        client, _redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            res = _start(client, video=video, policy="pinned",
+                         snapshot_rel="../../../etc/passwd.pt")
+        assert res.status_code in (403, 404)
+
+    def test_a_missing_snapshot_is_rejected(self, ba_client):
+        client, _redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            res = _start(client, video=video, policy="pinned",
+                         snapshot_rel="dlc-models-pytorch/nope/train/snapshot-1.pt")
+        assert res.status_code == 404
+
+    def test_no_explicit_snapshot_falls_back_to_the_persisted_pin(self, ba_client):
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._project_settings.get_setting",
+                   return_value="kept/snapshot-050.pt"):
+            with patch("dlc.batch_analyze._celery_send_task"):
+                res = _start(client, video=video, policy="pinned")
+        rec = redis.hgetall(f"dlc:batch:{res.get_json()['batch_id']}")
+        assert rec["pinned_snapshot"] == "kept/snapshot-050.pt"
+
+    def test_gputouse_round_trips_into_the_record(self, ba_client):
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            res = _start(client, video=video, gputouse=1)
+        rec = redis.hgetall(f"dlc:batch:{res.get_json()['batch_id']}")
+        assert rec["gputouse"] == "1"

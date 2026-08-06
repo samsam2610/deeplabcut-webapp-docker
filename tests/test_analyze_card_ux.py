@@ -26,6 +26,12 @@ sys.path.insert(0, str(SRC_DIR))
 
 ANALYZE_JS = SRC_DIR / "static" / "js" / "analyze.js"
 ANALYZE_HTML = SRC_DIR / "templates" / "partials" / "card_analyze.html"
+BATCH_JS = SRC_DIR / "static" / "js" / "batch_analyze.js"
+
+
+@pytest.fixture
+def batch_js_src():
+    return BATCH_JS.read_text()
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -120,25 +126,18 @@ def test_av_labeled_params_section_id_in_html(rendered_html):
     )
 
 
-def test_av_batch_list_id_in_html(rendered_html):
-    """A batch selection list container with id='av-batch-list' must exist."""
-    assert 'id="av-batch-list"' in rendered_html, (
-        "id='av-batch-list' missing — needed to render the selected-paths queue"
-    )
+def test_the_queue_is_rendered(rendered_html):
+    """The queue replaced the old av-batch-* strip (2026-08-06 restructure).
 
-
-def test_av_batch_add_btn_id_in_html(rendered_html):
-    """An 'Add to list' button with id='av-batch-add-btn' must be present."""
-    assert 'id="av-batch-add-btn"' in rendered_html, (
-        "id='av-batch-add-btn' missing — single-click-then-add workflow"
-    )
-
-
-def test_av_batch_clear_btn_id_in_html(rendered_html):
-    """A global 'Clear list' button with id='av-batch-clear-btn' must be present."""
-    assert 'id="av-batch-clear-btn"' in rendered_html, (
-        "id='av-batch-clear-btn' missing — bulk-clear the selection queue"
-    )
+    Same intent as before — a visible list of the files an action will run on —
+    but there is now exactly ONE of them, owned by batch_analyze.js.
+    """
+    assert 'id="ba-queue-list"' in rendered_html
+    assert 'id="ba-queue-count"' in rendered_html
+    assert 'id="ba-queue-clear"' in rendered_html, "bulk-clear must stay reachable"
+    for gone in ('id="av-batch-list"', 'id="av-batch-add-btn"',
+                 'id="av-batch-clear-btn"', 'id="av-target-path"'):
+        assert gone not in rendered_html, f"{gone} was removed; two queues is the bug"
 
 
 # ── 2. JS behaviour assertions (source-level) ────────────────────────────────
@@ -158,36 +157,27 @@ def test_analyze_js_labeled_params_section_toggled(analyze_js_src):
     )
 
 
-def test_analyze_js_batch_list_referenced(analyze_js_src):
-    """analyze.js must reference 'av-batch-list' to render the selection queue."""
-    assert "av-batch-list" in analyze_js_src, (
-        "analyze.js must manipulate 'av-batch-list'"
+def test_the_queue_controller_owns_the_list(batch_js_src):
+    """batch_analyze.js renders the queue; analyze.js must not touch it."""
+    assert "ba-queue-list" in batch_js_src
+    assert "ba-queue-list" not in (SRC_DIR / "static" / "js" / "analyze.js").read_text(), \
+        "only one controller may own the queue"
+
+
+def test_a_run_sends_the_whole_queue(batch_js_src):
+    """The successor to the old target_paths array: a run carries every file."""
+    assert "videos: _queue" in batch_js_src, (
+        "the start payload must carry the queue, not a single path"
     )
 
 
-def test_analyze_js_sends_target_paths_array(analyze_js_src):
-    """Run handler must send 'target_paths' (array) not just 'target_path' string."""
-    assert "target_paths" in analyze_js_src, (
-        "analyze.js run handler must send target_paths (array) to the backend"
+def test_double_click_adds_to_the_queue(batch_js_src):
+    """Double-click on a source row queues it — the gesture the card advertises."""
+    assert 'row.addEventListener("dblclick", () => _add(path));' in batch_js_src, (
+        "source rows must queue on double-click"
     )
-
-
-def test_analyze_js_dblclick_adds_to_batch(analyze_js_src):
-    """Double-click on a browser entry must trigger add-to-list logic.
-
-    Post-refactor the dblclick handler lives inside the canonical
-    file_browser.js component; analyze.js wires `onPick: _avAddToList`
-    into makeFileBrowser to receive the dblclick callback.
-    """
-    assert "makeFileBrowser" in analyze_js_src, (
-        "analyze.js must use the canonical makeFileBrowser component"
-    )
-    assert "onPick" in analyze_js_src and "_avAddToList" in analyze_js_src, (
-        "makeFileBrowser must be wired with onPick: _avAddToList so the "
-        "dblclick handler adds to the batch list"
-    )
-    assert "av-batch-list" in analyze_js_src or "_avBatchList" in analyze_js_src, (
-        "Double-click handler must add the path to the batch list"
+    assert "double-click a video above to add it" in ANALYZE_HTML.read_text(), (
+        "and the hint must say so"
     )
 
 

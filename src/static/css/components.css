@@ -1303,3 +1303,17 @@ button[type="submit"]:hover .btn-arrow {
   margin-bottom: .35rem;
 }
 #ba-panel .ba-hint { font-size: .72rem; color: var(--text-dim); }
+
+/* Bordered container for each half of the Model | Run options split. */
+#ba-panel .ba-box {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  padding: .5rem .6rem;
+}
+/* Inside a half the grid should stay single-column until there is real room —
+   the halves are already narrow, and 240px minimums would fight the split. */
+#ba-panel .ba-box .av-param-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: .3rem .8rem;
+}

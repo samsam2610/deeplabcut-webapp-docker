@@ -81,6 +81,12 @@ function _int(id, dflt) {
   return Number.isFinite(v) && v >= 0 ? v : dflt;
 }
 
+/** The snapshot the dropdown is showing, or "" for the config default. */
+function _snapshotRel() {
+  const v = $("av-snapshot")?.value || "";
+  return v === "-1" ? "" : v;
+}
+
 function _policy() {
   const el = document.querySelector('input[name="ba-policy"]:checked');
   return el ? el.value : "pinned";
@@ -119,6 +125,10 @@ function _remove(path) {
 }
 
 function _renderQueue() {
+  // Mirror onto shared state: analyze.js's Create Labeled Video reads the
+  // first entry. One-way (this module owns the queue), so there is no risk
+  // of the two controllers fighting over it.
+  state.baQueue = [..._queue];
   const list = $("ba-queue-list");
   const count = $("ba-queue-count");
   if (count) count.textContent = String(_queue.length);
@@ -383,6 +393,12 @@ async function _run(mode) {
         trainingsetindex: _int("av-trainingsetindex", 0),
         batch_size: _int("av-batch-size", 8),
         save_as_csv: !!$("av-save-csv")?.checked,
+        // The dropdown is authoritative for the "Selected / pinned" policy —
+        // otherwise a dropdown showing one snapshot while the persisted pin
+        // names another would silently run the pin.
+        snapshot_rel: _snapshotRel(),
+        // Recorded now; honoured once the worker picks up the device change.
+        gputouse: $("av-gputouse")?.value ?? "",
       }),
     });
     const d = await res.json();
@@ -469,19 +485,24 @@ async function _reattach() {
 // ── init ──────────────────────────────────────────────────────────────────
 
 export function initBatchAnalyze() {
-  const enable = $("ba-enable");
   const panel = $("ba-panel");
-  if (!enable || !panel) return;      // card not on this page
+  const card = document.getElementById("analyze-card");
+  if (!panel || !card) return;        // card not on this page
 
   // "Both cameras" defaults ON where stereo pairs are the norm. The checkbox
   // is present and honoured on both pages; only the default differs.
   const bothCams = $("ba-both-cams");
   if (bothCams) bothCams.checked = window.location.pathname.startsWith("/dlc-3d");
 
+  // The panel is always rendered, but the CARD starts hidden. Booting on
+  // DOMContentLoaded would fire project/tracked-file/snapshot fetches on every
+  // page load of both pages for a card nobody opened, so boot on first reveal
+  // instead. An observer rather than a click handler on the open button: the
+  // card is revealed from more than one place, and a missed hook would leave
+  // the panel permanently empty.
   let _booted = false;
-  enable.addEventListener("change", async () => {
-    panel.classList.toggle("hidden", !enable.checked);
-    if (!enable.checked || _booted) return;
+  async function _boot() {
+    if (_booted) return;
     _booted = true;
 
     const [tagsRaw, prefsRaw, windowRaw] = await Promise.all([
@@ -509,7 +530,12 @@ export function initBatchAnalyze() {
     _syncWindowTotal();
     _showTab("ba-tab-project");
     _reattach();
-  });
+  }
+
+  if (!card.classList.contains("hidden")) _boot();
+  new MutationObserver(() => {
+    if (!card.classList.contains("hidden")) _boot();
+  }).observe(card, { attributes: true, attributeFilter: ["class"] });
 
   for (const t of TABS) $(t.btn)?.addEventListener("click", () => _showTab(t.btn));
 

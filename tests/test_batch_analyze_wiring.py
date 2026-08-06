@@ -68,12 +68,60 @@ def test_the_window_defaults_are_the_inline_cards_eight_hundred_frames():
     assert re.search(r'id="ba-after" value="599"', html)
 
 
-def test_the_panel_is_collapsed_by_default():
+def test_the_panel_is_the_card_now():
+    # The gating checkbox is gone: one queue, one parameter set, several
+    # actions. The panel is always rendered (the CARD is still hidden until
+    # opened, and the controller boots on that reveal).
     html = HTML.read_text()
-    # The enable checkbox must NOT be checked, and the panel must carry
-    # `hidden`, or the card grows a large panel nobody asked for.
-    assert re.search(r'id="ba-enable"(?![^>]*\bchecked\b)[^>]*>', html)
-    assert re.search(r'id="ba-panel" class="hidden"', html)
+    assert "ba-enable" not in html
+    assert 'id="ba-panel"' in html and 'id="ba-panel" class="hidden"' not in html
+    assert "ba-enable" not in JS.read_text()
+
+
+def test_the_single_run_workflow_is_gone():
+    # "Analyze all" over a one-file queue replaces it. Leaving the old widgets
+    # behind would mean two buttons that both analyse and two ways to pick a
+    # file, which is exactly the confusion this removed.
+    html, js = HTML.read_text(), (SRC / "static" / "js" / "analyze.js").read_text()
+    for dead in ("av-target-path", "av-browse-btn", "av-browse-up", "av-browser",
+                 "av-batch-add-btn", "av-batch-clear-btn", "av-batch-list",
+                 "btn-run-analyze", "btn-stop-analyze", "av-run-status"):
+        assert dead not in html, f"{dead} still in the markup"
+        assert dead not in js, f"{dead} still wired in analyze.js"
+
+
+def test_create_labeled_video_survives_and_reads_the_queue():
+    html, js = HTML.read_text(), (SRC / "static" / "js" / "analyze.js").read_text()
+    assert 'id="btn-create-labeled-video"' in html
+    assert 'id="av-progress"' in html, "Create Labeled Video reports into this"
+    assert "state.baQueue" in js, "its target must come from the queue now"
+    assert "state.baQueue" in JS.read_text(), "batch_analyze.js must publish it"
+
+
+def test_the_snapshot_dropdown_has_a_pin_list():
+    html = HTML.read_text()
+    assert 'id="av-snapshot"' in html
+    assert 'id="av-refresh-snapshots"' in html
+    assert 'id="av-snapshot-pin-list"' in html
+
+
+def test_the_dropdown_beats_the_persisted_pin():
+    # Otherwise a dropdown showing one snapshot while the pin names another
+    # silently runs the pin.
+    assert "snapshot_rel: _snapshotRel()" in JS.read_text()
+    py = (SRC / "dlc" / "batch_analyze.py").read_text()
+    assert 'body.get("snapshot_rel")' in py
+    assert "is_relative_to" in py, "an explicit snapshot must stay path-checked"
+
+
+def test_gpu_and_output_live_in_run_options_above_the_buttons():
+    # Ordering, not just presence: these must read as part of the run
+    # parameters, not as strays after the actions.
+    html = HTML.read_text()
+    for el in ('id="av-gputouse"', 'name="av-output-mode"'):
+        assert html.index(el) < html.index('id="ba-run-all"'), f"{el} sits after the buttons"
+    assert len(re.findall(r'name="av-output-mode"', html)) == 2, "default + custom"
+    assert re.search(r'id="av-output-default"[^>]*checked', html), "default must win"
 
 
 def test_the_controller_is_registered_in_the_module_loader():
@@ -114,13 +162,13 @@ def test_the_analyze_card_is_full_width():
 def test_single_run_params_are_gridded_not_stretched():
     # Without this the seven parameter rows each span the full monitor.
     html, css = HTML.read_text(), CSS.read_text()
-    assert html.count('class="av-param-grid"') == 2, \
-        "both the common params and the labeled-video params need the grid"
+    assert html.count('class="av-param-grid"') == 3, \
+        "Model half, Run options half, and the labeled-video params each grid"
     assert re.search(r"\.av-param-grid\s*\{[^}]*repeat\(auto-fit,\s*minmax\(", css), \
         "auto-fit keeps it responsive without hand-picked breakpoints"
 
 
-def test_the_batch_panel_splits_queue_and_options_and_collapses_when_narrow():
+def test_the_panel_splits_into_halves_and_collapses_when_narrow():
     html, css = HTML.read_text(), CSS.read_text()
     assert 'class="ba-split"' in html
     assert re.search(r"\.ba-split\s*\{[^}]*grid-template-columns:\s*1fr 1fr", css)

@@ -627,6 +627,22 @@ def batch_start():
 
     config_path = project["config_path"]
     project_path = str(Path(config_path).parent)
+
+    # The snapshot DROPDOWN is authoritative for the "pinned" policy. Without
+    # this, a dropdown showing snapshot-180 while the persisted pin named
+    # snapshot-050 would silently run snapshot-050. Resolving it here — into
+    # the very field run_batch already reads — means the worker needs no
+    # change, which matters when a training run is in flight.
+    pinned = _pinned_snapshot(project_path)
+    snapshot_rel = (body.get("snapshot_rel") or "").strip()
+    if snapshot_rel:
+        snap_abs = (Path(project_path) / snapshot_rel).resolve()
+        if not snap_abs.is_relative_to(Path(project_path).resolve()):
+            return jsonify({"error": "snapshot is outside the project"}), 403
+        if not snap_abs.is_file():
+            return jsonify({"error": f"snapshot not found: {snapshot_rel}"}), 404
+        pinned = snapshot_rel
+
     batch_id = uuid.uuid4().hex
     wait = bool(body.get("wait_for_training"))
     created = time.time()
@@ -637,7 +653,7 @@ def batch_start():
         "user_id":           _user_id(),
         "config_path":       config_path,
         "engine":            project.get("engine") or "pytorch",
-        "pinned_snapshot":   _pinned_snapshot(project_path),
+        "pinned_snapshot":   pinned,
         "videos":            json.dumps(videos),
         "mode":              mode,
         "tags":              json.dumps(tags),
@@ -649,6 +665,10 @@ def batch_start():
         "trainingsetindex":  int(body.get("trainingsetindex") or 0),
         "batch_size":        int(body.get("batch_size") or 8),
         "save_as_csv":       "1" if body.get("save_as_csv") else "0",
+        # Recorded now, honoured once the worker picks up the device change
+        # (see the spec: it needs CUDA_DEVICE_ORDER=PCI_BUS_ID and a
+        # session restart, which would kill a running training job).
+        "gputouse":          str(body.get("gputouse") or ""),
         "wait_for_training": "1" if wait else "0",
         "seen_training":     "0",
         "deadline":          str(created + TRAINING_WAIT_DEADLINE_S),

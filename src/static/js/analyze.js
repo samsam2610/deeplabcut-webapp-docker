@@ -6,15 +6,8 @@ import { makeFileBrowser } from './components/file_browser.js';
     const avCard         = document.getElementById("analyze-card");
     const avOpenBtn      = document.getElementById("btn-open-analyze");
     const avCloseBtn     = document.getElementById("btn-close-analyze");
-    const avTargetPath   = document.getElementById("av-target-path");
-    const avBrowseUp     = document.getElementById("av-browse-up");
-    const avBrowseBtn    = document.getElementById("av-browse-btn");
-    const avBrowser      = document.getElementById("av-browser");
     const avSnapshot     = document.getElementById("av-snapshot");
     const avRefreshSnaps = document.getElementById("av-refresh-snapshots");
-    const avRunBtn       = document.getElementById("btn-run-analyze");
-    const avStopBtn      = document.getElementById("btn-stop-analyze");
-    const avRunStatus    = document.getElementById("av-run-status");
     const avProgress     = document.getElementById("av-progress");
     const avTaskId       = document.getElementById("av-task-id");
     const avProgressBar  = document.getElementById("av-progress-bar");
@@ -22,11 +15,6 @@ import { makeFileBrowser } from './components/file_browser.js';
     const avProgressPct  = document.getElementById("av-progress-pct");
     const avLogOutput    = document.getElementById("av-log-output");
 
-    // Batch selection state
-    const avBatchList    = document.getElementById("av-batch-list");
-    const avBatchAddBtn  = document.getElementById("av-batch-add-btn");
-    const avBatchClearBtn= document.getElementById("av-batch-clear-btn");
-    let _avBatchList     = [];         // ordered array of selected paths
 
     let _avPollTimer  = null;
     let _avActiveTask = null;
@@ -67,6 +55,7 @@ import { makeFileBrowser } from './components/file_browser.js';
           latestOpt.textContent = "Latest (from config)";
         }
         avSnapshot.appendChild(latestOpt);
+        const pinItems = [{ value: latestOpt.value, label: latestOpt.textContent }];
 
         // Individual snapshots (ascending by iteration)
         (data.snapshots || []).forEach(s => {
@@ -78,7 +67,11 @@ import { makeFileBrowser } from './components/file_browser.js';
           const shStr = s.shuffle != null ? `  ·  sh${s.shuffle}` : "";
           opt.textContent = `${s.label}${iterStr}${shStr}`;
           avSnapshot.appendChild(opt);
+          pinItems.push({ value: opt.value, label: opt.textContent });
         });
+
+        _avRenderPinList(pinItems);
+        await _avApplyPin(pinItems);
       } catch (err) {
         console.error("avLoadSnapshots:", err);
       }
@@ -89,135 +82,14 @@ import { makeFileBrowser } from './components/file_browser.js';
     // Reload snapshots when shuffle changes (indices are per-shuffle)
     document.getElementById("av-shuffle").addEventListener("change", _avLoadSnapshots);
 
-    // ── Batch list management ─────────────────────────────────
-    function _avRenderBatchList() {
-      if (!avBatchList) return;
-      if (_avBatchList.length === 0) {
-        avBatchList.style.display = "none";
-        avBatchList.innerHTML = "";
-        return;
-      }
-      avBatchList.style.display = "";
-      avBatchList.innerHTML = "";
-      _avBatchList.forEach((p, idx) => {
-        const row = document.createElement("div");
-        row.style.cssText = "display:flex;align-items:center;gap:.35rem;padding:.15rem 0;border-bottom:1px solid var(--border)";
-        const label = document.createElement("span");
-        label.textContent = p;
-        label.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-        label.title = p;
-        const rm = document.createElement("button");
-        rm.textContent = "✕";
-        rm.style.cssText = "flex-shrink:0;background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:.75rem;padding:0 .2rem;line-height:1";
-        rm.title = "Remove";
-        rm.addEventListener("click", () => {
-          _avBatchList.splice(idx, 1);
-          _avRenderBatchList();
-        });
-        const initBtn = document.createElement("button");
-        initBtn.className = "btn-sm av-init-file";
-        initBtn.dataset.path = p;
-        initBtn.style.cssText = "padding:.15rem .45rem;font-size:.72rem;margin-left:.4rem";
-        initBtn.textContent = "○ Init analysis file";
-        fetch(`/dlc/project/analysis-file/status?video_path=${encodeURIComponent(p)}`)
-          .then(r => r.json()).then(d => {
-            if (d.initialized) { initBtn.textContent = "✓ Analysis file ready"; initBtn.disabled = true; }
-          }).catch(() => {});
-        initBtn.addEventListener("click", async () => {
-          initBtn.disabled = true; initBtn.textContent = "…";
-          try {
-            const r = await fetch("/dlc/project/analysis-file/initialize", {
-              method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ video_path: p }),
-            });
-            if (r.ok || r.status === 409) {
-              initBtn.textContent = "✓ Analysis file ready";
-            } else {
-              const e = await r.json().catch(() => ({}));
-              initBtn.textContent = `⚠ ${e.error || r.status}`; initBtn.disabled = false;
-            }
-          } catch (err) {
-            initBtn.textContent = "○ Init analysis file"; initBtn.disabled = false;
-          }
-        });
-        row.appendChild(label);
-        row.appendChild(initBtn);
-        row.appendChild(rm);
-        avBatchList.appendChild(row);
-      });
-    }
-
-    function _avAddToList(path) {
-      if (!path) return;
-      if (_avBatchList.includes(path)) return;   // no duplicates
-      _avBatchList.push(path);
-      _avRenderBatchList();
-    }
-
-    avBatchAddBtn?.addEventListener("click", () => {
-      // The component writes the highlighted path into avTargetPath.value on
-      // single-click, so the typed-input fallback IS the highlighted path.
-      const typed = avTargetPath.value.trim();
-      if (typed) _avAddToList(typed);
-    });
-
-    avBatchClearBtn?.addEventListener("click", () => {
-      _avBatchList = [];
-      _avRenderBatchList();
-    });
-
-    // ── Project browser (canonical file-browser component) ────
-    const avPicker = makeFileBrowser({
-      inputEl: avTargetPath,
-      paneEl:  avBrowser,
-      onPick:  _avAddToList,
-    });
-
-    avBrowseBtn.addEventListener("click", async () => {
-      const isHidden = avBrowser.classList.contains("hidden");
-      if (!isHidden) {
-        // closing
-        avBrowser.classList.add("hidden");
-        return;
-      }
-      const typed = avTargetPath.value.trim();
-      if (typed) { avPicker.openAt(typed); return; }
-      // No typed path → bootstrap from project browse endpoint.
-      try {
-        const res  = await fetch("/dlc/project/browse");
-        const data = await res.json();
-        if (data.error) {
-          avBrowser.classList.remove("hidden");
-          avBrowser.textContent = data.error;
-          return;
-        }
-        _avProjectPath = data.project_path;
-        avPicker.openAt(data.project_path);
-      } catch (err) {
-        avBrowser.classList.remove("hidden");
-        avBrowser.textContent = "Failed to load project.";
-        console.error("avBrowse:", err);
-      }
-    });
-
-    avBrowseUp?.addEventListener("click", () => avPicker.up());
-
-    avTargetPath?.addEventListener("keydown", e => {
-      if (e.key === "Enter")  { e.preventDefault(); avPicker.browseDir(avTargetPath.value.trim()); avBrowser.classList.remove("hidden"); }
-      if (e.key === "Escape") { avBrowser.classList.add("hidden"); avTargetPath.blur(); }
-    });
-    avTargetPath?.addEventListener("paste", e => {
-      if (avBrowser.classList.contains("hidden")) return;  // only navigate when browser is open
-      setTimeout(() => avPicker.browseDir(avTargetPath.value.trim()), 0);
-    });
-
     // ── Running state helpers ─────────────────────────────────
+    // The only job this card still dispatches is Create Labeled Video, so
+    // "busy" means exactly one thing: that button is unavailable. Enablement
+    // otherwise follows the queue (see _avSyncClvEnabled).
     function _avSetRunning(running) {
-      avRunBtn.classList.toggle("hidden",  running);
-      avStopBtn.classList.toggle("hidden", !running);
-      avRunBtn.disabled  = running;
-      const _clvBtn = document.getElementById("btn-create-labeled-video");
-      if (_clvBtn) _clvBtn.disabled = running;
+      const btn = document.getElementById("btn-create-labeled-video");
+      if (btn) btn.disabled = running;
+      if (!running) _avSyncClvEnabled();
     }
 
     // ── Polling ───────────────────────────────────────────────
@@ -253,11 +125,10 @@ import { makeFileBrowser } from './components/file_browser.js';
         if (data.state === "SUCCESS") {
           clearInterval(_avPollTimer); _avPollTimer = null;
           avProgress.classList.add("state-success");
-          avProgressStage.textContent = "✓ Analysis complete";
+          avProgressStage.textContent = "✓ Labeled video complete";
           avProgressBar.style.width   = "100%";
           avProgressPct.textContent   = "100 %";
-          avRunStatus.textContent = "Analysis finished successfully.";
-          avRunStatus.className   = "fe-extract-status ok";
+          _avClvStatus("Labeled video finished.", "ok");
           _avSetRunning(false);
           if (data.result && data.result.log) avLogOutput.textContent = data.result.log;
         }
@@ -271,13 +142,118 @@ import { makeFileBrowser } from './components/file_browser.js';
             ? "✗ Stopped by user"
             : "✗ " + (data.error || "Failed").split("\n")[0];
           if (!userStopped) avLogOutput.textContent = data.error || "An unknown error occurred.";
-          avRunStatus.textContent = userStopped ? "Analysis stopped." : "";
-          avRunStatus.className   = "fe-extract-status";
+          _avClvStatus(userStopped ? "Stopped." : "", "");
           _avSetRunning(false);
         }
       } catch (err) {
         console.error("Analyze poll error:", err);
       }
+    }
+
+    // ── Queue-driven enablement ───────────────────────────────
+    // batch_analyze.js owns the queue and mirrors it onto `state.baQueue`;
+    // this module only reads it. Polled rather than evented because the two
+    // controllers are deliberately independent — a missed event would leave
+    // the button wrong, a missed poll corrects itself a second later.
+    function _avSyncClvEnabled() {
+      const btn = document.getElementById("btn-create-labeled-video");
+      if (!btn) return;
+      const n = (state.baQueue || []).length;
+      btn.disabled = n === 0;
+      btn.title = n
+        ? `Render a labeled video for ${(state.baQueue[0] || "").split("/").pop()}`
+        : "Queue a video first";
+    }
+    setInterval(_avSyncClvEnabled, 1000);
+    _avSyncClvEnabled();
+
+    function _avClvStatus(msg, kind) {
+      const el = document.getElementById("av-clv-status");
+      if (!el) return;
+      el.textContent = msg || "";
+      el.className = "fe-extract-status" + (kind ? " " + kind : "");
+    }
+
+    // ── Output folder mode ────────────────────────────────────
+    // "Same as target" is the default and simply sends no destfolder.
+    function _avSyncOutputMode() {
+      const custom = document.getElementById("av-output-custom")?.checked;
+      document.getElementById("av-output-custom-row")
+        ?.classList.toggle("hidden", !custom);
+    }
+    Array.from(document.getElementsByName("av-output-mode"))
+      .forEach((r) => r.addEventListener("change", _avSyncOutputMode));
+    _avSyncOutputMode();
+
+    // ── Snapshot pin list ─────────────────────────────────────
+    // Mirrors #ia3d-snapshot-pin-list: checking a row pins that snapshot for
+    // the project AND sets the dropdown, because the dropdown's value is what
+    // every run actually sends. Only one row may be checked at a time.
+    const AV_PIN_KEY = "pinned_snapshot";
+
+    function _avRenderPinList(items) {
+      const list = document.getElementById("av-snapshot-pin-list");
+      if (!list) return;
+      list.innerHTML = "";
+      items.forEach((item) => {
+        const row = document.createElement("label");
+        row.style.cssText = "display:flex;align-items:center;gap:.4rem;padding:.15rem 0;cursor:pointer";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.name = "av-snap-pin";
+        cb.value = item.value;
+        cb.style.cssText = "accent-color:var(--accent);width:13px;height:13px;flex-shrink:0";
+        cb.addEventListener("change", () => _avOnPinToggle(cb));
+        const span = document.createElement("span");
+        span.textContent = item.label;
+        span.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+        row.appendChild(cb);
+        row.appendChild(span);
+        list.appendChild(row);
+      });
+    }
+
+    function _avOnPinToggle(changed) {
+      const boxes = Array.from(document.getElementsByName("av-snap-pin"));
+      if (changed.checked) {
+        boxes.forEach((b) => { if (b !== changed) b.checked = false; });
+        const sel = document.getElementById("av-snapshot");
+        if (sel) sel.value = changed.value;
+        _avSavePin(changed.value);
+      } else {
+        _avSavePin("");
+      }
+    }
+
+    function _avSavePin(value) {
+      fetch("/dlc/project/ui-setting", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: AV_PIN_KEY, value: value || "" }),
+      }).catch(() => {});
+    }
+
+    // If the pinned snapshot is gone (model deleted, new iteration trained)
+    // this deliberately does NOT silently fall back to a different model: it
+    // leaves the dropdown at its default, checks nothing, and says so.
+    async function _avApplyPin(items) {
+      const note = document.getElementById("av-snapshot-pin-note");
+      let pinned = "";
+      try {
+        const d = await (await fetch(`/dlc/project/ui-setting?key=${AV_PIN_KEY}`)).json();
+        pinned = (d && d.value) || "";
+      } catch (_) { /* leave unpinned */ }
+      if (note) note.textContent = "";
+      if (!pinned) return;
+      const hit = items.find((i) => i.value === pinned);
+      if (!hit) {
+        if (note) note.textContent = `pinned model is no longer on disk: ${pinned.split("/").pop()}`;
+        return;
+      }
+      const box = Array.from(document.getElementsByName("av-snap-pin"))
+        .find((b) => b.value === pinned);
+      if (box) box.checked = true;
+      const sel = document.getElementById("av-snapshot");
+      if (sel) sel.value = pinned;
     }
 
     // ── Open / Close ──────────────────────────────────────────
@@ -286,7 +262,6 @@ import { makeFileBrowser } from './components/file_browser.js';
       avCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
       _avLoadSnapshots();
       _populateGpuSelect("av-gputouse");
-      avBrowser.classList.add("hidden");
       // Auto-reconnect to a running analyze job
       if (!_avActiveTask) {
         try {
@@ -306,93 +281,6 @@ import { makeFileBrowser } from './components/file_browser.js';
     avCloseBtn?.addEventListener("click", () => {
       avCard.classList.add("hidden");
       if (_avPollTimer) { clearInterval(_avPollTimer); _avPollTimer = null; }
-    });
-
-    // ── Run ───────────────────────────────────────────────────
-    avRunBtn.addEventListener("click", async () => {
-      // Build the list of target paths: batch list takes priority; fall back to text input
-      const target_paths = _avBatchList.length > 0
-        ? [..._avBatchList]
-        : (avTargetPath.value.trim() ? [avTargetPath.value.trim()] : []);
-
-      if (!target_paths.length) {
-        avRunStatus.textContent = "Please select or enter at least one target path.";
-        avRunStatus.className   = "fe-extract-status err";
-        return;
-      }
-
-      avRunStatus.textContent = "";
-      avRunStatus.className   = "fe-extract-status";
-
-      const snapshotVal = avSnapshot.value;
-
-      const batchSizeVal = document.getElementById("av-batch-size").value;
-      const clvPcutoff   = document.getElementById("clv-pcutoff").value;
-      const body = {
-        target_paths,
-        shuffle:          parseInt(document.getElementById("av-shuffle").value) || 1,
-        trainingsetindex: parseInt(document.getElementById("av-trainingsetindex").value) ?? 0,
-        gputouse:         document.getElementById("av-gputouse").value !== ""
-                            ? parseInt(document.getElementById("av-gputouse").value)
-                            : null,
-        batch_size:       batchSizeVal !== "" ? parseInt(batchSizeVal) : null,
-        save_as_csv:      document.getElementById("av-save-csv").checked,
-        create_labeled:   document.getElementById("av-create-labeled").checked,
-        snapshot_path:    snapshotVal !== "-1" ? snapshotVal : null,
-        // labeled video params (only relevant when create_labeled=true)
-        pcutoff:          clvPcutoff !== "" ? parseFloat(clvPcutoff) : null,
-        dotsize:          parseInt(document.getElementById("clv-dotsize").value) || 8,
-        colormap:         document.getElementById("clv-colormap").value,
-        modelprefix:      (document.getElementById("clv-modelprefix").value || "").trim(),
-        filtered:         document.getElementById("clv-filtered").checked,
-        draw_skeleton:    document.getElementById("clv-draw-skeleton").checked,
-        overwrite:        document.getElementById("clv-overwrite").checked,
-        destfolder:       (document.getElementById("clv-destfolder").value || "").trim() || null,
-      };
-
-      try {
-        const res  = await fetch("/dlc/project/analyze", {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify(body),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          avRunStatus.textContent = data.error || "Failed to start analysis.";
-          avRunStatus.className   = "fe-extract-status err";
-          return;
-        }
-        // Support both single task_id and batch task_ids
-        const firstId = (data.task_ids && data.task_ids[0]) || data.task_id;
-        _avActiveTask = firstId;
-        _avStartPolling(firstId);
-        if (data.task_ids && data.task_ids.length > 1) {
-          avRunStatus.textContent = `${data.task_ids.length} analysis jobs dispatched.`;
-          avRunStatus.className   = "fe-extract-status ok";
-        }
-      } catch (err) {
-        avRunStatus.textContent = "Network error: " + err.message;
-        avRunStatus.className   = "fe-extract-status err";
-      }
-    });
-
-    // ── Stop ──────────────────────────────────────────────────
-    avStopBtn.addEventListener("click", async () => {
-      if (!_avActiveTask) return;
-      avStopBtn.disabled = true;
-      try {
-        await fetch("/dlc/project/analyze/stop", {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ task_id: _avActiveTask }),
-        });
-        avRunStatus.textContent = "Stop signal sent — analysis will terminate shortly.";
-        avRunStatus.className   = "fe-extract-status";
-      } catch (err) {
-        avRunStatus.textContent = "Stop error: " + err.message;
-        avRunStatus.className   = "fe-extract-status err";
-        avStopBtn.disabled = false;
-      }
     });
 
     // ── Create Labeled Video (standalone) ─────────────────────
@@ -429,9 +317,11 @@ import { makeFileBrowser } from './components/file_browser.js';
     clvDestClear?.addEventListener("click", () => { clvDestInput.value = ""; });
 
     clvBtn?.addEventListener("click", async () => {
-      const target = (document.getElementById("av-target-path")?.value || "").trim();
+      // The queue is the single source of files on this card now; the old
+      // target-path box is gone. First queued file wins.
+      const target = (state.baQueue || [])[0] || "";
       if (!target) {
-        clvStatus.textContent = "Select a video file first.";
+        clvStatus.textContent = "Queue a video first.";
         clvStatus.className   = "fe-extract-status err";
         return;
       }
@@ -440,7 +330,10 @@ import { makeFileBrowser } from './components/file_browser.js';
       clvBtn.disabled = true;
 
       const pcutoffVal = document.getElementById("clv-pcutoff").value;
-      const destVal    = (clvDestInput?.value || "").trim();
+      // "Same as target" sends no destfolder at all, even if a path is
+      // still sitting in the (now hidden) custom box.
+      const useCustom  = !!document.getElementById("av-output-custom")?.checked;
+      const destVal    = useCustom ? (clvDestInput?.value || "").trim() : "";
       try {
         const res = await fetch("/dlc/project/create-labeled-video", {
           method:  "POST",
