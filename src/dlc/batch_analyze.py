@@ -435,6 +435,16 @@ def run_batch(redis_, batch_id, *, requeue, send_task,
                 skipped.append({"video": video,
                                 "reason": "no sibling camera found"})
 
+        # Tags are annotated on ONE camera only — the cameras are hardware
+        # triggered, so a tagged frame on cam0 is the same instant on cam1 and
+        # nobody tags it twice. Real data: banh-mi-1 cam0 carries 141 tagged
+        # frames, cam1's CSV carries none. So the windows come from the QUEUED
+        # video's CSV and the same ranges go to both cameras, exactly as the
+        # 3D inline card's "Analyze for tag" does. Reading each camera's own
+        # CSV instead would silently analyse only cam0.
+        if mode == "tag":
+            tag_frames = tagged_frames(notes_for(video), tags)
+
         for target in targets:
             if not Path(target).is_file():
                 skipped.append({"video": target, "reason": "file not found"})
@@ -444,11 +454,9 @@ def run_batch(redis_, batch_id, *, requeue, send_task,
                 skipped.append({"video": target, "reason": "could not read the video"})
                 continue
             if mode == "tag":
-                frames = tagged_frames(notes_for(target), tags)
-                ranges = merge_windows(frames, before, after, n_frames)
-                # Ranges are built from the tags of the video being submitted,
-                # so a cam1 whose CSV differs from cam0's gets its own windows
-                # rather than cam0's imposed on it.
+                # Re-clamped per target: a sibling a few frames shorter must
+                # not receive a range running off its end.
+                ranges = merge_windows(tag_frames, before, after, n_frames)
                 if not ranges:
                     skipped.append({"video": target,
                                     "reason": "no frames carry any of those tags"})

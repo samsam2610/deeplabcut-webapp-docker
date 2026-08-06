@@ -194,6 +194,11 @@ services:
       # so edits made in deeplabcut-webapp-docker never reach /dlc-3d/.
       - ../deeplabcut-webapp-docker/src/templates/partials/card_dlc_project.html:/app/templates/partials/card_dlc_project.html
       - ../deeplabcut-webapp-docker/src/templates/partials/card_tracked_files.html:/app/templates/partials/card_tracked_files.html
+      # dlc_3d.html has always included card_analyze.html, but without a mount
+      # the container served the copy baked in at build time — so the analyze
+      # card on /dlc-3d/ silently drifted from the one on /. Added when the
+      # Batch Analyze panel landed and did not appear on the 3D page.
+      - ../deeplabcut-webapp-docker/src/templates/partials/card_analyze.html:/app/templates/partials/card_analyze.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_3d_extract.html:/app/templates/partials/card_3d_extract.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_inline_analysis_3d.html:/app/templates/partials/card_inline_analysis_3d.html
       - ../deeplabcut-webapp-docker-supports/dlc-3D/src/templates/partials/card_viewer_3d.html:/app/templates/partials/card_viewer_3d.html

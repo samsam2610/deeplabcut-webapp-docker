@@ -226,6 +226,57 @@ class TestSubmission:
             (800, 800), (2800, 800)]
         assert out["n_frames"] == 1600
 
+    def test_tag_windows_come_from_the_queued_camera_only(self, project):
+        # Cameras are hardware triggered and only ONE is annotated: in the real
+        # banh-mi-1 pair, cam0's CSV carries 141 tagged frames and cam1's
+        # carries none. Reading each camera's own notes would silently analyse
+        # cam0 alone — half the pair, with nothing in the UI saying so.
+        r = Redis()
+        notes_by_video = {
+            str(project["cam0"]): [{"frame_number": "1000", "note": "start-failure"}],
+            str(project["cam1"]): [],          # never annotated, as in real data
+        }
+        redis_rec = _record(project, both_cams=1, mode="tag",
+                            tags=json.dumps(["start-failure"]))
+        r.h[ba._batch_key("B1")] = redis_rec
+        out = ba.run_batch(
+            r, "B1", requeue=lambda d: None,
+            send_task=lambda n, *, kwargs, queue: None,
+            probe_frames=lambda p: 10_000,
+            notes_for=lambda p: notes_by_video[str(p)],
+            sibling_for=lambda p: str(project["cam1"]),
+            is_training=lambda x: False, now=lambda: 2000.0)
+
+        payloads = [json.loads(p) for p in r.lists[_queue_key(r)]]
+        by_video = {}
+        for p in payloads:
+            by_video.setdefault(p["video_path"], []).append(
+                (p["start_frame"], p["n_frames"]))
+        assert by_video == {
+            str(project["cam0"]): [(800, 800)],
+            str(project["cam1"]): [(800, 800)],
+        }, "both cameras must get the SAME ranges, taken from cam0's tags"
+        assert out["skipped"] == []
+
+    def test_tag_ranges_are_clamped_to_each_cameras_own_length(self, project):
+        # A sibling a few frames shorter must not receive a range running off
+        # its end — the /range route would reject it.
+        r = Redis()
+        lengths = {str(project["cam0"]): 10_000, str(project["cam1"]): 1_200}
+        r.h[ba._batch_key("B1")] = _record(
+            project, both_cams=1, mode="tag", tags=json.dumps(["t"]))
+        ba.run_batch(
+            r, "B1", requeue=lambda d: None,
+            send_task=lambda n, *, kwargs, queue: None,
+            probe_frames=lambda p: lengths[str(p)],
+            notes_for=lambda p: [{"frame_number": "1000", "note": "t"}],
+            sibling_for=lambda p: str(project["cam1"]),
+            is_training=lambda x: False, now=lambda: 2000.0)
+
+        for p in (json.loads(x) for x in r.lists[_queue_key(r)]):
+            end = p["start_frame"] + p["n_frames"] - 1
+            assert end < lengths[p["video_path"]], f"{p} runs past the video"
+
     def test_tag_mode_skips_a_video_with_no_matching_tags(self, project):
         r = Redis()
         out, sent, _ = _run(r, project, mode="tag", frames=10_000,
