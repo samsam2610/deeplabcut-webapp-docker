@@ -583,6 +583,8 @@ def _write_job_row(redis_, batch_id, rec, n_ranges, n_frames, state, now):
         redis_.hset(f"dlc_analyze_job:{batch_id}", mapping={
             "task_id":     batch_id,
             "operation":   "batch_analyze",
+            "engine":      rec.get("engine") or "pytorch",
+            "gpu_id":      rec.get("gputouse") or "auto",
             "project":     Path(rec.get("config_path") or "").parent.name,
             "target_path": first,
             "started_at":  str(rec.get("created_at") or now()),

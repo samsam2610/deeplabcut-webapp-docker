@@ -248,6 +248,20 @@ def _celery_task_status(jid: str) -> str:
 _LIVE_CELERY_STATES = {"PENDING", "RECEIVED", "STARTED", "RETRY", "PROGRESS"}
 
 
+def _batch_stage(finished: int, total: int, partial: bool, errors: int = 0) -> str:
+    """Human stage text for a Batch-Analyze row.
+
+    A finished batch whose per-range results expired before anything counted
+    them would otherwise read "204/448", which looks exactly like 244 failures.
+    It is not: the queue drained and every range ran. Report what is actually
+    known instead of a ratio that can never reach its denominator.
+    """
+    err = f" · {errors} errored" if errors else ""
+    if partial:
+        return f"{total} ranges · all queued work drained (per-range counts expired){err}"
+    return f"{finished}/{total} ranges{err}"
+
+
 def _batch_row_from_record(jid: str) -> dict | None:
     """Rebuild a Batch-Analyze job row from `dlc:batch:<jid>`, or None.
 
@@ -270,13 +284,14 @@ def _batch_row_from_record(jid: str) -> dict | None:
     return {
         "task_id":    jid,
         "operation":  "batch_analyze",
+        "engine":     rec.get("engine") or "pytorch",
+        "gpu_id":     rec.get("gputouse") or "auto",
         "status":     "complete" if terminal else "running",
         "project":    _Path(rec.get("config_path") or "").parent.name,
         "target_path": videos[0] if videos else "",
         "started_at": rec.get("created_at") or "",
-        "stage":      rec.get("reason") or (
-            f"{finished}/{total} ranges"
-            + (" (counts partial — results expire)" if prog.get("counts_partial") else "")),
+        "stage":      rec.get("reason") or _batch_stage(finished, total,
+                                                            prog.get("counts_partial")),
         "total":      total,
         "done":       finished,
     }
@@ -329,10 +344,8 @@ def _reconcile_job(redis_key: str, jid: str) -> dict | None:
             terminal = prog["state"] in ("complete", "failed", "cancelled")
             job["status"] = "complete" if terminal else "running"
             job["stage"] = (prog["rec"].get("reason")
-                            or f"{finished}/{total} ranges"
-                            + (f" · {prog['errors']} errored" if prog["errors"] else "")
-                            + (" (counts partial — results expire)"
-                               if prog.get("counts_partial") else ""))
+                            or _batch_stage(finished, total,
+                                            prog.get("counts_partial"), prog["errors"]))
             job["done"] = finished
             job["total"] = total
             try:

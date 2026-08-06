@@ -427,3 +427,41 @@ class TestJobsSurface:
         assert batch_progress(redis, batch_id)["done"] == 2
         redis.delete("inline:result:r1", "inline:result:r2")   # they expire
         assert batch_progress(redis, batch_id)["done"] == 2, "high-water mark lost"
+
+    def test_a_complete_batch_does_not_read_like_a_failure(self, ba_client):
+        # Verified on real output: a batch reporting "204/448" had analysed
+        # 358852/358852 frames — every range ran, 244 results simply expired
+        # before anything counted them. A ratio that can never reach its
+        # denominator reads as 244 failures, so report what is known instead.
+        import time as _t
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            batch_id = _start(client, video=video).get_json()["batch_id"]
+        redis.hset(f"dlc:batch:{batch_id}", mapping={
+            "state": "submitted", "req_ids": json.dumps([f"r{i}" for i in range(448)]),
+            "snap_key": "sk", "user_id": "u1", "engine": "pytorch", "gputouse": "1",
+            "submitted_at": str(_t.time() - 9000),
+        })
+        from dlc.monitoring import _reconcile_job
+        job = _reconcile_job(f"dlc_analyze_job:{batch_id}", batch_id)
+
+        assert job["status"] == "complete"
+        assert "448 ranges" in job["stage"]
+        assert "drained" in job["stage"]
+        assert "0/448" not in job["stage"], "a bare ratio reads as 448 failures"
+        # The Jobs page showed "engine: ?  GPU: ?" because nothing set them.
+        assert job["engine"] == "pytorch"
+        assert job["gpu_id"] == "1"
+
+    def test_a_fully_counted_batch_still_shows_its_ratio(self, ba_client):
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            batch_id = _start(client, video=video).get_json()["batch_id"]
+        redis.hset(f"dlc:batch:{batch_id}", mapping={
+            "state": "submitted", "req_ids": json.dumps(["r1", "r2"]),
+        })
+        for rid in ("r1", "r2"):
+            redis.hset(f"inline:result:{rid}", mapping={"status": "done", "n_analyzed": "5"})
+        from dlc.monitoring import _reconcile_job
+        job = _reconcile_job(f"dlc_analyze_job:{batch_id}", batch_id)
+        assert job["stage"] == "2/2 ranges"
