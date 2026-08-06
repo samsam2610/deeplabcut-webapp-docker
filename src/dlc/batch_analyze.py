@@ -303,17 +303,25 @@ def training_is_running(redis_, state_of=celery_state) -> bool:
 
     TWO signals are required, because each one alone is wrong in production:
 
-    * The job hash alone is not enough. ``dlc_train_network`` writes
-      ``started_at`` and ``status`` once at launch and never heartbeats — there
-      is no ``updated_at`` to age out. A run 3 h in looks byte-identical to a
-      crashed one, so any staleness rule based on the hash would release the
-      gate on a live training job and analyse against the wrong model.
+    * The job hash alone is not enough. ``dlc_train_network`` writes no
+      ``updated_at``, so there is no field to age out. What it DOES do is slide
+      the hash's TTL forward on every progress poll ("Slide the TTL forward so
+      long runs (>2 h) stay visible"), making the hash's EXISTENCE a dead-man's
+      switch — present while the process writes, gone 2 h after it stops. So
+      present-and-``running`` is a real liveness signal, but it carries no
+      timestamp of its own, and any staleness rule invented on top of one would
+      release the gate on a live run.
     * Celery's state alone is not enough either. The ``dlc_train_jobs`` zset
       outlives the hashes (which expire), and an id whose backend entry has
       been purged reads as PENDING — a "live" state. Trusting that would pin a
       deferred batch for its full 24 h on jobs that finished days ago.
 
     So: the hash must exist and claim a live status, AND Celery must agree.
+    "Celery says PROGRESS but the hash has lapsed" is the hard-killed case — a
+    SIGKILL never publishes a terminal state, so Celery goes stale while the
+    dead-man's switch correctly trips. Its 2 h lag is the price: nothing here
+    can tell "killed" from "briefly stalled" any sooner.
+
     A dispatched-but-not-yet-started task has no backend entry at all; that
     counts as running, because waiting slightly too long is a far cheaper
     mistake than analysing with the pre-training model.

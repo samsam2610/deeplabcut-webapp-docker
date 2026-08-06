@@ -83,16 +83,24 @@ It does not fire immediately merely because nothing is running yet.
 
 Liveness needs **two** signals, because each alone is wrong in production:
 
-* The job hash alone is not enough. `dlc_train_network` writes `started_at` and
-  `status` once at launch and never heartbeats — there is no `updated_at` to age
-  out, so a healthy 3 h run is byte-indistinguishable from a crashed one.
+* The job hash alone is not enough. `dlc_train_network` writes no `updated_at`,
+  so there is no field to age out. It DOES slide the hash's TTL forward on every
+  progress poll (`tasks.py`, "Slide the TTL forward so long runs (>2 h) stay
+  visible"), which makes the hash's existence a dead-man's switch: present while
+  the process writes, gone 2 h after it stops. Present-and-`running` is therefore
+  a real liveness signal, but it carries no timestamp of its own to check.
 * Celery's state alone is not enough either. The `dlc_train_jobs` zset outlives
   the hashes (which expire after 2 h), and an id whose result-backend entry has
   been purged reads as `PENDING` — a live state.
 
 So the hash must exist and claim a live status, AND Celery must not report a
-terminal state. No backend entry at all means dispatched-but-not-started, which
-counts as running: waiting slightly too long is far cheaper than analysing with
+terminal state. "Celery says PROGRESS but the hash has lapsed" is the
+hard-killed case — a SIGKILL never publishes a terminal state, so Celery's view
+goes stale while the dead-man's switch correctly trips. The switch's 2 h lag is
+the price: the gate cannot distinguish "killed" from "briefly stalled" sooner.
+
+No backend entry at all means dispatched-but-not-started, which counts as
+running: waiting slightly too long is far cheaper than analysing with
 the pre-training model. Celery state is read as a plain redis GET of
 `celery-task-meta-<id>`, never `AsyncResult`.
 
