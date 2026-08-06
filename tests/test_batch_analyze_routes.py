@@ -365,6 +365,53 @@ class TestJobsSurface:
         from dlc.batch_analyze import batch_progress
         assert batch_progress(redis, batch_id)["state"] == "submitted"
 
+    def test_progress_advances_past_the_result_ttl_window(self, ba_client):
+        """The failure seen live on 2026-08-06: stuck at 24/448 while working.
+
+        Results live 300 s and ranges take ~13 s, so only ~23 exist at once.
+        Counting the visible ones and keeping the maximum pins the tally at the
+        WINDOW SIZE forever. Progress has to accumulate distinct req_ids.
+        """
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            batch_id = _start(client, video=video).get_json()["batch_id"]
+        ids = [f"r{i}" for i in range(10)]
+        redis.hset(f"dlc:batch:{batch_id}", mapping={
+            "state": "submitted", "req_ids": json.dumps(ids),
+        })
+
+        from dlc.batch_analyze import batch_progress
+        # Drain in windows of 3, expiring the previous window each time —
+        # exactly what the 300 s TTL does to a long batch.
+        seen = 0
+        for start in range(0, 9, 3):
+            window = ids[start:start + 3]
+            for rid in window:
+                redis.hset(f"inline:result:{rid}",
+                           mapping={"status": "done", "n_analyzed": "100"})
+            prog = batch_progress(redis, batch_id)
+            seen += len(window)
+            assert prog["done"] == seen, (
+                f"after {seen} ranges the tally read {prog['done']} — "
+                "a sliding window was counted instead of accumulated")
+            for rid in window:
+                redis.delete(f"inline:result:{rid}")
+        assert batch_progress(redis, batch_id)["analyzed"] == 900
+
+    def test_re_polling_does_not_double_count(self, ba_client):
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            batch_id = _start(client, video=video).get_json()["batch_id"]
+        redis.hset(f"dlc:batch:{batch_id}", mapping={
+            "state": "submitted", "req_ids": json.dumps(["r1", "r2"]),
+        })
+        redis.hset("inline:result:r1", mapping={"status": "done", "n_analyzed": "50"})
+
+        from dlc.batch_analyze import batch_progress
+        for _ in range(4):
+            prog = batch_progress(redis, batch_id)
+        assert prog["done"] == 1 and prog["analyzed"] == 50
+
     def test_progress_counters_are_monotonic(self, ba_client):
         # A count seen once must not be lost when the result hash expires.
         client, redis, _project, video = ba_client

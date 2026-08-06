@@ -77,6 +77,14 @@ BATCH_SESSION_TTL_S = 1800
 RESULT_TTL_S = 300
 
 
+def _smembers(redis_, key) -> set:
+    """smembers with a fake-redis fallback, mirroring inline_analysis._hgetall."""
+    try:
+        return {str(v) for v in (redis_.smembers(key) or set())}
+    except Exception:
+        return set()
+
+
 def _batch_key(batch_id: str) -> str:
     return f"dlc:batch:{batch_id}"
 
@@ -707,30 +715,57 @@ def batch_progress(redis_, batch_id: str) -> dict | None:
     if not rec:
         return None
     req_ids = json.loads(rec.get("req_ids") or "[]")
-    done = errors = analyzed = skipped_frames = 0
+
+    # `inline:result:*` hashes expire after RESULT_TTL_S, so what is visible at
+    # any moment is a SLIDING WINDOW, not a running total. Remember which
+    # req_ids have been seen finishing, in durable sets — counting the visible
+    # ones and keeping the maximum does not work: at ~13 s per range only
+    # ~RESULT_TTL_S/13 ≈ 23 results exist at once, so the count pins itself at
+    # the window size and never advances. Observed live on 2026-08-06: a batch
+    # stuck reporting "24/448" while the worker was happily draining it.
+    done_key, err_key = f"{_batch_key(batch_id)}:done", f"{_batch_key(batch_id)}:err"
+    seen_done = _smembers(redis_, done_key)
+    seen_err = _smembers(redis_, err_key)
+
+    fresh_done, fresh_err = [], []
+    new_analyzed = new_skipped = 0
     last_error = ""
     for rid in req_ids:
         h = _hgetall(redis_, f"inline:result:{rid}") or {}
         status = h.get("status") or "pending"
-        if status == "done":
-            done += 1
-            analyzed += int(h.get("n_analyzed") or 0)
-            skipped_frames += int(h.get("n_skipped") or 0)
+        if status == "done" and rid not in seen_done:
+            fresh_done.append(rid)
+            new_analyzed += int(h.get("n_analyzed") or 0)
+            new_skipped += int(h.get("n_skipped") or 0)
         elif status == "error":
-            errors += 1
+            if rid not in seen_err:
+                fresh_err.append(rid)
             last_error = h.get("error") or last_error
 
-    # `inline:result:*` hashes expire after RESULT_TTL_S, so counting them is
-    # only ever a snapshot of the last few minutes. Accumulate into the durable
-    # record so progress is not lost between polls — and so a batch observed
-    # only occasionally still shows its true high-water mark instead of 0.
-    def _hi(field, live):
+    if fresh_done:
         try:
-            return max(int(rec.get(field) or 0), live)
+            redis_.sadd(done_key, *fresh_done)
+            redis_.expire(done_key, 7 * 24 * 3600)
+        except Exception:
+            pass
+    if fresh_err:
+        try:
+            redis_.sadd(err_key, *fresh_err)
+            redis_.expire(err_key, 7 * 24 * 3600)
+        except Exception:
+            pass
+
+    done = len(seen_done) + len(fresh_done)
+    errors = len(seen_err) + len(fresh_err)
+    # Frame tallies accumulate only for req_ids counted for the FIRST time, so
+    # a re-poll cannot double-count them.
+    def _add(field, delta):
+        try:
+            return int(rec.get(field) or 0) + delta
         except (TypeError, ValueError):
-            return live
-    done, errors = _hi("done", done), _hi("errors", errors)
-    analyzed, skipped_frames = _hi("analyzed", analyzed), _hi("skipped", skipped_frames)
+            return delta
+    analyzed = _add("analyzed", new_analyzed)
+    skipped_frames = _add("skipped", new_skipped)
 
     state = rec.get("state") or "queued"
     counted_all = bool(req_ids) and (done + errors) >= len(req_ids)
