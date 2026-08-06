@@ -328,3 +328,55 @@ class TestJobsSurface:
         from dlc.monitoring import _reconcile_job
         job = _reconcile_job("dlc_analyze_job:no-such-id", "no-such-id")
         assert job == {"task_id": "no-such-id", "status": "orphaned"}
+
+    def test_a_drained_queue_completes_a_batch_nobody_watched(self, ba_client):
+        # inline:result:* hashes live 300 s, so a batch that ran unattended has
+        # no countable results left. Counting alone would leave it "running"
+        # forever — a phantom job on the Jobs page. The durable signal is the
+        # session queue being empty.
+        import time as _t
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            batch_id = _start(client, video=video).get_json()["batch_id"]
+        redis.hset(f"dlc:batch:{batch_id}", mapping={
+            "state": "submitted", "req_ids": json.dumps(["r1", "r2"]),
+            "snap_key": "sk", "user_id": "u1",
+            "submitted_at": str(_t.time() - 4000),      # long finished
+        })
+        # No queue key at all ⇒ llen 0 ⇒ drained. No result hashes either.
+
+        from dlc.batch_analyze import batch_progress
+        prog = batch_progress(redis, batch_id)
+        assert prog["state"] == "complete"
+        assert prog["counts_partial"] is True, "the tally is a floor, and must say so"
+
+    def test_a_just_submitted_batch_is_not_called_finished(self, ba_client):
+        # Its queue is legitimately empty for a moment before the worker picks
+        # anything up; without the grace period every batch would complete
+        # instantly.
+        import time as _t
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            batch_id = _start(client, video=video).get_json()["batch_id"]
+        redis.hset(f"dlc:batch:{batch_id}", mapping={
+            "state": "submitted", "req_ids": json.dumps(["r1", "r2"]),
+            "snap_key": "sk", "user_id": "u1", "submitted_at": str(_t.time()),
+        })
+        from dlc.batch_analyze import batch_progress
+        assert batch_progress(redis, batch_id)["state"] == "submitted"
+
+    def test_progress_counters_are_monotonic(self, ba_client):
+        # A count seen once must not be lost when the result hash expires.
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            batch_id = _start(client, video=video).get_json()["batch_id"]
+        redis.hset(f"dlc:batch:{batch_id}", mapping={
+            "state": "submitted", "req_ids": json.dumps(["r1", "r2", "r3"]),
+        })
+        redis.hset("inline:result:r1", mapping={"status": "done", "n_analyzed": "10"})
+        redis.hset("inline:result:r2", mapping={"status": "done", "n_analyzed": "10"})
+
+        from dlc.batch_analyze import batch_progress
+        assert batch_progress(redis, batch_id)["done"] == 2
+        redis.delete("inline:result:r1", "inline:result:r2")   # they expire
+        assert batch_progress(redis, batch_id)["done"] == 2, "high-water mark lost"

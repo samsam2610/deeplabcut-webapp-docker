@@ -274,7 +274,9 @@ def _batch_row_from_record(jid: str) -> dict | None:
         "project":    _Path(rec.get("config_path") or "").parent.name,
         "target_path": videos[0] if videos else "",
         "started_at": rec.get("created_at") or "",
-        "stage":      rec.get("reason") or f"{finished}/{total} ranges",
+        "stage":      rec.get("reason") or (
+            f"{finished}/{total} ranges"
+            + (" (counts partial — results expire)" if prog.get("counts_partial") else "")),
         "total":      total,
         "done":       finished,
     }
@@ -328,7 +330,9 @@ def _reconcile_job(redis_key: str, jid: str) -> dict | None:
             job["status"] = "complete" if terminal else "running"
             job["stage"] = (prog["rec"].get("reason")
                             or f"{finished}/{total} ranges"
-                            + (f" · {prog['errors']} errored" if prog["errors"] else ""))
+                            + (f" · {prog['errors']} errored" if prog["errors"] else "")
+                            + (" (counts partial — results expire)"
+                               if prog.get("counts_partial") else ""))
             job["done"] = finished
             job["total"] = total
             try:

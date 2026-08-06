@@ -72,6 +72,10 @@ _LIVE_CELERY_STATES = {"PENDING", "RECEIVED", "STARTED", "RETRY", "PROGRESS"}
 # everything up front and then goes quiet while the worker chews.
 BATCH_SESSION_TTL_S = 1800
 
+# How long tasks._publish_result keeps an inline:result:<req_id> hash.
+# Progress polling must out-pace this or completions are simply lost.
+RESULT_TTL_S = 300
+
 
 def _batch_key(batch_id: str) -> str:
     return f"dlc:batch:{batch_id}"
@@ -716,13 +720,47 @@ def batch_progress(redis_, batch_id: str) -> dict | None:
             errors += 1
             last_error = h.get("error") or last_error
 
+    # `inline:result:*` hashes expire after RESULT_TTL_S, so counting them is
+    # only ever a snapshot of the last few minutes. Accumulate into the durable
+    # record so progress is not lost between polls — and so a batch observed
+    # only occasionally still shows its true high-water mark instead of 0.
+    def _hi(field, live):
+        try:
+            return max(int(rec.get(field) or 0), live)
+        except (TypeError, ValueError):
+            return live
+    done, errors = _hi("done", done), _hi("errors", errors)
+    analyzed, skipped_frames = _hi("analyzed", analyzed), _hi("skipped", skipped_frames)
+
     state = rec.get("state") or "queued"
-    if state == "submitted" and req_ids and (done + errors) >= len(req_ids):
+    counted_all = bool(req_ids) and (done + errors) >= len(req_ids)
+
+    # Completion cannot rely on counting alone: with a 5-minute result TTL, a
+    # batch nobody watched finishes with most of its results already gone. The
+    # durable signal is the SESSION QUEUE — once it is empty, none of this
+    # batch's ranges are waiting. Give it one result-TTL of grace so a batch
+    # that has only just been submitted is not called finished before the
+    # worker has picked anything up.
+    drained = False
+    if state == "submitted" and rec.get("snap_key"):
+        try:
+            queued = redis_.llen(f"inline:queue:{rec.get('user_id')}:{rec.get('snap_key')}")
+            age = time.time() - float(rec.get("submitted_at") or 0)
+            drained = queued == 0 and age > RESULT_TTL_S
+        except Exception:
+            drained = False
+
+    if state == "submitted" and (counted_all or drained):
         state = "complete"
-        _set(redis_, _batch_key(batch_id), state=state, updated_at=time.time())
+    _set(redis_, _batch_key(batch_id), state=state, done=done, errors=errors,
+         analyzed=analyzed, skipped=skipped_frames, updated_at=time.time())
 
     return {
         "rec": rec, "state": state, "req_ids": req_ids,
+        # True when the queue drained before the counters could see every
+        # range — the numbers are a floor, not a total. Callers that print
+        # them should say so rather than implying a precise tally.
+        "counts_partial": state == "complete" and not counted_all,
         "done": done, "errors": errors,
         "analyzed": analyzed, "skipped_frames": skipped_frames,
         "last_error": last_error,
