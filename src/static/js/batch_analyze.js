@@ -16,6 +16,9 @@
 
 import { state } from './state.js';
 import { makeTrackedFiles } from './components/tracked_files_tab.js';
+import {
+  addTag, removeTag, toggleSelected, submittedTags, canRunForTag, parseStored,
+} from './internal/batch_tags.mjs';
 
 const $ = (id) => document.getElementById(id);
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -30,6 +33,9 @@ const CANCEL_API  = "/dlc/project/batch-analyze/cancel";
 
 let _queue = [];            // ordered absolute video paths
 let _tags = [];             // saved tag chips (per project)
+let _selected = [];         // chips chosen for the next run — NOT persisted:
+                            // a stale selection firing off 200k frames is a
+                            // worse failure than re-picking two chips.
 let _projectPath = null;
 let _browsePath = null;
 let _pollTimer = null;
@@ -266,6 +272,10 @@ async function _loadBrowse(path) {
 }
 
 // ── tag chips ─────────────────────────────────────────────────────────────
+//
+// The chips ARE the selection: clicking one toggles whether that tag is part of
+// the next run. The text field only mints new chips. All the rules live in
+// internal/batch_tags.mjs so they can be tested without a DOM.
 
 function _renderTags() {
   const c = $("ba-tags");
@@ -273,58 +283,77 @@ function _renderTags() {
   c.innerHTML = "";
   for (const t of _tags) {
     const pill = document.createElement("span");
-    pill.className = "fe-tag-chip ba-ptag";
+    pill.className = "fe-tag-chip ba-ptag" + (_selected.includes(t) ? " active" : "");
+    pill.title = _selected.includes(t) ? "Selected — click to deselect"
+                                       : "Click to select for the next run";
     pill.appendChild(document.createTextNode(t));
     const x = document.createElement("span");
     x.className = "x";
     x.textContent = "×";
+    x.title = "Remove this tag from the project";
     x.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      _tags = _tags.filter((v) => v !== t);
+      ev.stopPropagation();      // removing must not also toggle selection
+      const r = removeTag(_tags, _selected, t);
+      _tags = r.tags; _selected = r.selected;
       _renderTags();
       _setSetting("batch_tags", JSON.stringify(_tags));
     });
     pill.appendChild(x);
-    // Clicking APPENDS rather than replaces: several tags can be analysed in
-    // one run, so building "a, b" by clicking two chips is the common gesture.
-    pill.addEventListener("click", () => _appendTag(t));
+    pill.addEventListener("click", () => {
+      _selected = toggleSelected(_tags, _selected, t);
+      _renderTags();
+    });
     c.appendChild(pill);
   }
-  const add = document.createElement("span");
-  add.className = "fe-tag-chip ba-ptag ba-ptag-add";
-  add.textContent = "+ tag";
-  add.addEventListener("click", () => {
-    const el = $("ba-tag-input");
-    const typed = el && el.value.trim();
-    const raw = (typed || window.prompt("New tag:") || "").trim();
-    if (!raw || _tags.includes(raw)) return;
-    _tags.push(raw);
-    _renderTags();
-    _setSetting("batch_tags", JSON.stringify(_tags));
-  });
-  c.appendChild(add);
+  if (!_tags.length) {
+    const hint = document.createElement("span");
+    hint.className = "ba-hint";
+    hint.textContent = "no tags yet — type one above and press + Add";
+    c.appendChild(hint);
+  }
+  _syncTagEnablement();
 }
 
-function _appendTag(tag) {
+/** Add whatever is in the field as a new chip. Duplicates vanish silently. */
+function _onAddTag() {
   const el = $("ba-tag-input");
   if (!el) return;
-  const cur = _parseTags(el.value);
-  if (cur.includes(tag)) return;
-  cur.push(tag);
-  el.value = cur.join(", ");
+  const r = addTag(_tags, el.value);
+  if (r.added) {
+    _tags = r.tags;
+    _setSetting("batch_tags", JSON.stringify(_tags));
+  }
+  // Cleared either way: a duplicate is "already there", so leaving the text
+  // behind would read as a failure when nothing is wrong.
+  if (r.reason !== "empty") el.value = "";
+  _renderTags();
 }
 
-function _parseTags(raw) {
-  return String(raw || "").split(",").map((s) => s.trim()).filter(Boolean);
+/** "Analyze for tag" is inert until at least one chip is selected. */
+function _syncTagEnablement() {
+  const btn = $("ba-run-tag");
+  const hint = $("ba-tag-hint");
+  const ok = canRunForTag(_tags, _selected);
+  if (btn) {
+    btn.disabled = !ok;
+    btn.title = ok ? "Analyse the window around every frame carrying a selected tag"
+                   : "Select at least one tag below";
+  }
+  if (hint) {
+    const names = submittedTags(_tags, _selected);
+    hint.textContent = names.length
+      ? `${names.length} tag(s) selected: ${names.join(", ")}`
+      : "select a tag to enable “Analyze for tag”";
+  }
 }
 
 // ── run ───────────────────────────────────────────────────────────────────
 
 async function _run(mode) {
   if (!_queue.length) { _status("Queue at least one video.", true); return; }
-  const tags = _parseTags($("ba-tag-input")?.value);
+  const tags = submittedTags(_tags, _selected);
   if (mode === "tag" && !tags.length) {
-    _status("Enter at least one tag — spelling must match the note exactly.", true);
+    _status("Select at least one tag chip first.", true);
     return;
   }
   const before = _int("ba-before", 200);
@@ -458,10 +487,8 @@ export function initBatchAnalyze() {
     const [tagsRaw, prefsRaw, windowRaw] = await Promise.all([
       _getSetting("batch_tags"), _getSetting("batch_prefs"), _getSetting("batch_window"),
     ]);
-    try {
-      const parsed = tagsRaw ? JSON.parse(tagsRaw) : [];
-      _tags = Array.isArray(parsed) ? parsed : [];
-    } catch (_) { _tags = []; }
+    _tags = parseStored(tagsRaw);
+    _selected = [];
     try {
       const p = prefsRaw ? JSON.parse(prefsRaw) : {};
       if (bothCams && typeof p.both_cams === "boolean") bothCams.checked = p.both_cams;
@@ -508,6 +535,10 @@ export function initBatchAnalyze() {
   });
 
   $("ba-queue-clear")?.addEventListener("click", () => { _queue = []; _renderQueue(); });
+  $("ba-tag-add")?.addEventListener("click", _onAddTag);
+  $("ba-tag-input")?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); _onAddTag(); }
+  });
   $("ba-run-all")?.addEventListener("click", () => _run("all"));
   $("ba-run-tag")?.addEventListener("click", () => _run("tag"));
   $("ba-cancel")?.addEventListener("click", _cancel);

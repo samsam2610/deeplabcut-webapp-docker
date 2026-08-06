@@ -1216,8 +1216,6 @@ button[type="submit"]:hover .btn-arrow {
   font-weight: 700;
 }
 .ba-ptag .x:hover { opacity: 1; color: var(--danger, #e66); }
-.ba-ptag-add { border-style: dashed; opacity: .6; }
-.ba-ptag-add:hover { opacity: 1; }
 
 /* Queue rows */
 .ba-queue-row {
@@ -1248,3 +1246,60 @@ button[type="submit"]:hover .btn-arrow {
 }
 .ba-row:hover { background: var(--surface-2); }
 .ba-row.queued { opacity: .5; }
+
+/* ── Analyze card: full width ──────────────────────────────────────────────
+   Mirrors #inline-analysis-3d-card. Cards sit directly in <main class="cards">
+   (align-items:center, no width cap), so overriding .card's max-width:560px is
+   all that is needed. The partial is shared, so this applies on / and /dlc-3d/. */
+#analyze-card { max-width: none; width: 100%; }
+
+/* Single-run parameter rows were laid out for a 560px card; at full width they
+   would stretch into one absurdly long line each. auto-fit gives 2-3 columns on
+   a wide screen and falls back to one column when narrow — no breakpoints to
+   guess, no JS. */
+#analyze-card .av-param-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: .35rem 1.2rem;
+  align-items: center;
+}
+#analyze-card .av-param-grid .scorer-row { margin-bottom: 0 !important; }
+
+/* Log text running the full width of a large monitor is unreadable. */
+#analyze-card #av-progress { max-width: 900px; }
+
+/* ── Batch panel: wide layout ──────────────────────────────────────────────
+   Source list spans the full width — it is what benefits most, since the
+   tracked-files rows carry a progress bar and a last-opened column that were
+   being crushed at 560px. Queue and Options share a row beneath it. */
+#ba-panel .ba-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  #ba-panel .ba-split { grid-template-columns: 1fr; }
+}
+#ba-panel .ba-col-head {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+  margin-bottom: .3rem;
+  font-size: .76rem;
+  color: var(--text-dim);
+}
+#ba-panel .ba-source-list { max-height: 260px; }
+
+/* Chips ARE the selection: unselected chips are dimmed, selected ones use the
+   .fe-tag-chip.active treatment from viewer.css. */
+#ba-panel .ba-ptag { cursor: pointer; }
+#ba-panel .ba-tag-row {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  flex-wrap: wrap;
+  margin-bottom: .35rem;
+}
+#ba-panel .ba-hint { font-size: .72rem; color: var(--text-dim); }

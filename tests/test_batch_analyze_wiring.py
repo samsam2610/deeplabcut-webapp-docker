@@ -98,3 +98,62 @@ def test_every_endpoint_the_controller_calls_is_registered(route):
     assert route in JS.read_text(), "controller no longer calls this route"
     assert f'"{route}"' in (SRC / "dlc" / "batch_analyze.py").read_text(), \
         "the controller calls a route the blueprint does not define"
+
+
+# ── Wide layout (2026-08-06) ──────────────────────────────────────────────
+
+def test_the_analyze_card_is_full_width():
+    # .card caps at 560px; cards sit directly in <main class="cards"> which has
+    # no cap, so overriding max-width is the whole mechanism — same as
+    # #inline-analysis-3d-card.
+    css = CSS.read_text()
+    assert re.search(r"#analyze-card\s*\{[^}]*max-width:\s*none", css)
+    assert re.search(r"#analyze-card\s*\{[^}]*width:\s*100%", css)
+
+
+def test_single_run_params_are_gridded_not_stretched():
+    # Without this the seven parameter rows each span the full monitor.
+    html, css = HTML.read_text(), CSS.read_text()
+    assert html.count('class="av-param-grid"') == 2, \
+        "both the common params and the labeled-video params need the grid"
+    assert re.search(r"\.av-param-grid\s*\{[^}]*repeat\(auto-fit,\s*minmax\(", css), \
+        "auto-fit keeps it responsive without hand-picked breakpoints"
+
+
+def test_the_batch_panel_splits_queue_and_options_and_collapses_when_narrow():
+    html, css = HTML.read_text(), CSS.read_text()
+    assert 'class="ba-split"' in html
+    assert re.search(r"\.ba-split\s*\{[^}]*grid-template-columns:\s*1fr 1fr", css)
+    assert re.search(r"@media \(max-width: 900px\)\s*\{\s*#ba-panel \.ba-split\s*\{"
+                     r"\s*grid-template-columns:\s*1fr", css), \
+        "two columns must collapse to one on a narrow screen"
+
+
+def test_analyze_for_tag_is_disabled_in_the_markup():
+    # Not just by the controller: if batch_analyze.js fails to load, the button
+    # must still be inert rather than submitting a run with no tags.
+    tag_btn = re.search(r'<button id="ba-run-tag"[^>]*>', HTML.read_text()).group(0)
+    assert "disabled" in tag_btn
+    run_all = re.search(r'<button id="ba-run-all"[^>]*>', HTML.read_text()).group(0)
+    assert "disabled" not in run_all, '"Analyze all" ignores tags — never gate it'
+
+
+def test_the_tag_field_no_longer_advertises_comma_separation():
+    # Chips are the selection now; the field mints exactly one tag per Add.
+    field = re.search(r'<input type="text" id="ba-tag-input"[^>]*>', HTML.read_text()).group(0)
+    assert "comma" not in field.lower()
+
+
+def test_the_controller_submits_the_selection_not_the_field():
+    src = JS.read_text()
+    # The exact submission line, not just any mention: submittedTags is also
+    # called by _syncTagEnablement, and a looser check passes even when the
+    # payload is built from something else entirely.
+    assert "const tags = submittedTags(_tags, _selected);" in src, \
+        "a run must carry the selected chips, not whatever is typed in the box"
+    assert "_parseTags" not in src, "the old field-parsing path must be gone"
+
+
+def test_the_pure_tag_rules_live_in_a_testable_module():
+    assert (SRC / "static" / "js" / "internal" / "batch_tags.mjs").is_file()
+    assert "from './internal/batch_tags.mjs'" in JS.read_text()
