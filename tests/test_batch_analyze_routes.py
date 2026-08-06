@@ -246,3 +246,56 @@ class TestSnapshotAndGpu:
             res = _start(client, video=video, gputouse=1)
         rec = redis.hgetall(f"dlc:batch:{res.get_json()['batch_id']}")
         assert rec["gputouse"] == "1"
+
+
+class TestJobsSurface:
+    def test_a_batch_resolves_to_complete_without_a_browser(self, ba_client):
+        # The Jobs page must not show a finished batch as "running" forever
+        # just because nobody had the panel open. A synthetic batch_id reads
+        # PENDING from the Celery backend, which counts as LIVE — so the row
+        # has to be reconciled from the batch's own record instead.
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            batch_id = _start(client, video=video).get_json()["batch_id"]
+        redis.hset(f"dlc:batch:{batch_id}", mapping={
+            "state": "submitted", "req_ids": json.dumps(["r1", "r2"]),
+        })
+        redis.hset("inline:result:r1", mapping={"status": "done", "n_analyzed": "10"})
+        redis.hset("inline:result:r2", mapping={"status": "done", "n_analyzed": "10"})
+        redis.hset(f"dlc_analyze_job:{batch_id}", mapping={
+            "task_id": batch_id, "operation": "batch_analyze", "status": "running",
+        })
+
+        from dlc.monitoring import _reconcile_job
+        job = _reconcile_job(f"dlc_analyze_job:{batch_id}", batch_id)
+        assert job["status"] == "complete"
+        assert "2/2 ranges" in job["stage"]
+
+    def test_an_unfinished_batch_still_reads_running(self, ba_client):
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            batch_id = _start(client, video=video).get_json()["batch_id"]
+        redis.hset(f"dlc:batch:{batch_id}", mapping={
+            "state": "submitted", "req_ids": json.dumps(["r1", "r2"]),
+        })
+        redis.hset("inline:result:r1", mapping={"status": "done", "n_analyzed": "10"})
+        redis.hset(f"dlc_analyze_job:{batch_id}", mapping={
+            "task_id": batch_id, "operation": "batch_analyze", "status": "running",
+        })
+
+        from dlc.monitoring import _reconcile_job
+        job = _reconcile_job(f"dlc_analyze_job:{batch_id}", batch_id)
+        assert job["status"] == "running"
+        assert "1/2 ranges" in job["stage"]
+
+    def test_an_expired_analyze_job_is_not_mislabelled_train(self, ba_client):
+        # Orphan stubs carry no `operation`, and _row_from_zset_job's
+        # `or "train"` fallback turned every expired analyze/batch row into
+        # "train — <uuid>" on the Jobs page.
+        client, redis, _project, _video = ba_client
+        redis.zadd("dlc_analyze_jobs", {"gone-id": 1.0})
+
+        from dlc.monitoring import _zset_rows
+        rows = [r for r in _zset_rows() if r["id"] == "gone-id"]
+        assert rows and rows[0]["kind"] == "analyze", rows
+        assert rows[0]["state"] == "orphaned"

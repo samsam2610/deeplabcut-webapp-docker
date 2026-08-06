@@ -235,14 +235,16 @@
 
         <!-- Actions. All of them read the queue. -->
         <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.7rem">
-          <button id="ba-run-all" class="btn-sm btn-create" title="Analyse every frame of every queued video">
+          <button id="ba-run-all" class="btn-sm btn-create" disabled
+                  title="Queue at least one video">
             ▶ Analyze all
           </button>
           <button id="ba-run-tag" class="btn-sm btn-create" disabled
                   title="Select at least one tag below">
             ▶ Analyze for tag
           </button>
-          <button id="ba-cancel" class="btn-sm btn-danger hidden" title="Stop a batch that has not submitted its ranges yet">
+          <button id="ba-cancel" class="btn-sm btn-danger" disabled
+                  title="No batch is running">
             ■ Cancel batch
           </button>
           <button id="btn-create-labeled-video" class="btn-sm" disabled

@@ -580,7 +580,10 @@ def _write_job_row(redis_, batch_id, rec, n_ranges, n_frames, state, now):
             "done":        0,
             "stage":       f"{n_ranges} ranges · {n_frames} frames queued",
         })
-        redis_.expire(f"dlc_analyze_job:{batch_id}", 7200)
+        # 24 h, not 2 h: a large batch can take longer than two hours to
+        # drain, and an expired hash leaves an unlabelled orphan on the
+        # Jobs page instead of a batch row.
+        redis_.expire(f"dlc_analyze_job:{batch_id}", 86400)
         redis_.zadd("dlc_analyze_jobs", {batch_id: now()})
     except Exception:
         pass
@@ -686,21 +689,24 @@ def batch_start():
                     "n_videos": len(videos)}), 202
 
 
-@bp.route("/dlc/project/batch-analyze/status", methods=["GET"])
-def batch_status():
-    batch_id = (request.args.get("batch_id") or "").strip()
-    if not batch_id:
-        return jsonify({"error": "batch_id required"}), 400
-    redis = _ctx.redis_client()
-    rec = _hgetall(redis, _batch_key(batch_id))
-    if not rec:
-        return jsonify({"error": "unknown batch_id"}), 404
+def batch_progress(redis_, batch_id: str) -> dict | None:
+    """Live roll-up for one batch, from its record plus the per-range results.
 
+    The single source of truth for "how is this batch doing", shared by the
+    panel's status route and by the Jobs page (`monitoring._reconcile_job`).
+    Shared deliberately: a batch whose browser tab is closed must still resolve
+    to `complete` on the Jobs page, and two implementations of this would drift.
+
+    Returns None for an unknown batch.
+    """
+    rec = _hgetall(redis_, _batch_key(batch_id))
+    if not rec:
+        return None
     req_ids = json.loads(rec.get("req_ids") or "[]")
     done = errors = analyzed = skipped_frames = 0
     last_error = ""
     for rid in req_ids:
-        h = _hgetall(redis, f"inline:result:{rid}") or {}
+        h = _hgetall(redis_, f"inline:result:{rid}") or {}
         status = h.get("status") or "pending"
         if status == "done":
             done += 1
@@ -713,14 +719,30 @@ def batch_status():
     state = rec.get("state") or "queued"
     if state == "submitted" and req_ids and (done + errors) >= len(req_ids):
         state = "complete"
-        _set(redis, _batch_key(batch_id), state=state, updated_at=time.time())
-        try:
-            redis.hset(f"dlc_analyze_job:{batch_id}",
-                       mapping={"status": "complete", "done": done,
-                                "updated_at": str(time.time()),
-                                "stage": f"{done}/{len(req_ids)} ranges"})
-        except Exception:
-            pass
+        _set(redis_, _batch_key(batch_id), state=state, updated_at=time.time())
+
+    return {
+        "rec": rec, "state": state, "req_ids": req_ids,
+        "done": done, "errors": errors,
+        "analyzed": analyzed, "skipped_frames": skipped_frames,
+        "last_error": last_error,
+    }
+
+
+@bp.route("/dlc/project/batch-analyze/status", methods=["GET"])
+def batch_status():
+    batch_id = (request.args.get("batch_id") or "").strip()
+    if not batch_id:
+        return jsonify({"error": "batch_id required"}), 400
+    redis = _ctx.redis_client()
+    prog = batch_progress(redis, batch_id)
+    if prog is None:
+        return jsonify({"error": "unknown batch_id"}), 404
+    rec = prog["rec"]
+    req_ids = prog["req_ids"]
+    done, errors = prog["done"], prog["errors"]
+    analyzed, skipped_frames = prog["analyzed"], prog["skipped_frames"]
+    state, last_error = prog["state"], prog["last_error"]
 
     return jsonify({
         "batch_id":       batch_id,

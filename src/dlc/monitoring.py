@@ -267,6 +267,41 @@ def _reconcile_job(redis_key: str, jid: str) -> dict | None:
     # reads as PENDING = "live" forever, which would pin it "running" even after
     # the browser tab that drove it closed/reloaded mid-batch). Instead, treat a
     # stale heartbeat (no progress update in _BATCH_STALE_SECS) as abandoned.
+    # A `batch_analyze` aggregate is not a Celery task either, but unlike a
+    # triangulate batch it has an authoritative record of its own
+    # (`dlc:batch:<id>` plus the per-range `inline:result:*` hashes), so its
+    # state can be computed rather than guessed from a heartbeat. That is what
+    # makes a batch resolve to "complete" on the Jobs page with no browser
+    # open — previously it sat "running" forever, because a synthetic id reads
+    # PENDING from the Celery backend, which counts as live.
+    if job.get("operation") == "batch_analyze":
+        try:
+            from .batch_analyze import batch_progress   # lazy: avoids a cycle
+            prog = batch_progress(_ctx.redis_client(), jid)
+        except Exception:
+            prog = None
+        if prog:
+            total = len(prog["req_ids"])
+            finished = prog["done"] + prog["errors"]
+            terminal = prog["state"] in ("complete", "failed", "cancelled")
+            job["status"] = "complete" if terminal else "running"
+            job["stage"] = (prog["rec"].get("reason")
+                            or f"{finished}/{total} ranges"
+                            + (f" · {prog['errors']} errored" if prog["errors"] else ""))
+            job["done"] = finished
+            job["total"] = total
+            try:
+                _ctx.redis_client().hset(redis_key, mapping={
+                    "status": job["status"], "stage": job["stage"],
+                    "done": finished, "updated_at": str(time.time()),
+                })
+                # Keep the row alive while work remains; let it age out an hour
+                # after it finishes, the same way _job_set does for real tasks.
+                _ctx.redis_client().expire(redis_key, 3600 if terminal else 86400)
+            except Exception:
+                pass
+        return job
+
     if job.get("operation") == "triangulate":
         if job.get("status") == "running":
             try:
@@ -309,6 +344,7 @@ def dlc_training_jobs():
     for jid in _ctx.redis_client().zrevrange("dlc_analyze_jobs", 0, 49):
         job = _reconcile_job("dlc_analyze_job:" + jid, jid)
         if job:
+            job.setdefault("operation", "analyze")
             jobs.append(job)
 
     # Sort combined list by started_at descending
@@ -406,6 +442,10 @@ def _zset_rows() -> list[dict]:
     for jid in _ctx.redis_client().zrevrange("dlc_analyze_jobs", 0, 49):
         job = _reconcile_job("dlc_analyze_job:" + jid, jid)
         if job:
+            # Without this an ORPHAN stub (hash gone, zset entry left) has no
+            # `operation`, and _row_from_zset_job's `or "train"` fallback
+            # labelled every expired analyze/batch job "train — <uuid>".
+            job.setdefault("operation", "analyze")
             rows.append(_row_from_zset_job(job))
     return rows
 

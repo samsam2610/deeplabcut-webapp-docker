@@ -182,8 +182,11 @@ def test_analyze_for_tag_is_disabled_in_the_markup():
     # must still be inert rather than submitting a run with no tags.
     tag_btn = re.search(r'<button id="ba-run-tag"[^>]*>', HTML.read_text()).group(0)
     assert "disabled" in tag_btn
+    # "Analyze all" ignores TAGS, but it is still gated on the queue — see
+    # test_both_run_buttons_start_disabled.
     run_all = re.search(r'<button id="ba-run-all"[^>]*>', HTML.read_text()).group(0)
-    assert "disabled" not in run_all, '"Analyze all" ignores tags — never gate it'
+    assert "Queue at least one video" in run_all, \
+        '"Analyze all" must be gated on the queue, not on tags'
 
 
 def test_the_tag_field_no_longer_advertises_comma_separation():
@@ -205,3 +208,33 @@ def test_the_controller_submits_the_selection_not_the_field():
 def test_the_pure_tag_rules_live_in_a_testable_module():
     assert (SRC / "static" / "js" / "internal" / "batch_tags.mjs").is_file()
     assert "from './internal/batch_tags.mjs'" in JS.read_text()
+
+
+# ── Run-button gating (2026-08-06) ────────────────────────────────────────
+
+def test_both_run_buttons_start_disabled():
+    # An empty queue means there is nothing to run. Disabled in the MARKUP so
+    # the buttons are inert even if batch_analyze.js fails to load.
+    html = HTML.read_text()
+    for bid in ("ba-run-all", "ba-run-tag"):
+        tag = re.search(rf'<button id="{bid}"[^>]*>', html).group(0)
+        assert "disabled" in tag, f"{bid} must start disabled"
+
+
+def test_cancel_is_disabled_not_hidden():
+    # A button that appears and vanishes is harder to find than one that greys
+    # out, and "where did Cancel go" is a worse question than "why is it grey".
+    tag = re.search(r'<button id="ba-cancel"[^>]*>', HTML.read_text()).group(0)
+    assert "disabled" in tag
+    assert "hidden" not in tag, "cancel should grey out, not disappear"
+    js = JS.read_text()
+    assert 'classList.remove("hidden")' not in js.split("_startPolling")[1][:400]
+
+
+def test_the_queue_drives_run_enablement():
+    js = JS.read_text()
+    assert "const queued = _queue.length > 0;" in js
+    # Re-running enablement on every queue change is what keeps the buttons
+    # honest; without it they stay stale until a tag is clicked.
+    render = js.split("function _renderQueue()")[1][:400]
+    assert "_syncTagEnablement()" in render

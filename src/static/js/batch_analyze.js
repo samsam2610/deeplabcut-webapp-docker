@@ -129,6 +129,7 @@ function _renderQueue() {
   // first entry. One-way (this module owns the queue), so there is no risk
   // of the two controllers fighting over it.
   state.baQueue = [..._queue];
+  _syncTagEnablement();          // before the early return below
   const list = $("ba-queue-list");
   const count = $("ba-queue-count");
   if (count) count.textContent = String(_queue.length);
@@ -339,21 +340,33 @@ function _onAddTag() {
   _renderTags();
 }
 
-/** "Analyze for tag" is inert until at least one chip is selected. */
+/** Both run buttons need a queue; "for tag" additionally needs a selection. */
 function _syncTagEnablement() {
   const btn = $("ba-run-tag");
   const hint = $("ba-tag-hint");
-  const ok = canRunForTag(_tags, _selected);
+  const queued = _queue.length > 0;
+
+  const all = $("ba-run-all");
+  if (all) {
+    all.disabled = !queued;
+    all.title = queued ? "Analyse every frame of every queued video"
+                       : "Queue at least one video";
+  }
+
+  const ok = queued && canRunForTag(_tags, _selected);
   if (btn) {
     btn.disabled = !ok;
-    btn.title = ok ? "Analyse the window around every frame carrying a selected tag"
-                   : "Select at least one tag below";
+    btn.title = !queued ? "Queue at least one video"
+      : ok ? "Analyse the window around every frame carrying a selected tag"
+           : "Select at least one tag below";
   }
   if (hint) {
     const names = submittedTags(_tags, _selected);
-    hint.textContent = names.length
-      ? `${names.length} tag(s) selected: ${names.join(", ")}`
-      : "select a tag to enable “Analyze for tag”";
+    hint.textContent = !queued
+      ? "queue a video to enable the run buttons"
+      : names.length
+        ? `${names.length} tag(s) selected: ${names.join(", ")}`
+        : "select a tag to enable “Analyze for tag”";
   }
 }
 
@@ -413,7 +426,8 @@ async function _run(mode) {
 
 function _startPolling() {
   if (_pollTimer) clearInterval(_pollTimer);
-  $("ba-cancel")?.classList.remove("hidden");
+  const c = $("ba-cancel");
+  if (c) { c.disabled = false; c.title = "Stop this batch"; }
   _pollTimer = setInterval(_poll, 3000);
   _poll();
 }
@@ -421,7 +435,8 @@ function _startPolling() {
 function _stopPolling() {
   if (_pollTimer) clearInterval(_pollTimer);
   _pollTimer = null;
-  $("ba-cancel")?.classList.add("hidden");
+  const c = $("ba-cancel");
+  if (c) { c.disabled = true; c.title = "No batch is running"; }
 }
 
 async function _cancel() {
