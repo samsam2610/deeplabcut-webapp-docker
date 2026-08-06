@@ -26,11 +26,19 @@ export function pinnedScorerTokens(pinnedPath) {
   if (!pinnedPath || typeof pinnedPath !== "string") return null;
   const base = pinnedPath.split("/").pop() || "";
   const stem = base.replace(/\.pt$/i, "");
-  if (!/^snapshot[-_]/.test(stem)) return null;
+  // DLC builds the scorer tail from Snapshot.uid(), which stringifies an INT:
+  //   snapshot-050.pt      -> snapshot_50        (not snapshot_050)
+  //   snapshot-best-040.pt -> snapshot_best-40   (not snapshot_best-040)
+  // A literal replace kept the zero padding, so every pin on a padded
+  // snapshot silently failed to match and the overlay fell back to "latest" —
+  // exactly the wrong-model display pinning exists to prevent. Real project
+  // files: snapshot-075.pt, snapshot-best-090.pt.
+  const m = /^snapshot-(best-)?(\d+)$/.exec(stem);
+  if (!m) return null;
   const iterMatch = /(?:^|\/)iteration-(\d+)(?:\/|$)/.exec(pinnedPath);
   return {
     iter: iterMatch ? `iter${iterMatch[1]}` : null,
-    snap: stem.replace(/^snapshot-/, "snapshot_"),
+    snap: `snapshot_${m[1] || ""}${parseInt(m[2], 10)}`,
   };
 }
 
@@ -45,7 +53,13 @@ export function pinnedScorerTokens(pinnedPath) {
  */
 export function matchesPinned(variantPath, tokens) {
   if (!tokens || !variantPath || typeof variantPath !== "string") return false;
-  if (!variantPath.includes(tokens.snap)) return false;
+  // Boundary-anchored, not a bare substring: `includes("snapshot_50")` also
+  // matches `..._snapshot_500.h5`, so a pin on snapshot-050 would happily
+  // accept the h5 from snapshot-500. The left side is already anchored by the
+  // literal "snapshot_" prefix; only the trailing digits need guarding.
+  const snapRe = new RegExp(
+    tokens.snap.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![0-9])");
+  if (!snapRe.test(variantPath)) return false;
   if (tokens.iter && !variantPath.includes(`_${tokens.iter}_`)) return false;
   return true;
 }
