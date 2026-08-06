@@ -61,12 +61,40 @@ instead. Two consequences, both wanted:
 - an interactive click from the inline card (`LPUSH`) still jumps ahead of the
   entire batch, so scrubbing stays responsive while a batch runs.
 
+### Tag windows come from ONE camera
+
+Note tags are annotated on cam0 only. The cameras are hardware triggered
+(`trig1`), so a tagged frame number on cam0 is the same instant on cam1 and
+nobody annotates twice — measured on `banh-mi-1_*_20260704_104915_13`, cam0's
+companion CSV carries 141 tagged frames and cam1's carries **none**.
+
+So the windows are built from the **queued** video's CSV and the *same* ranges
+go to both cameras, matching `inline_analysis_3d.js::_onAnalyzeTagClick`. They
+are re-clamped per camera in case a sibling is a few frames shorter. Reading
+each target's own notes reviews fine and unit-tests fine, but skips cam1 with
+"no frames carry any of those tags" and silently analyses half the pair.
+
 ### The training gate
 
 `wait_for_training` means: **wait until a training job has been observed running
 and has then finished.** If one is running when the batch is queued it waits for
 that one; if the user ticks the box and then starts training, it waits for that.
 It does not fire immediately merely because nothing is running yet.
+
+Liveness needs **two** signals, because each alone is wrong in production:
+
+* The job hash alone is not enough. `dlc_train_network` writes `started_at` and
+  `status` once at launch and never heartbeats — there is no `updated_at` to age
+  out, so a healthy 3 h run is byte-indistinguishable from a crashed one.
+* Celery's state alone is not enough either. The `dlc_train_jobs` zset outlives
+  the hashes (which expire after 2 h), and an id whose result-backend entry has
+  been purged reads as `PENDING` — a live state.
+
+So the hash must exist and claim a live status, AND Celery must not report a
+terminal state. No backend entry at all means dispatched-but-not-started, which
+counts as running: waiting slightly too long is far cheaper than analysing with
+the pre-training model. Celery state is read as a plain redis GET of
+`celery-task-meta-<id>`, never `AsyncResult`.
 
 Implemented by re-dispatching the task with `countdown=60`, so a waiting batch
 occupies no concurrency slot (the worker runs `-Q celery,pytorch --concurrency=2`;
