@@ -8,6 +8,127 @@
       </div>
       <p class="subtitle">Run pose estimation on a video file, image file, or folder using the trained model.</p>
 
+      <!-- ── Batch Analyze ──────────────────────────────────────────────────
+           Runs the INLINE-analysis pipeline (warm session + range queue) over
+           many videos, rather than the one-shot analyze_videos path the rest
+           of this card drives. Collapsed it is a single checkbox line; the
+           single-run controls below are untouched and keep working. -->
+      <div style="margin-bottom:.7rem;padding:.5rem .65rem;border:1px solid var(--border);border-radius:7px;background:var(--surface-2)">
+        <label style="display:flex;align-items:center;gap:.45rem;font-size:.82rem;font-weight:600;cursor:pointer;user-select:none">
+          <input type="checkbox" id="ba-enable" style="accent-color:var(--accent);width:14px;height:14px" />
+          Batch Analyze
+          <span style="font-weight:400;font-size:.73rem;color:var(--text-dim)">— queue many videos through the warm inline model</span>
+        </label>
+
+        <div id="ba-panel" class="hidden" style="margin-top:.6rem">
+          <!-- Source tabs — same three sources as the inline-analysis cards -->
+          <div style="display:flex;gap:.4rem;margin-bottom:.5rem">
+            <button id="ba-tab-project" class="btn-sm active" style="padding:.2rem .65rem;font-size:.75rem">Project Content</button>
+            <button id="ba-tab-browse" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Browse Folders</button>
+            <button id="ba-tab-tracked" class="btn-sm" style="padding:.2rem .65rem;font-size:.75rem">Tracked Files</button>
+          </div>
+          <div id="ba-launcher-error" class="fe-extract-status" style="margin-bottom:.35rem"></div>
+
+          <div id="ba-tab-project-panel">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+              <label style="font-size:.78rem;color:var(--text-dim)">Labeled content</label>
+              <button class="btn-sm" id="ba-project-refresh" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
+            </div>
+            <div id="ba-project-list" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.4rem .5rem;font-size:.77rem">
+              <p class="explorer-empty">Loading…</p>
+            </div>
+          </div>
+
+          <div id="ba-tab-browse-panel" class="hidden">
+            <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.35rem">
+              <input id="ba-browse-path" type="text" spellcheck="false" autocomplete="off" placeholder="/paste/a/path/here"
+                style="flex:1;min-width:0;font-family:var(--mono);font-size:.75rem;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:.25rem .45rem" />
+              <button class="btn-sm" id="ba-browse-up" style="padding:.2rem .45rem;font-size:.75rem" title="Go up one level">↑ Up</button>
+            </div>
+            <div id="ba-browse-list" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.4rem .5rem;font-size:.77rem"></div>
+          </div>
+
+          <div id="ba-tab-tracked-panel" class="hidden">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem">
+              <label style="font-size:.78rem;color:var(--text-dim)">Tracked videos</label>
+              <span id="ba-tracked-sort"></span>
+              <button class="btn-sm" id="ba-tracked-refresh" style="padding:.2rem .45rem;font-size:.75rem">↺ Refresh</button>
+            </div>
+            <div id="ba-tracked-list" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--surface);padding:.4rem .5rem;font-size:.77rem">
+              <p class="explorer-empty">Loading…</p>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:.5rem;margin:.5rem 0 .3rem;flex-wrap:wrap">
+            <span style="font-size:.76rem;color:var(--text-dim)">Queue (<b id="ba-queue-count">0</b>)</span>
+            <button class="btn-sm" id="ba-queue-clear" style="padding:.15rem .45rem;font-size:.73rem;opacity:.75">✕ Clear</button>
+            <span style="font-size:.71rem;color:var(--text-dim)">double-click a video to add it</span>
+          </div>
+          <div id="ba-queue-list" style="display:none;border:1px solid var(--border);border-radius:5px;background:var(--surface);max-height:130px;overflow-y:auto;padding:.3rem .4rem;font-size:.74rem;font-family:var(--mono)"></div>
+
+          <!-- Options -->
+          <div style="margin-top:.55rem">
+            <label style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;cursor:pointer;user-select:none;margin-bottom:.4rem"
+                   title="Also submit each queued video's sibling camera (resolved from the filename)">
+              <input type="checkbox" id="ba-both-cams" style="accent-color:var(--accent);width:14px;height:14px" />
+              Both cameras
+              <span style="font-size:.72rem;color:var(--text-dim)">— also submit each video's sibling</span>
+            </label>
+
+            <div style="font-size:.74rem;color:var(--text-dim);margin-bottom:.25rem">Model</div>
+            <div style="display:flex;flex-direction:column;gap:.2rem;margin-bottom:.5rem">
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.77rem;cursor:pointer">
+                <input type="radio" name="ba-policy" value="pinned" checked style="accent-color:var(--accent)" />
+                Selected / pinned model
+              </label>
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.77rem;cursor:pointer">
+                <input type="radio" name="ba-policy" value="latest_iter_best" style="accent-color:var(--accent)" />
+                Latest iteration's best model
+              </label>
+              <label style="display:flex;align-items:center;gap:.4rem;font-size:.77rem;cursor:pointer">
+                <input type="radio" name="ba-policy" value="latest" style="accent-color:var(--accent)" />
+                Latest model
+              </label>
+            </div>
+
+            <label style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;cursor:pointer;user-select:none;margin-bottom:.55rem"
+                   title="Wait until a training job has been seen running and has then finished, then resolve the model and start">
+              <input type="checkbox" id="ba-wait-training" style="accent-color:var(--accent);width:14px;height:14px" />
+              Queue the run after training finishes
+            </label>
+          </div>
+
+          <!-- Run -->
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.4rem">
+            <button id="ba-run-all" class="btn-sm btn-create" title="Analyse every frame of every queued video">
+              ▶ Analyze all
+            </button>
+            <button id="ba-run-tag" class="btn-sm btn-create" title="Analyse the window around every frame carrying one of the tags below">
+              ▶ Analyze for tag
+            </button>
+            <button id="ba-cancel" class="btn-sm btn-danger hidden" title="Stop a batch that has not submitted its ranges yet">
+              ■ Cancel batch
+            </button>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.3rem">
+            <input type="text" id="ba-tag-input" placeholder="tag  (comma-separate for several)"
+              style="flex:1;min-width:150px;font-size:.77rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.25rem .45rem" />
+            <label style="font-size:.74rem;color:var(--text-dim)">before</label>
+            <input type="number" id="ba-before" value="200" min="0" style="width:4.6rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem" />
+            <label style="font-size:.74rem;color:var(--text-dim)">after</label>
+            <input type="number" id="ba-after" value="599" min="0" style="width:4.6rem;font-size:.76rem;background:var(--surface);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:.22rem .4rem" />
+            <span id="ba-window-total" style="font-size:.72rem;color:var(--text-dim)">800 frames</span>
+          </div>
+          <div style="font-size:.73rem;color:var(--text-dim);margin:.15rem 0 .25rem">
+            batch tags <span style="opacity:.8">(click to add · exact match · saved per project)</span>
+          </div>
+          <div id="ba-tags" class="fe-tag-filter"></div>
+
+          <div id="ba-status" class="fe-extract-status" style="margin-top:.45rem"></div>
+        </div>
+      </div>
+
       <!-- Target path + batch selection -->
       <div style="margin-bottom:.5rem">
         <label style="display:block;font-size:.78rem;color:var(--text-dim);margin-bottom:.3rem">Target (file or folder path)</label>

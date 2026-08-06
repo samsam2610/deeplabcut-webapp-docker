@@ -27,6 +27,7 @@ const MODULES = [
   './frame_labeler.js',
   './test_set_picker.js',
   './analyze.js',
+  './batch_analyze.js',         // Batch Analyze panel on the analyze card
   './viewer.js',
   './inline_analysis_player.js',
   './postprocess.js',

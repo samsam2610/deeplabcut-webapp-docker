@@ -521,6 +521,7 @@ _UI_SETTING_KEYS = {
     "note_tags_reproj", "postfix_tags_reproj", "status_tags_reproj",
     "pose3d_bg_color_reproj", "pose3d_view_prefs_reproj",
     "tracked_sort",
+    "batch_tags", "batch_window", "batch_prefs",
 }
 
 

@@ -3439,3 +3439,36 @@ def dlc_emit_peaks(self, req_id, video_paths, h5_paths, frames,
     except Exception as exc:                       # noqa: BLE001
         _publish_result(redis_, req_id, status="error", error=str(exc))
         raise
+
+
+# --------------------------------------------------------------------------
+# Batch Analyze. Resolves a model, starts ONE inline session (sessions are
+# keyed by model, not by video) and pushes every queued video's ranges onto
+# that session's queue, then exits. It deliberately does NOT poll the ranges
+# to completion: the session worker drains them, so this task lives seconds
+# rather than hours and never holds a concurrency slot while a batch runs.
+#
+# Queue `celery`, not `pytorch` — it does no GPU work.
+# See docs/superpowers/specs/2026-08-06-batch-analyze-panel-design.md.
+# --------------------------------------------------------------------------
+
+@celery.task(
+    bind=True, name="tasks.dlc_batch_analyze", acks_late=False,
+    time_limit=1800, soft_time_limit=1500,
+)
+def dlc_batch_analyze(self, batch_id):
+    from .batch_analyze import run_batch
+
+    redis_ = _redis_client_from_celery_app(self)
+
+    def _requeue(delay_s):
+        # The training gate waits by re-dispatching with a countdown. An ETA
+        # task sits in the worker's timer, not in the process pool, so a batch
+        # can wait hours without costing one of the worker's two slots.
+        self.apply_async(kwargs={"batch_id": batch_id},
+                         countdown=int(delay_s), queue="celery")
+
+    def _send(name, *, kwargs, queue):
+        return celery.send_task(name, kwargs=kwargs, queue=queue)
+
+    return run_batch(redis_, batch_id, requeue=_requeue, send_task=_send)

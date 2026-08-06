@@ -1205,3 +1205,46 @@ button[type="submit"]:hover .btn-arrow {
 #tf-segments input[type="text"] {
   max-width: 45ch;
 }
+
+/* ── Batch Analyze tag pills ───────────────────────────────────────────────
+   Chips reuse .fe-tag-chip (viewer.css); these add the remove "×" and the
+   "+ tag" affordance the inline-3D card's quick-tags have. */
+.ba-ptag { opacity: .85; }
+.ba-ptag .x {
+  margin-left: .35rem;
+  opacity: .6;
+  font-weight: 700;
+}
+.ba-ptag .x:hover { opacity: 1; color: var(--danger, #e66); }
+.ba-ptag-add { border-style: dashed; opacity: .6; }
+.ba-ptag-add:hover { opacity: 1; }
+
+/* Queue rows */
+.ba-queue-row {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .1rem 0;
+}
+.ba-queue-row span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ba-queue-row .x { cursor: pointer; opacity: .55; }
+.ba-queue-row .x:hover { opacity: 1; color: var(--danger, #e66); }
+
+/* Source rows in the Project Content / Browse panes */
+.ba-row {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .12rem .2rem;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.ba-row:hover { background: var(--surface-2); }
+.ba-row.queued { opacity: .5; }
