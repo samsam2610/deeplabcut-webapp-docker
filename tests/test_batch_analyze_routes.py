@@ -299,3 +299,32 @@ class TestJobsSurface:
         rows = [r for r in _zset_rows() if r["id"] == "gone-id"]
         assert rows and rows[0]["kind"] == "analyze", rows
         assert rows[0]["state"] == "orphaned"
+
+    def test_a_batch_survives_its_job_hash_expiring(self, ba_client):
+        # dlc_analyze_job: ages out in 24 h, dlc:batch: lives 7 days. Without
+        # rebuilding from the record, a batch from earlier in the week shows on
+        # the Jobs page as a bare uuid with no state — the opposite of "every
+        # analysis job is visible".
+        client, redis, _project, video = ba_client
+        with patch("dlc.batch_analyze._celery_send_task"):
+            batch_id = _start(client, video=video).get_json()["batch_id"]
+        redis.hset(f"dlc:batch:{batch_id}", mapping={
+            "state": "submitted", "req_ids": json.dumps(["r1"]),
+        })
+        redis.hset("inline:result:r1", mapping={"status": "done", "n_analyzed": "10"})
+        # No dlc_analyze_job:<id> hash at all — it expired.
+
+        from dlc.monitoring import _reconcile_job
+        job = _reconcile_job(f"dlc_analyze_job:{batch_id}", batch_id)
+        assert job["status"] != "orphaned"
+        assert job["operation"] == "batch_analyze"
+        assert "1/1 ranges" in job["stage"]
+        assert job["target_path"].endswith(".avi")
+
+    def test_a_genuine_orphan_is_still_surfaced(self, ba_client):
+        # Rebuilding must not swallow real orphans — surfacing untracked work
+        # is what the orphan stub exists for.
+        client, _redis, _project, _video = ba_client
+        from dlc.monitoring import _reconcile_job
+        job = _reconcile_job("dlc_analyze_job:no-such-id", "no-such-id")
+        assert job == {"task_id": "no-such-id", "status": "orphaned"}

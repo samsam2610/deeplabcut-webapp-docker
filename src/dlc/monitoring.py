@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path as _Path
 import uuid
 from pathlib import Path
 from flask import Blueprint, request, jsonify, session as flask_session
@@ -247,6 +248,38 @@ def _celery_task_status(jid: str) -> str:
 _LIVE_CELERY_STATES = {"PENDING", "RECEIVED", "STARTED", "RETRY", "PROGRESS"}
 
 
+def _batch_row_from_record(jid: str) -> dict | None:
+    """Rebuild a Batch-Analyze job row from `dlc:batch:<jid>`, or None.
+
+    Lets a batch stay legible on the Jobs page after its `dlc_analyze_job:`
+    hash has aged out, using the same roll-up the panel shows.
+    """
+    try:
+        from .batch_analyze import batch_progress   # lazy: avoids a cycle
+        prog = batch_progress(_ctx.redis_client(), jid)
+    except Exception:
+        return None
+    if not prog:
+        return None
+    rec = prog["rec"]
+    total = len(prog["req_ids"])
+    finished = prog["done"] + prog["errors"]
+    terminal = prog["state"] in ("complete", "failed", "cancelled")
+    import json as _json
+    videos = _json.loads(rec.get("videos") or "[]")
+    return {
+        "task_id":    jid,
+        "operation":  "batch_analyze",
+        "status":     "complete" if terminal else "running",
+        "project":    _Path(rec.get("config_path") or "").parent.name,
+        "target_path": videos[0] if videos else "",
+        "started_at": rec.get("created_at") or "",
+        "stage":      rec.get("reason") or f"{finished}/{total} ranges",
+        "total":      total,
+        "done":       finished,
+    }
+
+
 def _reconcile_job(redis_key: str, jid: str) -> dict | None:
     """Read one train/analyze job hash and cross-check it against Celery.
 
@@ -257,7 +290,15 @@ def _reconcile_job(redis_key: str, jid: str) -> dict | None:
     """
     job = _ctx.redis_client().hgetall(redis_key)
     if not job:
-        # Orphan: zset still indexes this jid but the backing hash is
+        # A BATCH keeps an authoritative record of its own for 7 days
+        # (`dlc:batch:<id>`), far outliving the 24 h job hash. Rebuild the row
+        # from it rather than showing an anonymous orphan — otherwise a batch
+        # from earlier in the week appears on the Jobs page as a bare uuid with
+        # no state, which is the opposite of "every analysis job is visible".
+        rebuilt = _batch_row_from_record(jid)
+        if rebuilt:
+            return rebuilt
+        # True orphan: zset still indexes this jid but the backing hash is
         # gone (partial hard-reset, manual cleanup, TTL surprise…).
         # Surface a stub so the UI can show + clear it instead of
         # silently hiding running-but-untracked work.
