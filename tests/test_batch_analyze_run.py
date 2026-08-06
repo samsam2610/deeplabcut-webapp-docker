@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -331,22 +332,80 @@ class TestSubmission:
 
 
 class TestTrainingIsRunning:
-    def test_true_while_a_row_is_running(self):
-        r = Redis()
-        r.zsets["dlc_train_jobs"] = {"t1": 1.0}
-        r.h["dlc_train_job:t1"] = {"status": "running", "updated_at": "9e9"}
-        assert ba.training_is_running(r) is True
+    """Both signals are required. Each case below is a shape observed in the
+    live redis on 2026-08-06, not an invented one."""
 
-    def test_false_once_it_completes(self):
+    def _redis(self, jobs):
         r = Redis()
-        r.zsets["dlc_train_jobs"] = {"t1": 1.0}
-        r.h["dlc_train_job:t1"] = {"status": "complete", "updated_at": "9e9"}
-        assert ba.training_is_running(r) is False
+        r.zsets["dlc_train_jobs"] = {jid: float(i) for i, (jid, _, _) in enumerate(jobs)}
+        for jid, hash_, state in jobs:
+            if hash_ is not None:
+                r.h[f"dlc_train_job:{jid}"] = hash_
+            if state is not None:
+                r.h[f"__state__:{jid}"] = state
+        return r
 
-    def test_a_stale_running_row_does_not_pin_a_batch_forever(self):
-        # A crashed training container leaves status=running behind. Without
-        # the heartbeat check a deferred batch would wait out its full 24 h.
+    def _state_of(self, r, jid):
+        return r.h.get(f"__state__:{jid}")
+
+    def test_a_long_running_job_with_no_heartbeat_still_counts_as_running(self):
+        # THE case that matters. dlc_train_network writes started_at and
+        # status once and never heartbeats, so a healthy 3 h run has no
+        # updated_at at all. Any staleness rule based on the hash alone would
+        # call this finished and release the gate onto the OLD model — the
+        # exact failure "queue after training" exists to prevent.
+        r = self._redis([("t1", {"status": "running", "started_at": str(time.time() - 3.3 * 3600)},
+                          "PROGRESS")])
+        assert ba.training_is_running(r, self._state_of) is True
+
+    def test_false_once_the_hash_says_complete(self):
+        r = self._redis([("t1", {"status": "complete", "started_at": "9e8"}, "SUCCESS")])
+        assert ba.training_is_running(r, self._state_of) is False
+
+    def test_false_when_celery_says_the_task_finished(self):
+        # The reaper may not have flipped the hash yet; Celery is authoritative.
+        r = self._redis([("t1", {"status": "running", "started_at": str(time.time())},
+                          "SUCCESS")])
+        assert ba.training_is_running(r, self._state_of) is False
+
+    def test_an_expired_hash_does_not_pin_a_batch(self):
+        # The zset outlives the hashes. Those ids read PENDING from the result
+        # backend — a "live" Celery state — so trusting Celery alone would hold
+        # a deferred batch for its full 24 h on jobs that finished days ago.
+        r = self._redis([("t1", None, None)])
+        assert ba.training_is_running(r, self._state_of) is False
+
+    def test_a_dispatched_but_unstarted_task_counts_as_running(self):
+        # No backend entry yet. Waiting slightly too long is far cheaper than
+        # analysing with the pre-training model.
+        r = self._redis([("t1", {"status": "running", "started_at": str(time.time())}, None)])
+        assert ba.training_is_running(r, self._state_of) is True
+
+    def test_a_hash_older_than_the_batch_deadline_is_ignored(self):
+        r = self._redis([("t1", {"status": "running",
+                                 "started_at": str(time.time() - 2 * ba.TRAINING_WAIT_DEADLINE_S)},
+                          None)])
+        assert ba.training_is_running(r, self._state_of) is False
+
+    def test_one_live_job_among_many_finished_ones_is_enough(self):
+        r = self._redis([
+            ("done", {"status": "complete", "started_at": "9e8"}, "SUCCESS"),
+            ("gone", None, None),
+            ("live", {"status": "running", "started_at": str(time.time() - 7200)}, "PROGRESS"),
+        ])
+        assert ba.training_is_running(r, self._state_of) is True
+
+
+class TestCeleryState:
+    def test_reads_the_status_out_of_the_result_backend(self):
         r = Redis()
-        r.zsets["dlc_train_jobs"] = {"t1": 1.0}
-        r.h["dlc_train_job:t1"] = {"status": "running", "updated_at": "1"}
-        assert ba.training_is_running(r) is False
+        r._store = {"celery-task-meta-t1": json.dumps({"status": "PROGRESS"})}
+        r.get = lambda k: r._store.get(k)
+        assert ba.celery_state(r, "t1") == "PROGRESS"
+
+    def test_missing_or_malformed_entries_read_as_unknown(self):
+        r = Redis()
+        r._store = {"celery-task-meta-bad": "not json"}
+        r.get = lambda k: r._store.get(k)
+        assert ba.celery_state(r, "nope") is None
+        assert ba.celery_state(r, "bad") is None

@@ -51,11 +51,12 @@ TRAINING_WAIT_DEADLINE_S = 24 * 3600
 # countdown, so waiting costs no worker concurrency slot.
 TRAINING_POLL_S = 60
 
-# Celery states that mean a training task is still alive. Mirrors
-# monitoring._LIVE_CELERY_STATES; duplicated rather than imported so this
-# module stays importable in the worker, where monitoring's Flask deps are
-# not wanted.
+# Statuses the train-job HASH uses for a live run.
 _LIVE_TRAIN_STATES = {"running", "paused"}
+# Celery's own live states. Mirrors monitoring._LIVE_CELERY_STATES; duplicated
+# rather than imported so this module stays importable in the worker, where
+# monitoring's Flask deps are not wanted.
+_LIVE_CELERY_STATES = {"PENDING", "RECEIVED", "STARTED", "RETRY", "PROGRESS"}
 
 # Idle budget handed to a session started for a batch. The interactive card
 # uses 300 s, which is fine when a human keeps clicking; a batch submits
@@ -278,13 +279,44 @@ def resolve_sibling(video_path: str):
     return str(sib) if sib else None
 
 
-def training_is_running(redis_) -> bool:
-    """True while any row in ``dlc_train_jobs`` is live.
+def celery_state(redis_, task_id: str):
+    """Celery's own view of a task, read straight out of the result backend.
 
-    Reads the job hashes directly rather than through ``monitoring``: the
-    reaper there flips a stale 'running' to 'dead' by consulting Celery, and
-    a worker-side gate must not depend on Flask-side reconciliation. A row
-    whose heartbeat has gone stale is treated as finished.
+    A plain redis GET, not ``AsyncResult`` — the pubsub result consumer leaks
+    in gunicorn sync workers (see ``monitoring._celery_task_status``). Returns
+    None when the backend has no entry for this id.
+    """
+    try:
+        raw = redis_.get(f"celery-task-meta-{task_id}")
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        return (json.loads(raw) or {}).get("status")
+    except (TypeError, ValueError):
+        return None
+
+
+def training_is_running(redis_, state_of=celery_state) -> bool:
+    """True while a training run is genuinely in flight.
+
+    TWO signals are required, because each one alone is wrong in production:
+
+    * The job hash alone is not enough. ``dlc_train_network`` writes
+      ``started_at`` and ``status`` once at launch and never heartbeats — there
+      is no ``updated_at`` to age out. A run 3 h in looks byte-identical to a
+      crashed one, so any staleness rule based on the hash would release the
+      gate on a live training job and analyse against the wrong model.
+    * Celery's state alone is not enough either. The ``dlc_train_jobs`` zset
+      outlives the hashes (which expire), and an id whose backend entry has
+      been purged reads as PENDING — a "live" state. Trusting that would pin a
+      deferred batch for its full 24 h on jobs that finished days ago.
+
+    So: the hash must exist and claim a live status, AND Celery must agree.
+    A dispatched-but-not-yet-started task has no backend entry at all; that
+    counts as running, because waiting slightly too long is a far cheaper
+    mistake than analysing with the pre-training model.
     """
     try:
         ids = redis_.zrevrange("dlc_train_jobs", 0, 49) or []
@@ -293,17 +325,20 @@ def training_is_running(redis_) -> bool:
     now = time.time()
     for jid in ids:
         job = _hgetall(redis_, f"dlc_train_job:{jid}") or {}
+        if not job:
+            continue                      # hash expired — not evidence of a run
         if (job.get("status") or "") not in _LIVE_TRAIN_STATES:
             continue
         try:
-            last = float(job.get("updated_at") or job.get("started_at") or 0)
+            started = float(job.get("started_at") or 0)
         except (TypeError, ValueError):
-            last = 0.0
-        # A running row with no heartbeat for 15 min is a dead worker, not a
-        # live run; without this a crashed training would pin a batch forever.
-        if last and (now - last) > 900:
+            started = 0.0
+        # Backstop for a hash that outlived its worker entirely.
+        if started and (now - started) > TRAINING_WAIT_DEADLINE_S:
             continue
-        return True
+        state = state_of(redis_, jid) if state_of else None
+        if state is None or state in _LIVE_CELERY_STATES:
+            return True
     return False
 
 
