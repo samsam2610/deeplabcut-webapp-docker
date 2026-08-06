@@ -362,6 +362,30 @@ class TestTrainingIsRunning:
         r = self._redis([("t1", {"status": "complete", "started_at": "9e8"}, "SUCCESS")])
         assert ba.training_is_running(r, self._state_of) is False
 
+    def test_a_reaper_false_positive_does_not_release_the_gate(self):
+        # monitoring._reconcile_job writes "dead" on a transient miss of the
+        # Celery state and only undoes it when someone polls the Jobs page.
+        # Observed 2026-08-06 on a resumed run that was logging epochs with the
+        # GPU at 100%. Reading "dead" as finished would release a deferred
+        # batch onto the pre-training model.
+        r = self._redis([("t1", {"status": "dead", "started_at": str(time.time())},
+                          "PROGRESS")])
+        assert ba.training_is_running(r, self._state_of) is True
+
+    def test_a_user_requested_stop_is_respected(self):
+        # "stopped" is a human decision, not a reaper guess — do not override it.
+        r = self._redis([("t1", {"status": "stopped", "started_at": str(time.time())},
+                          "PROGRESS")])
+        assert ba.training_is_running(r, self._state_of) is False
+
+    def test_a_genuinely_killed_run_still_releases_via_the_dead_mans_switch(self):
+        # Accepting "dead" is safe because the hash's EXISTENCE is the real
+        # signal: a killed process stops sliding the TTL, so the hash vanishes
+        # 2 h later and the gate releases even though Celery is stuck on
+        # PROGRESS forever.
+        r = self._redis([("t1", None, "PROGRESS")])
+        assert ba.training_is_running(r, self._state_of) is False
+
     def test_false_when_celery_says_the_task_finished(self):
         # The reaper may not have flipped the hash yet; Celery is authoritative.
         r = self._redis([("t1", {"status": "running", "started_at": str(time.time())},

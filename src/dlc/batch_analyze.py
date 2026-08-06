@@ -51,8 +51,17 @@ TRAINING_WAIT_DEADLINE_S = 24 * 3600
 # countdown, so waiting costs no worker concurrency slot.
 TRAINING_POLL_S = 60
 
-# Statuses the train-job HASH uses for a live run.
-_LIVE_TRAIN_STATES = {"running", "paused"}
+# Statuses that mean the run is OVER for good. Everything else — "running",
+# "paused", and notably "dead" — leaves Celery to decide.
+#
+# "dead" is deliberately NOT here. It is a verdict monitoring._reconcile_job
+# writes on a transient miss of the Celery state, and which that same function
+# flips back to "running" the moment Celery says otherwise. But the flip only
+# happens when somebody polls the Jobs page, so with no browser open the false
+# "dead" persists — and reading it as finished would release a deferred batch
+# onto the pre-training model. Observed on the 2026-08-06 resume: the hash said
+# "dead" while the run was logging epochs on a GPU at 100%.
+_FINISHED_TRAIN_STATES = {"complete", "failed", "stopped"}
 # Celery's own live states. Mirrors monitoring._LIVE_CELERY_STATES; duplicated
 # rather than imported so this module stays importable in the worker, where
 # monitoring's Flask deps are not wanted.
@@ -303,8 +312,10 @@ def training_is_running(redis_, state_of=celery_state) -> bool:
 
     TWO signals are required, because each one alone is wrong in production:
 
-    * The job hash alone is not enough. ``dlc_train_network`` writes no
-      ``updated_at``, so there is no field to age out. What it DOES do is slide
+    * The job hash alone is not enough. Its ``status`` field is unreliable —
+      the Jobs-page reaper writes "dead" on a transient miss and only undoes it
+      when someone polls that page — and it carries no ``updated_at`` to age
+      out. What is trustworthy is the hash's EXISTENCE. What it DOES do is slide
       the hash's TTL forward on every progress poll ("Slide the TTL forward so
       long runs (>2 h) stay visible"), making the hash's EXISTENCE a dead-man's
       switch — present while the process writes, gone 2 h after it stops. So
@@ -316,7 +327,7 @@ def training_is_running(redis_, state_of=celery_state) -> bool:
       been purged reads as PENDING — a "live" state. Trusting that would pin a
       deferred batch for its full 24 h on jobs that finished days ago.
 
-    So: the hash must exist and claim a live status, AND Celery must agree.
+    So: the hash must exist and not claim to be FINISHED, AND Celery must agree.
     "Celery says PROGRESS but the hash has lapsed" is the hard-killed case — a
     SIGKILL never publishes a terminal state, so Celery goes stale while the
     dead-man's switch correctly trips. Its 2 h lag is the price: nothing here
@@ -335,7 +346,7 @@ def training_is_running(redis_, state_of=celery_state) -> bool:
         job = _hgetall(redis_, f"dlc_train_job:{jid}") or {}
         if not job:
             continue                      # hash expired — not evidence of a run
-        if (job.get("status") or "") not in _LIVE_TRAIN_STATES:
+        if (job.get("status") or "") in _FINISHED_TRAIN_STATES:
             continue
         try:
             started = float(job.get("started_at") or 0)
