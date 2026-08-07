@@ -2953,7 +2953,8 @@ def _publish_status(redis_, user_id, snap_key, status, **fields):
         pass
 
 
-def _publish_result(redis_, req_id, status, n_analyzed=0, n_skipped=0, error="", scorer=""):
+def _publish_result(redis_, req_id, status, n_analyzed=0, n_skipped=0, error="",
+                    scorer="", ttl=300):
     """Set the result hash. Errors are truncated to 500 chars.
 
     `scorer` is included on success so the browser can construct the
@@ -2970,7 +2971,11 @@ def _publish_result(redis_, req_id, status, n_analyzed=0, n_skipped=0, error="",
     key = _result_key(req_id)
     redis_.hset(key, mapping=mapping)
     try:
-        redis_.expire(key, 300)
+        # 300 s suits the interactive card, which polls a req_id seconds after
+        # submitting it. A BATCH is different: nobody may look for hours, and a
+        # result that expires unseen is a completion that can never be counted.
+        # Batch submissions pass a long ttl in the payload.
+        redis_.expire(key, int(ttl or 300))
     except Exception:
         pass
 
@@ -3196,7 +3201,7 @@ def _run_range(runner, *, scorer, model_cfg, multi_animal, req):
 
 def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
                               snapshot_path, shuffle, trainingsetindex,
-                              batch_size, ttl):
+                              batch_size, ttl, device=None):
     """Pure-function body of the warm-worker task, testable without Celery.
 
     Boots a DLCLoader + PoseInferenceRunner once, then BLPOP-loops range
@@ -3217,7 +3222,7 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
     try:
         _dlc_inline_session_loop(
             redis_, user_id, config_path, snap_key, snapshot_path,
-            shuffle, trainingsetindex, batch_size, ttl, queue_key,
+            shuffle, trainingsetindex, batch_size, ttl, queue_key, device,
         )
     finally:
         _hb_stop.set()
@@ -3225,7 +3230,7 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
 
 def _dlc_inline_session_loop(redis_, user_id, config_path, snap_key,
                              snapshot_path, shuffle, trainingsetindex,
-                             batch_size, ttl, queue_key):
+                             batch_size, ttl, queue_key, device=None):
     """Model load + drain loop. Split out of _dlc_inline_session_inner only so
     the heartbeat thread there gets a `finally` that covers every exit path."""
     # Resolve DLC handles from module globals (tests patch).
@@ -3244,9 +3249,13 @@ def _dlc_inline_session_loop(redis_, user_id, config_path, snap_key,
         scorer       = _scorer_with_iteration(loader.scorer(snapshot_path), snapshot_path)
         model_cfg    = loader.model_cfg
         multi_animal = bool(loader.project_cfg.get("multianimalproject", False))
+        # device=None lets DLC resolve `auto` -> bare "cuda" -> torch device 0.
+        # With CUDA_DEVICE_ORDER=PCI_BUS_ID set on this container that is the
+        # same GPU nvidia-smi and the training task call 0, so an explicit
+        # "cuda:N" here means what the UI label says.
         runner = _apis_utils.get_pose_inference_runner(
             model_config=model_cfg, snapshot_path=snapshot_path,
-            batch_size=batch_size, device=None,
+            batch_size=batch_size, device=(device or None),
         )
     except Exception as exc:
         _publish_status(
@@ -3288,16 +3297,24 @@ def _dlc_inline_session_loop(redis_, user_id, config_path, snap_key,
             _bump_activity(redis_, user_id, snap_key)
             continue
 
+        # A batch submission asks for a long-lived result so its completion can
+        # still be counted hours later; the interactive card omits it and keeps
+        # the short default.
+        res_ttl = req.get("result_ttl") or 300
+
         if req.get("batch_size") and req["batch_size"] != cached_batch_size:
             try:
+                # Rebuilding the runner must keep the session's device — passing
+                # None here would silently move a GPU-1 session onto GPU 0 the
+                # first time a request changed the batch size.
                 runner = _apis_utils.get_pose_inference_runner(
                     model_config=model_cfg, snapshot_path=snapshot_path,
-                    batch_size=req["batch_size"], device=None,
+                    batch_size=req["batch_size"], device=(device or None),
                 )
                 cached_batch_size = req["batch_size"]
             except Exception as exc:
                 _publish_result(
-                    redis_, req["req_id"], "error", error=str(exc),
+                    redis_, req["req_id"], "error", error=str(exc), ttl=res_ttl,
                 )
                 continue
 
@@ -3309,11 +3326,11 @@ def _dlc_inline_session_loop(redis_, user_id, config_path, snap_key,
             _publish_result(
                 redis_, req["req_id"], "done",
                 n_analyzed=n_analyzed, n_skipped=n_skipped,
-                scorer=scorer,
+                scorer=scorer, ttl=res_ttl,
             )
         except Exception as exc:
             _publish_result(
-                redis_, req["req_id"], "error", error=str(exc),
+                redis_, req["req_id"], "error", error=str(exc), ttl=res_ttl,
             )
         _bump_activity(redis_, user_id, snap_key)
 
@@ -3348,7 +3365,7 @@ def _redis_client_from_celery_app(task):
     soft_time_limit=39600,   # 11 h soft warning
 )
 def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
-                       shuffle, trainingsetindex, batch_size, ttl):
+                       shuffle, trainingsetindex, batch_size, ttl, device=None):
     """Long-lived warm-worker session for one (user, project, snapshot) triple.
 
     acks_late=False — we don't want this task redelivered on broker restart;
@@ -3359,7 +3376,7 @@ def dlc_inline_session(self, user_id, config_path, snap_key, snapshot_path,
     redis_ = _redis_client_from_celery_app(self)
     _dlc_inline_session_inner(
         redis_, user_id, config_path, snap_key, snapshot_path,
-        shuffle, trainingsetindex, batch_size, ttl,
+        shuffle, trainingsetindex, batch_size, ttl, device,
     )
 
 

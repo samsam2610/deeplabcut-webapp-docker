@@ -58,8 +58,32 @@ def _sec_check(p: Path) -> bool:
     return _dlc_project_security_check(p, _ctx.data_dir(), _ctx.user_data_dir())
 
 
-def _snap_key(config_path: str, shuffle: int, snapshot_path: str) -> str:
-    raw = f"{config_path}|{int(shuffle)}|{snapshot_path}".encode("utf-8")
+def gpu_device(gputouse) -> str:
+    """UI GPU index -> torch device string. "" / None / "auto" mean let DLC pick.
+
+    Indices are PCI-bus order, matching nvidia-smi and the training task — the
+    worker sets CUDA_DEVICE_ORDER=PCI_BUS_ID so "GPU 0" means the same card
+    everywhere. Without that env var torch uses FASTEST_FIRST and 0/1 are
+    swapped on this host.
+    """
+    raw = str(gputouse if gputouse is not None else "").strip().lower()
+    if raw in ("", "auto", "none"):
+        return ""
+    if raw in ("cpu", "mps") or raw.startswith("cuda"):
+        return raw
+    try:
+        return f"cuda:{int(raw)}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _snap_key(config_path: str, shuffle: int, snapshot_path: str,
+              device: str = "") -> str:
+    """Session identity. The DEVICE is part of it: sessions are reused by key,
+    so without it a request for GPU 1 would silently attach to a warm GPU 0
+    session and the selector would appear to work while doing nothing. It also
+    lets a batch on one card run alongside interactive work on the other."""
+    raw = f"{config_path}|{int(shuffle)}|{snapshot_path}|{device}".encode("utf-8")
     return hashlib.sha1(raw).hexdigest()
 
 
@@ -255,7 +279,8 @@ def session_start():
         }), 404
     snapshot_path = str(snap_abs)
 
-    snap_key = _snap_key(config_path, shuffle, snapshot_path)
+    device = gpu_device(body.get("gputouse"))
+    snap_key = _snap_key(config_path, shuffle, snapshot_path, device)
     user_id = _user_id()
     session_key = f"inline:session:{user_id}:{snap_key}"
     redis = _ctx.redis_client()
@@ -288,6 +313,7 @@ def session_start():
             "trainingsetindex": int(body.get("trainingsetindex") or 0),
             "batch_size":       int(body.get("batch_size") or 8),
             "ttl":              ttl,
+            "device":           device,
         },
         queue="pytorch",
     )

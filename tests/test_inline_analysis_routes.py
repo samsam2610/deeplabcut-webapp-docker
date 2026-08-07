@@ -23,9 +23,11 @@ def _auth(client):
         sess["uid"] = "u1"
 
 
-def _snap_key(config_path, shuffle, snapshot_path):
-    raw = f"{config_path}|{int(shuffle)}|{snapshot_path}".encode()
-    return hashlib.sha1(raw).hexdigest()
+# Import the real thing rather than re-deriving the hash. A copy of the formula
+# here silently disagreed with production the moment snap_key gained the device
+# component (2026-08-07), failing a test that was describing the old scheme
+# rather than checking the current one.
+from dlc.inline_analysis import _snap_key  # noqa: E402
 
 
 @pytest.fixture
@@ -57,6 +59,10 @@ def ia_client(flask_test_client, dlc_sandbox_project):
 class TestSessionStart:
     def test_dispatches_celery_task_with_snap_key(self, ia_client):
         client, _app, redis, project = ia_client
+        # session/start validates that the snapshot exists before keying the
+        # session; the sandbox project has no snapshots, so without this the
+        # route 404s and the test never reaches its assertion.
+        (project / "snap-200000.pt").write_bytes(b"")
         sent = []
         with patch("dlc.inline_analysis._celery_send_task",
                    side_effect=lambda *a, **kw: sent.append((a, kw)) or MagicMock(id="celery-id")):
@@ -67,8 +73,13 @@ class TestSessionStart:
             })
         assert resp.status_code == 202, resp.get_json()
         data = resp.get_json()
+        # The route RESOLVES the snapshot to an absolute path before keying the
+        # session (so a relative and an absolute request hit the same session),
+        # and the device is part of the key. This asserted the relative path and
+        # had been failing since long before either change.
         assert data["snap_key"] == _snap_key(
-            str(project / "config.yaml"), 1, "snap-200000.pt",
+            str(project / "config.yaml"), 1,
+            str((project / "snap-200000.pt").resolve()), "",
         )
         assert data["status"] in {"warming", "ready"}
         assert sent and sent[0][1]["kwargs"]["snap_key"] == data["snap_key"]

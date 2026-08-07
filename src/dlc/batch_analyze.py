@@ -32,7 +32,7 @@ from flask import Blueprint, request, jsonify
 from . import ctx as _ctx
 from .inline_analysis import (
     _active_project, _celery_send_task, _disable_reason, _hgetall,
-    _sec_check, _snap_key, _user_id,
+    _sec_check, _snap_key, _user_id, gpu_device,
 )
 from . import project_settings as _project_settings
 from .utils import _engine_info, _TF_ENGINE_ALIASES
@@ -75,6 +75,9 @@ BATCH_SESSION_TTL_S = 1800
 # How long tasks._publish_result keeps an inline:result:<req_id> hash.
 # Progress polling must out-pace this or completions are simply lost.
 RESULT_TTL_S = 300
+# What batch submissions ask for instead, so a long unattended run stays
+# countable. See tasks._publish_result.
+BATCH_RESULT_TTL_S = 7 * 24 * 3600
 
 
 def _smembers(redis_, key) -> set:
@@ -454,7 +457,8 @@ def run_batch(redis_, batch_id, *, requeue, send_task,
         return _fail(redis_, key, f"snapshot not found on disk: {rel}")
 
     user_id = rec.get("user_id") or ""
-    snap_key = _snap_key(config_path, shuffle, str(snap_abs))
+    device = gpu_device(rec.get("gputouse"))
+    snap_key = _snap_key(config_path, shuffle, str(snap_abs), device)
     _set(redis_, key, snapshot_path=str(snap_abs), snapshot_label=snap_abs.stem,
          snap_key=snap_key, updated_at=now())
 
@@ -475,6 +479,7 @@ def run_batch(redis_, batch_id, *, requeue, send_task,
             "trainingsetindex": int(rec.get("trainingsetindex") or 0),
             "batch_size":       int(rec.get("batch_size") or 8),
             "ttl":              BATCH_SESSION_TTL_S,
+            "device":           device,
         }, queue="pytorch")
 
     # ── submit ───────────────────────────────────────────────────────────
@@ -543,6 +548,10 @@ def run_batch(redis_, batch_id, *, requeue, send_task,
                     "batch_size":    batch_size,
                     "save_as_csv":   save_as_csv,
                     "snapshot_path": str(snap_abs),
+                    # Outlive the interactive 300 s default: nobody may look at
+                    # a batch for hours, and a result that expires unseen is a
+                    # completion that can never be counted.
+                    "result_ttl":    BATCH_RESULT_TTL_S,
                 }
                 # RPUSH, not LPUSH: the session drains with BLPOP, so the
                 # interactive card's LPUSH still jumps ahead of the whole

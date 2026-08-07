@@ -102,6 +102,18 @@ services:
       - USER_DATA_DIR=/user-data
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # Make torch's device indices match nvidia-smi. Without it CUDA uses
+      # FASTEST_FIRST and cuda:0 is the RTX PRO 6000 while nvidia-smi calls
+      # that 1 — so "GPU 0" in the UI would select the wrong card. The training
+      # task already forces this in its child process; setting it here makes
+      # inline-analysis sessions agree.
+      - CUDA_DEVICE_ORDER=PCI_BUS_ID
+    # PyTorch DataLoader workers pass every batch through /dev/shm, and Docker's
+    # default is 64 MB. dataloader_workers: 4 died with "Unexpected bus error …
+    # insufficient shared memory" ~10 s into training on 2026-08-07; at
+    # batch_size 32 / 800x600 that is ~184 MB per batch and ~1.5 GB in flight
+    # before target tensors. Mirrors dlc-3d-worker, which hit this first.
+    shm_size: "16gb"
     # concurrency=2 so a CPU-only triangulate task (queue `celery`) can run alongside a
     # GPU labeling/analyze task (queue `pytorch`) instead of queueing behind it.
     # Caveat: this also lets TWO `pytorch` GPU tasks run at once, which can contend for
