@@ -302,15 +302,21 @@ class TestSubmission:
         assert out["skipped"] == [{"video": "/nope/missing.avi",
                                    "reason": "file not found"}]
 
-    def test_reuses_a_live_session_rather_than_starting_a_second(self, project):
-        # Two sessions on the same snapshot would fight over the same GPU.
-        r = Redis()
-        r.h[ba._batch_key("B1")] = _record(project)
+    def _session_key_for(self, project):
         snaps = ba.scan_snapshots(project["root"], "pytorch", 1)
         rel, _ = ba.resolve_snapshot(snaps, "latest")
         snap_key = ba._snap_key(str(project["config"]), 1,
                                 str((project["root"] / rel).resolve()))
-        r.h[f"inline:session:u1:{snap_key}"] = {"status": "ready"}
+        return f"inline:session:u1:{snap_key}"
+
+    def test_reuses_a_live_session_rather_than_starting_a_second(self, project):
+        # Two sessions on the same snapshot would fight over the same GPU.
+        # A genuinely live session has a RECENT heartbeat, not just a status —
+        # `_session_is_alive` reads the beat, so the fixture must carry one.
+        r = Redis()
+        r.h[ba._batch_key("B1")] = _record(project)
+        r.h[self._session_key_for(project)] = {
+            "status": "ready", "heartbeat": str(time.time())}
 
         sent = []
         ba.run_batch(r, "B1", requeue=lambda d: None,
@@ -319,6 +325,27 @@ class TestSubmission:
                      sibling_for=lambda p: None, is_training=lambda x: False,
                      now=lambda: 2000.0)
         assert sent == []
+        assert len(r.lists[_queue_key(r)]) == 1
+
+    def test_restarts_a_session_whose_heartbeat_went_stale(self, project):
+        """A hard-killed worker leaves status="ready" behind for the rest of
+        the hash's TTL. Believing it strands every range on a queue with no
+        consumer — the batch sits at 0 while the card looks warm."""
+        r = Redis()
+        r.h[ba._batch_key("B1")] = _record(project)
+        r.h[self._session_key_for(project)] = {
+            "status": "ready",
+            "heartbeat": str(time.time() - 10 * 60),   # corpse
+        }
+
+        sent = []
+        ba.run_batch(r, "B1", requeue=lambda d: None,
+                     send_task=lambda n, *, kwargs, queue: sent.append(n),
+                     probe_frames=lambda p: 500, notes_for=lambda p: [],
+                     sibling_for=lambda p: None, is_training=lambda x: False,
+                     now=lambda: 2000.0)
+        assert sent == ["tasks.dlc_inline_session"], (
+            "a stale-heartbeat session must be replaced, not trusted")
         assert len(r.lists[_queue_key(r)]) == 1
 
     def test_writes_one_aggregate_row_on_the_jobs_surface(self, project):

@@ -32,7 +32,7 @@ from flask import Blueprint, request, jsonify
 from . import ctx as _ctx
 from .inline_analysis import (
     _active_project, _celery_send_task, _disable_reason, _hgetall,
-    _sec_check, _snap_key, _user_id, gpu_device,
+    _sec_check, _session_is_alive, _snap_key, _user_id, gpu_device,
 )
 from . import project_settings as _project_settings
 from .utils import _engine_info, _TF_ENGINE_ALIASES
@@ -465,9 +465,18 @@ def run_batch(redis_, batch_id, *, requeue, send_task,
     # ── session ──────────────────────────────────────────────────────────
     # Reuse a live session for the same model rather than starting a second
     # one; two sessions on the same snapshot would fight over the same GPU.
+    #
+    # Liveness is `_session_is_alive`, not the bare status field. A hard kill
+    # (container restart, task time limit, OOM) skips the worker's exit path,
+    # so the hash keeps saying "ready" for the rest of its hour-long TTL while
+    # nothing drains the queue. This guard used to believe that status and
+    # skip the dispatch, so every range RPUSHed onto a queue with no consumer
+    # and the batch sat at 0 looking warm. /session/start already learned this
+    # lesson; run_batch shipped with the naive check and hit it the first time
+    # a batch was queued right after a worker restart.
     session_key = f"inline:session:{user_id}:{snap_key}"
     existing = _hgetall(redis_, session_key) or {}
-    if (existing.get("status") or "") not in ("warming", "ready", "busy"):
+    if not _session_is_alive(existing):
         _set(redis_, session_key, status="warming", snapshot_path=str(snap_abs),
              project=project_root.name, started_at=now(), last_activity=now())
         send_task("tasks.dlc_inline_session", kwargs={
