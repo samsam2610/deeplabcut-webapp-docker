@@ -88,6 +88,35 @@ def _smembers(redis_, key) -> set:
         return set()
 
 
+def _hincrby(redis_, key, field, delta, fallback=0) -> int:
+    """hincrby with a fake-redis fallback, mirroring `_smembers`. Returns the
+    field's NEW total.
+
+    Used instead of read-then-write for the frame tallies: the session worker
+    increments the same fields as it finishes each range (see
+    tasks._publish_result), so a read-modify-write here would silently drop
+    every completion recorded between our read and our write.
+
+    Returning the total — rather than letting the caller re-read the hash — is
+    also what keeps this correct regardless of whether the client's `hgetall`
+    handed back a snapshot or a live reference to the stored dict.
+    """
+    base = _as_int(fallback)
+    if not delta:
+        return base
+    try:
+        return int(redis_.hincrby(key, field, int(delta)))
+    except Exception:
+        return base + int(delta)
+
+
+def _as_int(value, default=0) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return default
+
+
 def _batch_key(batch_id: str) -> str:
     return f"dlc:batch:{batch_id}"
 
@@ -557,6 +586,11 @@ def run_batch(redis_, batch_id, *, requeue, send_task,
                     "batch_size":    batch_size,
                     "save_as_csv":   save_as_csv,
                     "snapshot_path": str(snap_abs),
+                    # Lets the worker record its own completion against this
+                    # batch. Without it, progress only advances when something
+                    # polls batch_progress before the result hash expires — so
+                    # a run nobody watched finished with a counter reading 0.
+                    "batch_id":      batch_id,
                     # Outlive the interactive 300 s default: nobody may look at
                     # a batch for hours, and a result that expires unseen is a
                     # completion that can never be counted.
@@ -765,27 +799,33 @@ def batch_progress(redis_, batch_id: str) -> dict | None:
     if fresh_done:
         try:
             redis_.sadd(done_key, *fresh_done)
-            redis_.expire(done_key, 7 * 24 * 3600)
+            redis_.expire(done_key, BATCH_RESULT_TTL_S)
         except Exception:
             pass
     if fresh_err:
         try:
             redis_.sadd(err_key, *fresh_err)
-            redis_.expire(err_key, 7 * 24 * 3600)
+            redis_.expire(err_key, BATCH_RESULT_TTL_S)
         except Exception:
             pass
 
     done = len(seen_done) + len(fresh_done)
     errors = len(seen_err) + len(fresh_err)
     # Frame tallies accumulate only for req_ids counted for the FIRST time, so
-    # a re-poll cannot double-count them.
-    def _add(field, delta):
-        try:
-            return int(rec.get(field) or 0) + delta
-        except (TypeError, ValueError):
-            return delta
-    analyzed = _add("analyzed", new_analyzed)
-    skipped_frames = _add("skipped", new_skipped)
+    # a re-poll cannot double-count them — and the worker skips any req_id it
+    # already recorded itself, for the same reason.
+    #
+    # HINCRBY rather than read-then-set: the session worker increments these
+    # same fields as it finishes ranges, so computing `rec[field] + delta` here
+    # and writing it back would drop whatever it counted in between.
+    # Snapshot the previous totals BEFORE incrementing: `rec` may be a live
+    # reference to the stored hash rather than a copy, in which case reading it
+    # afterwards would count the delta a second time.
+    prev_analyzed, prev_skipped = _as_int(rec.get("analyzed")), _as_int(rec.get("skipped"))
+    analyzed = _hincrby(redis_, _batch_key(batch_id), "analyzed",
+                        new_analyzed, fallback=prev_analyzed)
+    skipped_frames = _hincrby(redis_, _batch_key(batch_id), "skipped",
+                              new_skipped, fallback=prev_skipped)
 
     state = rec.get("state") or "queued"
     counted_all = bool(req_ids) and (done + errors) >= len(req_ids)
@@ -807,8 +847,11 @@ def batch_progress(redis_, batch_id: str) -> dict | None:
 
     if state == "submitted" and (counted_all or drained):
         state = "complete"
+    # `analyzed` / `skipped` are deliberately NOT written here: they were just
+    # HINCRBY'd above, and writing the value we computed from our own stale
+    # read would clobber any increment the worker made in the meantime.
     _set(redis_, _batch_key(batch_id), state=state, done=done, errors=errors,
-         analyzed=analyzed, skipped=skipped_frames, updated_at=time.time())
+         updated_at=time.time())
 
     return {
         "rec": rec, "state": state, "req_ids": req_ids,

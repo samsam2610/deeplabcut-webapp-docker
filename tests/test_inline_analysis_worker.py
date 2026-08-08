@@ -607,3 +607,69 @@ class TestInlineSessionTask:
         r = ia_redis._hstore["inline:result:r1"]
         assert r["status"] == "done"
         assert int(r["n_analyzed"]) == 1
+
+
+# ── durable batch progress ────────────────────────────────────────────────
+#
+# `inline:result:*` hashes expire, and progress used to accumulate only when
+# something polled `batch_analyze.batch_progress` while a result was still
+# alive. Nothing polls with the tab closed, so an unattended batch drained its
+# whole queue with `done` stuck at 0. The worker records its own completions.
+
+class TestDurableBatchProgress:
+    def test_records_completion_against_the_batch(self, ia_redis):
+        dlc_tasks._publish_result(
+            ia_redis, req_id="r1", status="done",
+            n_analyzed=800, n_skipped=5, batch_id="B9",
+        )
+        assert ia_redis.smembers("dlc:batch:B9:done") == {"r1"}
+        h = ia_redis._hstore["dlc:batch:B9"]
+        assert h["analyzed"] == "800"
+        assert h["skipped"] == "5"
+
+    def test_a_redelivered_range_counts_once(self, ia_redis):
+        for _ in range(3):
+            dlc_tasks._publish_result(
+                ia_redis, req_id="r1", status="done",
+                n_analyzed=800, batch_id="B9",
+            )
+        assert len(ia_redis.smembers("dlc:batch:B9:done")) == 1
+        assert ia_redis._hstore["dlc:batch:B9"]["analyzed"] == "800", (
+            "frames tallied more than once for a single req_id")
+
+    def test_errors_go_to_the_err_set_and_tally_no_frames(self, ia_redis):
+        dlc_tasks._publish_result(
+            ia_redis, req_id="r2", status="error", error="boom", batch_id="B9",
+        )
+        assert ia_redis.smembers("dlc:batch:B9:err") == {"r2"}
+        assert ia_redis.smembers("dlc:batch:B9:done") == set()
+        assert "analyzed" not in ia_redis._hstore.get("dlc:batch:B9", {})
+
+    def test_interactive_ranges_touch_no_batch_counters(self, ia_redis):
+        # No batch_id: an ordinary card click must not invent batch state.
+        dlc_tasks._publish_result(ia_redis, req_id="r3", status="done",
+                                  n_analyzed=10)
+        assert not [k for k in ia_redis._sets if k.startswith("dlc:batch:")]
+        assert not [k for k in ia_redis._hstore if k.startswith("dlc:batch:")]
+
+    def test_a_running_update_is_not_a_completion(self, ia_redis):
+        # _publish_result is also used for status="running" mid-range.
+        dlc_tasks._publish_result(ia_redis, req_id="r4", status="running",
+                                  batch_id="B9")
+        assert ia_redis.smembers("dlc:batch:B9:done") == set()
+        assert ia_redis.smembers("dlc:batch:B9:err") == set()
+
+    def test_a_counter_failure_never_breaks_the_result(self, ia_redis):
+        """Progress accounting must not be able to fail the analysis."""
+        class Boom:
+            def __getattr__(self, name):
+                target = getattr(ia_redis, name)
+                if name in ("sadd", "hincrby"):
+                    def _raise(*a, **k):
+                        raise RuntimeError("redis down")
+                    return _raise
+                return target
+
+        dlc_tasks._publish_result(Boom(), req_id="r5", status="done",
+                                  n_analyzed=1, batch_id="B9")
+        assert ia_redis._hstore["inline:result:r5"]["status"] == "done"

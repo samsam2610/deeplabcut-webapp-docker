@@ -138,6 +138,14 @@ def fake_redis():
         def hget(self, name, key):
             return self._hstore.get(name, {}).get(key)
 
+        def hincrby(self, name, key, amount=1):
+            """Real redis stores hash values as strings and returns the new
+            integer total."""
+            h = self._hstore.setdefault(name, {})
+            total = int(h.get(key) or 0) + int(amount)
+            h[key] = str(total)
+            return total
+
         def exists(self, *keys):
             count = 0
             for k in keys:
@@ -178,9 +186,14 @@ def fake_redis():
 
         # ── plain sets ────────────────────────────────────────────────
         def sadd(self, name, *values):
-            if name not in self._sets:
-                self._sets[name] = set()
-            self._sets[name].update(values)
+            """Returns the count of members ACTUALLY added, as real redis does.
+            Callers use that to make a redelivered item idempotent, so
+            returning None here would let a faithful-looking test pass against
+            production code that then double-counts."""
+            s = self._sets.setdefault(name, set())
+            added = {v for v in values} - s
+            s |= added
+            return len(added)
 
         def spop(self, name):
             s = self._sets.get(name)

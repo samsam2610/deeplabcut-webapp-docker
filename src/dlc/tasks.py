@@ -2974,13 +2974,57 @@ def _publish_status(redis_, user_id, snap_key, status, **fields):
         pass
 
 
+#: Batch progress counters outlive the run by a week. Mirrors
+#: batch_analyze.BATCH_RESULT_TTL_S — kept as a literal rather than imported
+#: because tasks.py must not depend on the Flask-side blueprint module.
+_BATCH_COUNTER_TTL_S = 7 * 24 * 3600
+
+
+def _record_batch_completion(redis_, batch_id, req_id, status,
+                             n_analyzed=0, n_skipped=0):
+    """Durably count one finished range against its batch.
+
+    Progress used to accumulate only when something called
+    `batch_analyze.batch_progress` while the range's `inline:result:` hash was
+    still alive. Nothing polls when the browser tab is closed, so an
+    unattended batch drained its whole queue with its counter stuck at 0 and
+    finished reporting `counts_partial`. The worker knows it finished the
+    range; it should say so rather than leaving a note that expires.
+
+    Writes the same keys `batch_progress` maintains, so the two agree: a
+    req_id already in the set is skipped there, which is also what stops the
+    frames being tallied twice. Best-effort — a counter must never take down
+    the analysis that produced it.
+    """
+    if not batch_id or status not in ("done", "error"):
+        return
+    try:
+        key = f"dlc:batch:{batch_id}"
+        set_key = f"{key}:" + ("err" if status == "error" else "done")
+        # SADD returns the number of members actually added. A redelivered
+        # range must not tally its frames a second time.
+        added = redis_.sadd(set_key, req_id)
+        redis_.expire(set_key, _BATCH_COUNTER_TTL_S)
+        if added and status == "done":
+            if n_analyzed:
+                redis_.hincrby(key, "analyzed", int(n_analyzed))
+            if n_skipped:
+                redis_.hincrby(key, "skipped", int(n_skipped))
+    except Exception:
+        pass
+
+
 def _publish_result(redis_, req_id, status, n_analyzed=0, n_skipped=0, error="",
-                    scorer="", ttl=300):
+                    scorer="", ttl=300, batch_id=""):
     """Set the result hash. Errors are truncated to 500 chars.
 
     `scorer` is included on success so the browser can construct the
     canonical h5 path (video_stem + scorer + ".h5") without an extra
     round-trip. See polish spec §1.4.
+
+    `batch_id`, when the range came from a batch, also records the completion
+    durably — see `_record_batch_completion` for why the result hash alone is
+    not enough.
     """
     mapping = {
         "status":     status,
@@ -2999,6 +3043,8 @@ def _publish_result(redis_, req_id, status, n_analyzed=0, n_skipped=0, error="",
         redis_.expire(key, int(ttl or 300))
     except Exception:
         pass
+    _record_batch_completion(redis_, batch_id, req_id, status,
+                             n_analyzed=n_analyzed, n_skipped=n_skipped)
 
 
 def _bump_activity(redis_, user_id, snap_key):
@@ -3322,6 +3368,8 @@ def _dlc_inline_session_loop(redis_, user_id, config_path, snap_key,
         # still be counted hours later; the interactive card omits it and keeps
         # the short default.
         res_ttl = req.get("result_ttl") or 300
+        # Empty for interactive ranges; only batch submissions carry one.
+        req_batch = req.get("batch_id") or ""
 
         if req.get("batch_size") and req["batch_size"] != cached_batch_size:
             try:
@@ -3336,6 +3384,7 @@ def _dlc_inline_session_loop(redis_, user_id, config_path, snap_key,
             except Exception as exc:
                 _publish_result(
                     redis_, req["req_id"], "error", error=str(exc), ttl=res_ttl,
+                    batch_id=req_batch,
                 )
                 continue
 
@@ -3347,11 +3396,12 @@ def _dlc_inline_session_loop(redis_, user_id, config_path, snap_key,
             _publish_result(
                 redis_, req["req_id"], "done",
                 n_analyzed=n_analyzed, n_skipped=n_skipped,
-                scorer=scorer, ttl=res_ttl,
+                scorer=scorer, ttl=res_ttl, batch_id=req_batch,
             )
         except Exception as exc:
             _publish_result(
                 redis_, req["req_id"], "error", error=str(exc), ttl=res_ttl,
+                batch_id=req_batch,
             )
         _bump_activity(redis_, user_id, snap_key)
 

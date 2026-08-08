@@ -26,6 +26,24 @@ class Redis:
         self.h: dict[str, dict] = {}
         self.lists: dict[str, list] = {}
         self.zsets: dict[str, dict] = {}
+        self.sets: dict[str, set] = {}
+
+    def sadd(self, name, *values):
+        s = self.sets.setdefault(name, set())
+        new = {str(v) for v in values} - s
+        s |= new
+        return len(new)
+
+    def smembers(self, name):
+        return set(self.sets.get(name, set()))
+
+    def hincrby(self, name, field, delta):
+        d = self.h.setdefault(name, {})
+        d[field] = str(int(d.get(field) or 0) + int(delta))
+        return int(d[field])
+
+    def llen(self, name):
+        return len(self.lists.get(name, []))
 
     def hset(self, name, key=None, value=None, mapping=None):
         d = self.h.setdefault(name, {})
@@ -460,3 +478,53 @@ class TestCeleryState:
         r.get = lambda k: r._store.get(k)
         assert ba.celery_state(r, "nope") is None
         assert ba.celery_state(r, "bad") is None
+
+
+class TestDurableProgressCounting:
+    """Progress must not depend on somebody polling in time.
+
+    `inline:result:*` hashes expire, so a batch nobody watched used to drain
+    its entire queue with `done` stuck at 0 and finish `counts_partial`.
+    """
+
+    def test_submitted_payloads_carry_their_batch_id(self, project):
+        # Without this the worker cannot attribute a finished range to a batch.
+        r = Redis()
+        _run(r, project, frames=25_000)
+        payloads = [json.loads(p) for p in r.lists[_queue_key(r)]]
+        assert payloads, "expected queued ranges"
+        assert all(p["batch_id"] == "B1" for p in payloads)
+
+    def test_progress_does_not_clobber_worker_counted_frames(self, project):
+        """batch_progress used to write `analyzed` from its own stale read.
+        With the worker incrementing the same field, that dropped counts.
+
+        The worker's writes are replayed directly here rather than through
+        tasks._publish_result, which cannot be imported without deeplabcut;
+        the worker side is covered in test_inline_analysis_worker.py.
+        """
+        r = Redis()
+        _run(r, project, frames=25_000)
+        payloads = [json.loads(p) for p in r.lists[_queue_key(r)]]
+        for p in payloads:                       # what the worker does
+            r.sadd("dlc:batch:B1:done", p["req_id"])
+            r.hincrby("dlc:batch:B1", "analyzed", 800)
+        counted = int(r.h["dlc:batch:B1"]["analyzed"])
+        assert counted == 800 * len(payloads)
+
+        ba.batch_progress(r, "B1")
+        assert int(r.h["dlc:batch:B1"]["analyzed"]) == counted, (
+            "polling must not overwrite what the worker already counted")
+
+    def test_progress_still_counts_ranges_lacking_a_batch_id(self, project):
+        """Payloads queued before this change carry no batch_id; the polling
+        fallback must still count them."""
+        r = Redis()
+        _run(r, project, frames=25_000)
+        payloads = [json.loads(p) for p in r.lists[_queue_key(r)]]
+        for p in payloads:
+            r.h[f"inline:result:{p['req_id']}"] = {
+                "status": "done", "n_analyzed": "800", "n_skipped": "0"}
+        prog = ba.batch_progress(r, "B1")
+        assert prog["done"] == len(payloads)
+        assert prog["analyzed"] == 800 * len(payloads)
