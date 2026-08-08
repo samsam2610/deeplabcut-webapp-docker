@@ -88,6 +88,50 @@ class TestFilterSkipAlreadyDone:
 
 # ── _RangeVideoIterator ───────────────────────────────────────────────────
 
+def _range_parent_stub(seeks, reads, frames=None):
+    """Stub standing in for DLC's VideoIterator.
+
+    `seeks` collects set_to_frame calls, `reads` collects the head position
+    each bare read_frame() served. `frames` optionally maps a frame number to
+    the value read_frame should return (None simulates a failed read).
+    """
+    frames = frames or {}
+
+    class _ParentStub:
+        def __init__(self, *a, **kw):
+            self._at = 0
+
+        def set_to_frame(self, n):
+            seeks.append(n)
+            self._at = n
+
+        def read_frame(self):
+            at = self._at
+            reads.append(at)
+            self._at = at + 1
+            if at in frames:
+                return frames[at]
+            return np.zeros((4, 4, 3), dtype=np.uint8)
+
+        def reset(self):
+            pass
+
+    return _ParentStub
+
+
+@pytest.fixture(autouse=True)
+def _reset_range_iterator_cache():
+    """_RangeVideoIterator caches its generated subclass in a module global.
+
+    Without this reset the class built by the first test in the session keeps
+    its bases bound to that test's stub, so every later test silently exercises
+    the *first* test's stub and asserts against a list nothing ever appends to.
+    """
+    dlc_tasks._RangeVideoIterator_cls = None
+    yield
+    dlc_tasks._RangeVideoIterator_cls = None
+
+
 class TestRangeVideoIterator:
     def test_yields_only_requested_indices(self, tmp_path):
         video_path = tmp_path / "fake.mp4"
@@ -138,6 +182,54 @@ class TestRangeVideoIterator:
         with patch.object(dlc_tasks, "VideoIterator", _ParentStub):
             list(dlc_tasks._RangeVideoIterator(str(video_path), indices=[100, 7, 42]))
         assert seeks == [100, 7, 42], "iterator must preserve caller-supplied order"
+
+    def test_contiguous_run_seeks_once(self, tmp_path):
+        """The hot path: a contiguous range must seek to its start and then
+        read straight through. Seeking per frame makes OpenCV's FFmpeg backend
+        re-decode the enclosing GOP every time — measured 12x slower."""
+        video_path = tmp_path / "fake.mp4"
+        video_path.write_bytes(b"")
+        seeks, reads = [], []
+
+        with patch.object(dlc_tasks, "VideoIterator",
+                          _range_parent_stub(seeks, reads)):
+            collected = list(dlc_tasks._RangeVideoIterator(
+                str(video_path), indices=[10, 11, 12, 13]))
+
+        assert seeks == [10], f"expected one seek, got {seeks}"
+        assert reads == [10, 11, 12, 13], "must still read exactly the range"
+        assert len(collected) == 4
+
+    def test_seeks_only_across_gaps(self, tmp_path):
+        """Skipping already-analyzed frames leaves gaps; seek at those, not
+        within the contiguous stretches on either side."""
+        video_path = tmp_path / "fake.mp4"
+        video_path.write_bytes(b"")
+        seeks, reads = [], []
+
+        with patch.object(dlc_tasks, "VideoIterator",
+                          _range_parent_stub(seeks, reads)):
+            list(dlc_tasks._RangeVideoIterator(
+                str(video_path), indices=[10, 11, 20, 21]))
+
+        assert seeks == [10, 20], f"expected a seek per gap only, got {seeks}"
+        assert reads == [10, 11, 20, 21]
+
+    def test_failed_read_forces_reseek(self, tmp_path):
+        """A read that returns None leaves the decoder head unpredictable, so
+        the next index must be sought rather than assumed to follow on."""
+        video_path = tmp_path / "fake.mp4"
+        video_path.write_bytes(b"")
+        seeks, reads = [], []
+
+        with patch.object(dlc_tasks, "VideoIterator",
+                          _range_parent_stub(seeks, reads, frames={11: None})):
+            collected = list(dlc_tasks._RangeVideoIterator(
+                str(video_path), indices=[10, 11, 12]))
+
+        assert seeks == [10, 12], (
+            f"frame 12 must be re-sought after the failed read of 11, got {seeks}")
+        assert collected[1] is None
 
 
 # ── _atomic_write_h5 + _atomic_write_csv ──────────────────────────────────

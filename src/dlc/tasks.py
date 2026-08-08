@@ -2799,11 +2799,24 @@ _RangeVideoIterator_cls = None  # built on first call, then cached
 
 def _RangeVideoIterator(video_path, indices):
     """Return a VideoIterator subclass instance that yields only `indices`,
-    in order, jumping via set_to_frame on each __next__.
+    in order, seeking only when the next index is not already under the
+    decoder's read head.
 
     Must be a real subclass of DLC's VideoIterator (not a wrapper) because
     video_inference does isinstance() checks — a wrapper falls through to
     "treat-as-path" and str-coerces the object into a bogus filename.
+
+    Why the seek is conditional: `set_to_frame` calls
+    `cap.set(CAP_PROP_POS_FRAMES, n)` unconditionally, and OpenCV's FFmpeg
+    backend services that by seeking to the preceding keyframe and decoding
+    forward — even when `n` is the very next frame. Ranges are contiguous
+    runs, so seeking per frame re-decoded the same GOP over and over.
+    Measured on a 200fps RatBox .avi over NFS: 90 frames/s seeking every
+    frame vs 1078 frames/s reading sequentially — 12x. Decode happens in
+    DLC's preprocessing thread (inference multithreading is on by default),
+    so once decode is slower than the GPU it caps the whole run; the batch
+    running when this was measured sat at ~69 frames/s, just under that
+    90 frames/s decode ceiling.
 
     The subclass is built lazily on first call because VideoIterator is
     only imported inside the worker container, not at module load time.
@@ -2823,6 +2836,10 @@ def _RangeVideoIterator(video_path, indices):
                 super().__init__(video_path)
                 self._indices = list(indices)
                 self._pos = 0
+                # Frame the decoder's read head is parked on, i.e. the frame
+                # the next bare read_frame() would return. None = unknown, so
+                # the next index must be sought explicitly.
+                self._head = None
 
             def __iter__(self):
                 return self
@@ -2832,8 +2849,12 @@ def _RangeVideoIterator(video_path, indices):
                     raise StopIteration
                 idx = self._indices[self._pos]
                 self._pos += 1
-                self.set_to_frame(idx)
-                return self.read_frame()
+                if idx != self._head:
+                    self.set_to_frame(idx)
+                frame = self.read_frame()
+                # A failed read leaves the head somewhere we can't predict.
+                self._head = None if frame is None else idx + 1
+                return frame
 
         _RangeVideoIterator_cls = _Range
     return _RangeVideoIterator_cls(video_path, indices)
