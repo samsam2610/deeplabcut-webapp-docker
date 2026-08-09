@@ -3266,6 +3266,32 @@ def _run_range(runner, *, scorer, model_cfg, multi_animal, req):
     return len(to_analyze), n_skipped
 
 
+def _release_cuda_cache():
+    """Hand the CUDA caching allocator's free blocks back to the driver.
+
+    When a session ends its tensors return to torch's allocator pool, not to
+    the GPU. The prefork pool worker outlives the task, so the allocator keeps
+    the session's high-water mark reserved for as long as the container runs
+    and `nvidia-smi` reports it as in use. Observed 2026-08-09: 22.3 GB still
+    held on GPU 1 roughly 31 h after the batch that allocated it had finished,
+    with the card at 0% and no session alive. Anything else wanting that GPU is
+    refused memory the allocator is merely sitting on.
+
+    Costs nothing to call here: this runs only once the session has exited and
+    the model is unloaded, so there is no warm state to throw away — the next
+    session reloads from scratch either way.
+
+    Best-effort. Reclaiming memory must never be able to fail a session, and
+    torch is absent on the test host.
+    """
+    try:
+        import torch as _t
+        if _t.cuda.is_available():
+            _t.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
                               snapshot_path, shuffle, trainingsetindex,
                               batch_size, ttl, device=None):
@@ -3293,6 +3319,11 @@ def _dlc_inline_session_inner(redis_, user_id, config_path, snap_key,
         )
     finally:
         _hb_stop.set()
+        # After the loop returns, its runner/model locals are out of scope, so
+        # the tensors are back in the allocator pool and there is something to
+        # reclaim. Order matters: releasing before the loop unwinds would free
+        # nothing.
+        _release_cuda_cache()
 
 
 def _dlc_inline_session_loop(redis_, user_id, config_path, snap_key,

@@ -673,3 +673,58 @@ class TestDurableBatchProgress:
         dlc_tasks._publish_result(Boom(), req_id="r5", status="done",
                                   n_analyzed=1, batch_id="B9")
         assert ia_redis._hstore["inline:result:r5"]["status"] == "done"
+
+
+# ── CUDA cache release on session teardown ────────────────────────────────
+
+class TestReleaseCudaCache:
+    """A finished session must not keep its VRAM reserved.
+
+    The prefork pool worker outlives the task, so torch's caching allocator
+    holds the session's high-water mark until the container restarts. 22.3 GB
+    sat on GPU 1 for ~31 h this way.
+    """
+
+    def test_released_after_a_normal_exit(self, ia_redis):
+        calls = []
+        with patch.object(dlc_tasks, "_dlc_inline_session_loop", lambda *a, **k: None), \
+             patch.object(dlc_tasks, "_release_cuda_cache", lambda: calls.append(1)):
+            dlc_tasks._dlc_inline_session_inner(
+                ia_redis, "u1", "/proj/config.yaml", "k1", "/snap.pt",
+                shuffle=1, trainingsetindex=0, batch_size=8, ttl=300,
+            )
+        assert calls == [1]
+
+    def test_released_even_when_the_loop_raises(self, ia_redis):
+        """A crashing session is exactly when reclaiming matters most."""
+        calls = []
+
+        def _boom(*a, **k):
+            raise RuntimeError("CUDA out of memory")
+
+        with patch.object(dlc_tasks, "_dlc_inline_session_loop", _boom), \
+             patch.object(dlc_tasks, "_release_cuda_cache", lambda: calls.append(1)):
+            with pytest.raises(RuntimeError):
+                dlc_tasks._dlc_inline_session_inner(
+                    ia_redis, "u1", "/proj/config.yaml", "k1", "/snap.pt",
+                    shuffle=1, trainingsetindex=0, batch_size=8, ttl=300,
+                )
+        assert calls == [1], "teardown must reclaim on the failure path too"
+
+    def test_is_safe_without_torch(self):
+        # The test host has no torch; a missing import must not raise.
+        dlc_tasks._release_cuda_cache()
+
+    def test_calls_empty_cache_when_cuda_is_present(self):
+        fake = MagicMock()
+        fake.cuda.is_available.return_value = True
+        with patch.dict(sys.modules, {"torch": fake}):
+            dlc_tasks._release_cuda_cache()
+        fake.cuda.empty_cache.assert_called_once()
+
+    def test_skips_empty_cache_without_cuda(self):
+        fake = MagicMock()
+        fake.cuda.is_available.return_value = False
+        with patch.dict(sys.modules, {"torch": fake}):
+            dlc_tasks._release_cuda_cache()
+        fake.cuda.empty_cache.assert_not_called()
