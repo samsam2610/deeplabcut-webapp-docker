@@ -728,3 +728,25 @@ class TestReleaseCudaCache:
         with patch.dict(sys.modules, {"torch": fake}):
             dlc_tasks._release_cuda_cache()
         fake.cuda.empty_cache.assert_not_called()
+
+    def test_never_runs_inside_the_drain_loop(self):
+        """Teardown-only, and it must stay that way.
+
+        The session is a drain loop that chews through hundreds of ranges for
+        hours; a per-range empty_cache() would both throw away the allocator
+        pool the next range is about to reuse and add a GPU sync to every
+        iteration. Releasing belongs on the exit path, where the model is
+        already unloaded. Guarded at the source level because driving the real
+        loop needs a model, a runner and a GPU.
+        """
+        import inspect
+        loop_src = inspect.getsource(dlc_tasks._dlc_inline_session_loop)
+        assert "_release_cuda_cache" not in loop_src, (
+            "empty_cache() moved into the per-range loop")
+
+    def test_runs_on_the_session_exit_path(self):
+        import inspect
+        inner_src = inspect.getsource(dlc_tasks._dlc_inline_session_inner)
+        assert "_release_cuda_cache()" in inner_src
+        # ...and after the loop unwinds, or there is nothing to reclaim.
+        assert inner_src.index("_dlc_inline_session_loop") < inner_src.index("_release_cuda_cache()")
