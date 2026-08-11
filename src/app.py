@@ -642,6 +642,41 @@ def proxy_dlc_3d(path):
     return Response(resp.iter_content(chunk_size=8192), status=resp.status_code, headers=headers)
 
 
+@app.route("/sam-training/", defaults={"path": ""})
+@app.route("/sam-training/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+def proxy_sam_training(path):
+    """Mirror of proxy_dlc_3d for the sam-training module.
+
+    Longer timeout than dlc-3D's 60 s: a /score call runs DINOv3 over up to
+    ~2500 candidate frames plus a handful of SAM 3 masks. The module answers
+    /score immediately with a job id and the card polls, so this ceiling only
+    has to cover model load on a cold container (~30 s each for SAM 3 and
+    DINOv3), not the inference itself.
+    """
+    import requests as _req
+    url = f"http://sam-training:5060/sam-training/{path}"
+    fwd_headers = {
+        k: v for k, v in request.headers
+        if k.lower() not in ("host", "content-length", "transfer-encoding")
+    }
+    fwd_headers["X-DLC-User"] = _user_id()
+    try:
+        resp = _req.request(
+            method=request.method,
+            url=url,
+            headers=fwd_headers,
+            data=request.get_data(),
+            params=request.args,
+            stream=True,
+            timeout=180,
+        )
+    except _req.exceptions.ConnectionError:
+        return jsonify({"error": "sam-training module is not running"}), 502
+    excluded = {"content-encoding", "transfer-encoding", "connection", "content-length"}
+    headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded}
+    return Response(resp.iter_content(chunk_size=8192), status=resp.status_code, headers=headers)
+
+
 # ── Entry point ───────────────────────────────────────────────────
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)

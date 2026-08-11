@@ -229,6 +229,42 @@ services:
       - default
     restart: unless-stopped
 
+  # ── SAM Training Module (SAM 3 + DINOv3) ────────────────────────
+  sam-training:
+    build:
+      context: ../deeplabcut-webapp-docker-supports/sam-training
+      dockerfile: Dockerfile
+    image: sam-training:latest
+    volumes:
+      - ${HOST_DATA_DIR:-./data}:/app/data
+      - /home/sam/data-disk/Parra-Data:/user-data/Parra-Data/Disk
+      - /home/sam/synology/Parra-Lab-Data:/user-data/Parra-Data/Cloud
+      - /home/sam/Parra-Lab-Data-NAS:/user-data/NAS-Data-Share
+      # Live-reload: whole-directory mount, so no per-file compose edits.
+      - ../deeplabcut-webapp-docker-supports/sam-training/src:/app/src
+      # SAM 3 and DINOv3 are gated repos. Mount the host's HF token read-only
+      # rather than copying it into ./data (which is NOT gitignored) or pasting
+      # it into this file — the secret then never enters the repo at all.
+      - /home/sam/.cache/huggingface/token:/app/data/sam-training/hf/token:ro
+    environment:
+      - SAM_TRAINING_PROJECT=/user-data/Parra-Data/Disk/DLC-Projects/DREADD-Ali-2026-01-07
+      # Split the two models across cards: SAM 3 on the 5090, DINOv3 on the
+      # PRO 6000, so a scoring run does not contend with itself.
+      - SAM_TRAINING_SAM_DEVICE=cuda:0
+      - SAM_TRAINING_DINO_DEVICE=cuda:1
+      - CUDA_DEVICE_ORDER=PCI_BUS_ID
+      - HF_HOME=/app/data/sam-training/hf
+    networks:
+      - default
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
   # ── DLC-3D GPU Worker (lightning-pose + EKS) ────────────────────
   dlc-3d-worker:
     build:
