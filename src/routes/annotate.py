@@ -206,12 +206,18 @@ def annotate_save_row():
     frame_number = body.get("frame_number")
     note         = body.get("note", "")
     status       = body.get("frame_line_status", "0")
-    fps          = float(body.get("fps", 30.0))
+    # `fps` is still accepted for backwards compatibility and deliberately
+    # unused: timestamps come from the file, never from a calculation.
 
     if not csv_path_str or frame_number is None:
         return jsonify({"error": "csv_path and frame_number required"}), 400
 
     csv_path = Path(csv_path_str)
+    if not csv_path.is_file():
+        # create-csv exists for this. Conjuring a one-row companion here would
+        # produce a file the acquisition system never wrote.
+        return jsonify({"error": f"{csv_path.name} does not exist — "
+                                 "create the CSV first"}), 404
 
     rows: dict = {}
     if csv_path.is_file():
@@ -235,17 +241,24 @@ def annotate_save_row():
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
-    # Keep the row's OWN timestamp. These are acquisition times from the camera
-    # (221.9147631), not frame/fps — recomputing overwrote one row's real timing
-    # with a three-decimal approximation on every save, silently, and these
-    # files are annotated ~85 times each. Only fall back to computing it for a
-    # row that does not exist yet, where there is nothing to preserve.
-    existing   = rows.get(int(frame_number))
-    stored_ts  = (existing or {}).get("timestamp", "").strip()
-    timestamp  = stored_ts or f"{int(frame_number) / fps:.3f}"
+    # The row's OWN timestamp, always. These are acquisition times from the
+    # camera (221.9147631), not frame/fps — recomputing overwrote one row's real
+    # timing with a three-decimal approximation on every save, silently, and
+    # these files get annotated ~85 times each.
+    #
+    # There is no computed fallback. Every frame of a real recording already has
+    # a row: create-csv seeds 1..frame_count and the acquisition system writes
+    # them all. A missing row therefore means the frame is out of range or the
+    # file is truncated, and inventing a timestamp would paper over exactly that.
+    existing = rows.get(int(frame_number))
+    if existing is None:
+        known = sorted(rows)
+        span = f"{known[0]}–{known[-1]}" if known else "none"
+        return jsonify({"error": f"frame {frame_number} has no row in this CSV "
+                                 f"(it covers {span}) — nothing written"}), 404
     rows[int(frame_number)] = {
         "frame_number":      int(frame_number),
-        "timestamp":         timestamp,
+        "timestamp":         existing.get("timestamp", ""),
         "frame_line_status": str(status),
         "note":              str(note),
     }

@@ -95,19 +95,32 @@ def test_the_returned_row_reports_the_stored_timestamp(flask_test_client, compan
     assert resp.get_json()["row"]["timestamp"] == PRECISE[44386]
 
 
-def test_a_row_that_does_not_exist_yet_still_gets_a_timestamp(flask_test_client,
-                                                              companion):
-    """There is nothing to preserve for a new row, so frame/fps remains the only
-    thing available — this path must keep working."""
+def test_a_frame_with_no_row_is_refused_not_invented(flask_test_client, companion):
+    """Every frame of a real recording already has a row — create-csv seeds
+    1..frame_count and the acquisition system writes them all. So a missing row
+    means the frame is out of range or the file is truncated, and computing a
+    timestamp for it would paper over exactly that."""
     client = flask_test_client[0]
-    _save(client, companion, 50000, note="new")
-    row = _rows(companion)[50000]
-    assert row["note"] == "new"
-    assert row["timestamp"] == f"{50000 / 200.0:.3f}"
+    resp = _save(client, companion, 50000, note="new")
+    assert resp.status_code == 404
+    assert "50000" in resp.get_json()["error"]
+    assert 50000 not in _rows(companion), "no row may be invented"
 
 
-def test_a_blank_stored_timestamp_falls_back_to_computing_one(flask_test_client,
-                                                              tmp_path):
+def test_the_refusal_says_what_range_the_file_covers(flask_test_client, companion):
+    client = flask_test_client[0]
+    err = _save(client, companion, 50000).get_json()["error"]
+    assert "44385" in err and "44387" in err
+
+
+def test_an_existing_row_is_never_refused(flask_test_client, companion):
+    assert _save(flask_test_client[0], companion, 44385, note="x").status_code == 200
+
+
+def test_a_blank_stored_timestamp_is_preserved_not_filled_in(flask_test_client,
+                                                             tmp_path):
+    """Still no invention. A blank is what the file says, and writing frame/fps
+    over it would be the same fabrication in a quieter place."""
     path = tmp_path / "v.csv"
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=HEADER)
@@ -115,8 +128,18 @@ def test_a_blank_stored_timestamp_falls_back_to_computing_one(flask_test_client,
         w.writerow({"timestamp": "", "frame_number": 10,
                     "frame_line_status": "0", "note": ""})
     client = flask_test_client[0]
-    _save(client, path, 10, note="x")
-    assert _rows(path)[10]["timestamp"] == f"{10 / 200.0:.3f}"
+    assert _save(client, path, 10, note="x").status_code == 200
+    got = _rows(path)[10]
+    assert got["note"] == "x"
+    assert got["timestamp"] == ""
+
+
+def test_a_missing_csv_is_refused_rather_than_conjured(flask_test_client, tmp_path):
+    """create-csv exists for that. save-row inventing a one-row file would
+    produce a companion the acquisition system never wrote."""
+    resp = _save(flask_test_client[0], tmp_path / "nope.csv", 10, note="x")
+    assert resp.status_code == 404
+    assert not (tmp_path / "nope.csv").exists()
 
 
 def test_editing_the_same_row_twice_does_not_erode_it(flask_test_client, companion):
