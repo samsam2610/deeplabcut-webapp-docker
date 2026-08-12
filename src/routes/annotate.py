@@ -235,7 +235,14 @@ def annotate_save_row():
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
-    timestamp = f"{int(frame_number) / fps:.3f}"
+    # Keep the row's OWN timestamp. These are acquisition times from the camera
+    # (221.9147631), not frame/fps — recomputing overwrote one row's real timing
+    # with a three-decimal approximation on every save, silently, and these
+    # files are annotated ~85 times each. Only fall back to computing it for a
+    # row that does not exist yet, where there is nothing to preserve.
+    existing   = rows.get(int(frame_number))
+    stored_ts  = (existing or {}).get("timestamp", "").strip()
+    timestamp  = stored_ts or f"{int(frame_number) / fps:.3f}"
     rows[int(frame_number)] = {
         "frame_number":      int(frame_number),
         "timestamp":         timestamp,
