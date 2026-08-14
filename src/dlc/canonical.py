@@ -28,6 +28,16 @@ def canonical_csv_path(video_path) -> Path:
     return canonical_h5_path(video_path).with_suffix(".csv")
 
 
+def labeled_frames(analyzed_df) -> set:
+    """Frame indices 'marked' in the _analyzed coverage timeline: any bodypart
+    with a finite x (presence mode; mirrors viewer._coverage_buckets). Used by the
+    range worker to skip frames finalized in <stem>_analyzed.h5."""
+    if analyzed_df is None or not len(analyzed_df):
+        return set()
+    x = analyzed_df.xs("x", level="coords", axis=1)
+    return set(analyzed_df.index[x.notna().any(axis=1)].tolist())
+
+
 def _read_config(config_path) -> dict:
     import yaml
     return yaml.safe_load(Path(config_path).read_text()) or {}

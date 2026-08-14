@@ -440,6 +440,8 @@ def range_submit():
         "batch_size":    batch_size,
         "save_as_csv":   bool(body.get("save_as_csv", False)),
         "snapshot_path": body.get("snapshot_path", ""),
+        "overwrite":     bool(body.get("overwrite", False)),
+        "ignore_analyzed": bool(body.get("ignore_analyzed", False)),
     }
     redis = _ctx.redis_client()
     redis.lpush(f"inline:queue:{_user_id()}:{snap_key}", json.dumps(payload))

@@ -187,6 +187,58 @@ class TestRangeSubmit:
         # Either 400 (not a file) or 403 (outside data root) is fine.
         assert resp.status_code in (400, 403)
 
+    def test_overwrite_flag_flows_into_payload(self, ia_client):
+        client, _app, redis, project = ia_client
+        v = project / "videos" / "ovr.mp4"
+        v.parent.mkdir(parents=True, exist_ok=True)
+        v.write_bytes(b"")
+        resp = client.post("/dlc/project/inline-analysis/range", json={
+            "snap_key": "k1", "video_path": str(v),
+            "start_frame": 0, "n_frames": 5, "batch_size": 8, "overwrite": True,
+        })
+        assert resp.status_code == 202, resp.get_json()
+        payload = json.loads(redis._lists.get("inline:queue:u1:k1", [])[0])
+        assert payload["overwrite"] is True
+
+    def test_overwrite_defaults_false_when_absent(self, ia_client):
+        client, _app, redis, project = ia_client
+        v = project / "videos" / "noovr.mp4"
+        v.parent.mkdir(parents=True, exist_ok=True)
+        v.write_bytes(b"")
+        resp = client.post("/dlc/project/inline-analysis/range", json={
+            "snap_key": "k1", "video_path": str(v),
+            "start_frame": 0, "n_frames": 5, "batch_size": 8,
+        })
+        assert resp.status_code == 202, resp.get_json()
+        payload = json.loads(redis._lists.get("inline:queue:u1:k1", [])[0])
+        assert payload["overwrite"] is False
+
+    def test_ignore_analyzed_flows_into_payload(self, ia_client):
+        client, _app, redis, project = ia_client
+        v = project / "videos" / "ign.mp4"
+        v.parent.mkdir(parents=True, exist_ok=True)
+        v.write_bytes(b"")
+        resp = client.post("/dlc/project/inline-analysis/range", json={
+            "snap_key": "k1", "video_path": str(v),
+            "start_frame": 0, "n_frames": 5, "batch_size": 8, "ignore_analyzed": True,
+        })
+        assert resp.status_code == 202, resp.get_json()
+        payload = json.loads(redis._lists.get("inline:queue:u1:k1", [])[0])
+        assert payload["ignore_analyzed"] is True
+
+    def test_ignore_analyzed_defaults_false(self, ia_client):
+        client, _app, redis, project = ia_client
+        v = project / "videos" / "ign2.mp4"
+        v.parent.mkdir(parents=True, exist_ok=True)
+        v.write_bytes(b"")
+        resp = client.post("/dlc/project/inline-analysis/range", json={
+            "snap_key": "k1", "video_path": str(v),
+            "start_frame": 0, "n_frames": 5, "batch_size": 8,
+        })
+        assert resp.status_code == 202, resp.get_json()
+        payload = json.loads(redis._lists.get("inline:queue:u1:k1", [])[0])
+        assert payload["ignore_analyzed"] is False
+
 
 class TestRangeStatus:
     def test_returns_done_with_counts(self, ia_client):
