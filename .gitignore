@@ -4,3 +4,20 @@ __pycache__/
 .env
 *.pickle
 .superpowers/
+
+# Runtime data, not source. data/ holds bind-mount targets and caches: the
+# sam-training subdirectory alone is 4.4 GB of NCC sweep caches and Hugging Face
+# model weights, and Parra-Data / Martin-Data are mount points for the data disk
+# and the NAS. None of it is reproducible from the repo, and none of it belongs
+# in it — one `git add -A` would otherwise try to commit the lot, and a blob that
+# size is effectively permanent once pushed.
+#
+# Written as `data/*` rather than `data/` so the exception below can work: git
+# does not descend into an ignored DIRECTORY, so a negation inside one is never
+# reached. Re-including a file therefore means un-ignoring each parent first.
+data/*
+
+# The one checked-in fixture the tests read.
+!data/test/
+data/test/*
+!data/test/config.toml
