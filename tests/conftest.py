@@ -51,12 +51,46 @@ ORIGINAL_DLC_PROJECT: Path | None = next(
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
+# Model weights are 89 % of the project and no non-GPU test reads their bytes.
+#
+# Measured 2026-08-14: the project is 25 GB, of which 22.3 GB is `.pt` snapshots
+# (262 MB each, across four training iterations). The sandbox copy is per test,
+# and two consumers copy the sandbox AGAIN, so a single route test was observed
+# writing 18 GB in 12 seconds. Sixteen such tests is the mechanism behind this
+# repository's 614 GB /tmp incident.
+#
+# Copying them as EMPTY files rather than skipping them keeps every filename and
+# directory in place, so anything that lists, globs, or counts snapshots — which
+# is what the route tests actually do — sees exactly what it saw before. Only
+# code that reads the weights themselves would notice, and that is GPU work,
+# excluded by `addopts = -m "not gpu"`.
+#
+# Set DLC_TEST_FULL_COPY=1 to restore byte-for-byte copies.
+_WEIGHT_SUFFIXES = (".pt", ".pth", ".ckpt", ".index", ".meta")
+_WEIGHT_PATTERNS = ("data-00000-of-00001",)      # TensorFlow checkpoint shards
+
+
+def _is_weight_file(path: str) -> bool:
+    name = os.path.basename(path)
+    return name.endswith(_WEIGHT_SUFFIXES) or any(p in name for p in _WEIGHT_PATTERNS)
+
+
+def _copy_light(src: str, dst: str, *, follow_symlinks=True):
+    """copy2, except model weights arrive as empty files of the same name."""
+    if _is_weight_file(src):
+        open(dst, "wb").close()
+        shutil.copystat(src, dst, follow_symlinks=follow_symlinks)
+        return dst
+    return shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
+
+
 @pytest.fixture(scope="function")
 def dlc_sandbox_project(tmp_path) -> Path:
     """
     Create a sandboxed copy of the DLC test project for each test.
 
     - Duplicates ORIGINAL_DLC_PROJECT → tmp_path/DREADD-Ali-2026-01-07
+    - Model weights are copied as empty placeholders (see _copy_light)
     - Yields the path to the copy
     - Deletes the copy on teardown (regardless of test outcome)
 
@@ -66,7 +100,13 @@ def dlc_sandbox_project(tmp_path) -> Path:
         pytest.skip("Original DLC project not found on this machine — skipping.")
 
     dest = tmp_path / ORIGINAL_DLC_PROJECT.name
-    shutil.copytree(str(ORIGINAL_DLC_PROJECT), str(dest), symlinks=False)
+    # copy_function only ever WRITES into dest; the original is opened read-only
+    # by copy2 and never touched by the placeholder branch. Hard-linking would
+    # have been faster still and is deliberately not used: a test writing
+    # through a link would corrupt the real project.
+    copy_function = shutil.copy2 if os.environ.get("DLC_TEST_FULL_COPY") else _copy_light
+    shutil.copytree(str(ORIGINAL_DLC_PROJECT), str(dest), symlinks=False,
+                    copy_function=copy_function)
 
     # Patch project_path in config.yaml to point to the sandbox copy
     config_file = dest / "config.yaml"
